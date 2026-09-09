@@ -42,7 +42,10 @@ function definitions(catalog: KnowledgeCatalog, ids: string[]) {
 }
 function cardAttributes(catalog: KnowledgeCatalog, entity: KnowledgeCatalog['entities'][number], preferred: AttributeDefinition[]) {
   const preferredIds = new Set(preferred.map(attribute => attribute.id));
-  const ordered = [...preferred, ...catalog.attributes.filter(attribute => !preferredIds.has(attribute.id))];
+  const ordered = [...preferred, ...catalog.attributes.filter(attribute => !preferredIds.has(attribute.id))]
+    // A card already has an authored summary. Repeating a free-form description as a fact
+    // makes the dense card layout look like a raw import rather than a composed reading view.
+    .filter(attribute => !/^(?:description|summary)$/i.test(attribute.label.trim()));
   return knownAttributes(entity, ordered).slice(0, 3);
 }
 function SectionHeading({ eyebrow, title, children }: { eyebrow?: string; title: string; children?: ReactNode }) {
@@ -93,7 +96,8 @@ function CollectionContent({ entityIds, attributeIds, variant, collectionId }: C
         const selected = state.selectedIds.includes(entity.id);
         const selectDisabled = !selected && state.selectedIds.length >= 6;
         const details = cardAttributes(catalog, entity, attributes);
-        return <PresentCard key={`item-${entity.id}`} className="platform-item" data-entity-id={entity.id} data-selected={selected} data-detail-count={details.length}>
+        const layout = variant !== 'list' && index === 0 ? 'feature' : details.length === 0 ? 'narrative' : details.length === 1 ? 'spotlight' : 'details';
+        return <PresentCard key={`item-${entity.id}`} className="platform-item" data-entity-id={entity.id} data-selected={selected} data-detail-count={details.length} data-layout={layout}>
           <EntityMedia targetId={entity.id}/>
           <div className="platform-item-kicker"><span>{entity.kind}</span><span>{String(index + 1).padStart(2, '0')}</span></div>
           <button className="platform-item-open" type="button" onClick={() => action('focus', { id: entity.id })}><h4>{entity.name}</h4><Icon name="arrow"/></button>
