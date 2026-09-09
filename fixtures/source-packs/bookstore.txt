@@ -1,0 +1,49 @@
+ID: book-harbor-hardcover
+Kind: edition
+Name: The Imaginary Harbor — hardcover
+Summary: A fictional illustrated history of a coastal town.
+Price [USD]: 28
+Format: Hardcover
+Pages: 240
+Publication date: 2024-04-12
+Topic: local history
+
+ID: book-harbor-paperback
+Kind: edition
+Name: The Imaginary Harbor — paperback
+Summary: Paperback edition of the same fictional work.
+Price [USD]: 18
+Format: Paperback
+Pages: 240
+Publication date: 2025-02-18
+Topic: local history
+
+ID: book-gardens
+Kind: edition
+Name: Gardens in Small Spaces
+Summary: A fictional practical introduction for beginners.
+Price [USD]: 22
+Format: Paperback
+Pages: 176
+Publication date: 2025-03-01
+Topic: gardening
+
+ID: author-rivera
+Kind: person
+Name: Alex Rivera
+Summary: Fictional author of The Imaginary Harbor.
+Price [USD]: 
+Format: 
+Pages: 
+Publication date: 
+Topic: local history
+
+ID: author-chen
+Kind: person
+Name: Sam Chen
+Summary: Fictional author of Gardens in Small Spaces.
+Price [USD]: 
+Format: 
+Pages: 
+Publication date: 
+Topic: gardening

@@ -1,0 +1,54 @@
+ID: class-handbuilding
+Kind: session
+Name: Introduction to Handbuilding
+Summary: A fictional beginner clay workshop; no prior experience needed.
+Price [USD]: 60
+Session date: 2027-05-12
+Duration: 90
+Experience level: beginner
+Materials included: true
+Location: Example North Studio
+
+ID: class-wheel
+Kind: session
+Name: Wheel Skills
+Summary: A fictional intermediate workshop requiring prior introductory experience.
+Price [USD]: 85
+Session date: 2027-05-14
+Duration: 120
+Experience level: intermediate
+Materials included: true
+Location: Example North Studio
+
+ID: class-drawing
+Kind: session
+Name: Drawing from Observation
+Summary: A fictional beginner drawing session; materials not included.
+Price [USD]: 35
+Session date: 2027-05-12
+Duration: 60
+Experience level: beginner
+Materials included: false
+Location: Example Garden Room
+
+ID: instructor-lane
+Kind: person
+Name: Taylor Lane
+Summary: Fictional ceramics instructor.
+Price [USD]: 
+Session date: 
+Duration: 
+Experience level: 
+Materials included: 
+Location: Example North Studio
+
+ID: north-studio
+Kind: place
+Name: Example North Studio
+Summary: Fictional teaching space; accessibility details not supplied.
+Price [USD]: 
+Session date: 
+Duration: 
+Experience level: 
+Materials included: 
+Location: Example North Studio

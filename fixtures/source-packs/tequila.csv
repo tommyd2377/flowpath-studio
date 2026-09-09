@@ -1,0 +1,5 @@
+ID,Kind,Name,Summary,Price [USD],Bottle volume,Alcohol by volume,Flavor profile,Barrel aging
+agave-blanco,offering,Example Blanco,Unaged agave spirit with citrus and pepper notes.,36,750,40,"citrus, pepper",0
+agave-reposado,offering,Example Reposado,Lightly aged spirit with vanilla and roasted agave notes.,48,750,40,"vanilla, roasted agave",8
+agave-anejo,offering,Example Añejo,Longer-aged spirit with oak and dried-fruit notes.,68,750,40,"oak, dried fruit",18
+agave-small,offering,Example Small Bottle,A smaller bottle of the unaged expression; price was not supplied.,,375,40,"citrus, pepper",0

@@ -1,0 +1,11 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Uploads and downloads go through the owner-checked server API.
+    // A separate server route permits only the currently published site logo.
+    match /{object=**} {
+      allow read, write: if false;
+    }
+  }
+}

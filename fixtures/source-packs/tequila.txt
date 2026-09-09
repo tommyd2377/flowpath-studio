@@ -1,0 +1,39 @@
+ID: agave-blanco
+Kind: offering
+Name: Example Blanco
+Summary: Unaged agave spirit with citrus and pepper notes.
+Price [USD]: 36
+Bottle volume: 750
+Alcohol by volume: 40
+Flavor profile: citrus, pepper
+Barrel aging: 0
+
+ID: agave-reposado
+Kind: offering
+Name: Example Reposado
+Summary: Lightly aged spirit with vanilla and roasted agave notes.
+Price [USD]: 48
+Bottle volume: 750
+Alcohol by volume: 40
+Flavor profile: vanilla, roasted agave
+Barrel aging: 8
+
+ID: agave-anejo
+Kind: offering
+Name: Example Añejo
+Summary: Longer-aged spirit with oak and dried-fruit notes.
+Price [USD]: 68
+Bottle volume: 750
+Alcohol by volume: 40
+Flavor profile: oak, dried fruit
+Barrel aging: 18
+
+ID: agave-small
+Kind: offering
+Name: Example Small Bottle
+Summary: A smaller bottle of the unaged expression; price was not supplied.
+Price [USD]: 
+Bottle volume: 375
+Alcohol by volume: 40
+Flavor profile: citrus, pepper
+Barrel aging: 0

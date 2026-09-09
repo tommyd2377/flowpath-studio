@@ -1,0 +1,6 @@
+ID,Kind,Name,Summary,Price [USD],Session date,Duration,Experience level,Materials included,Location
+class-handbuilding,session,Introduction to Handbuilding,A fictional beginner clay workshop; no prior experience needed.,60,2027-05-12,90,beginner,true,Example North Studio
+class-wheel,session,Wheel Skills,A fictional intermediate workshop requiring prior introductory experience.,85,2027-05-14,120,intermediate,true,Example North Studio
+class-drawing,session,Drawing from Observation,A fictional beginner drawing session; materials not included.,35,2027-05-12,60,beginner,false,Example Garden Room
+instructor-lane,person,Taylor Lane,Fictional ceramics instructor.,,,,,,Example North Studio
+north-studio,place,Example North Studio,Fictional teaching space; accessibility details not supplied.,,,,,,Example North Studio

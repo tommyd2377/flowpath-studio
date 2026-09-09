@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "id": "example-classes-v1",
+  "name": "Example Learning Studio",
+  "description": "Synthetic fixture with dated sessions, instructors and places. A published schedule does not establish bookable capacity.",
+  "attributes": [
+    {
+      "id": "price",
+      "label": "Price",
+      "type": "money",
+      "currency": "USD"
+    },
+    {
+      "id": "date",
+      "label": "Session date",
+      "type": "date"
+    },
+    {
+      "id": "duration",
+      "label": "Duration",
+      "type": "number",
+      "unit": "minutes"
+    },
+    {
+      "id": "level",
+      "label": "Experience level",
+      "type": "text"
+    },
+    {
+      "id": "materials",
+      "label": "Materials included",
+      "type": "boolean"
+    },
+    {
+      "id": "location",
+      "label": "Location",
+      "type": "text"
+    }
+  ],
+  "entities": [
+    {
+      "id": "class-handbuilding",
+      "kind": "session",
+      "name": "Introduction to Handbuilding",
+      "summary": "A fictional beginner clay workshop; no prior experience needed.",
+      "attributes": {
+        "price": 60,
+        "date": "2027-05-12",
+        "duration": 90,
+        "level": "beginner",
+        "materials": true,
+        "location": "Example North Studio"
+      }
+    },
+    {
+      "id": "class-wheel",
+      "kind": "session",
+      "name": "Wheel Skills",
+      "summary": "A fictional intermediate workshop requiring prior introductory experience.",
+      "attributes": {
+        "price": 85,
+        "date": "2027-05-14",
+        "duration": 120,
+        "level": "intermediate",
+        "materials": true,
+        "location": "Example North Studio"
+      }
+    },
+    {
+      "id": "class-drawing",
+      "kind": "session",
+      "name": "Drawing from Observation",
+      "summary": "A fictional beginner drawing session; materials not included.",
+      "attributes": {
+        "price": 35,
+        "date": "2027-05-12",
+        "duration": 60,
+        "level": "beginner",
+        "materials": false,
+        "location": "Example Garden Room"
+      }
+    },
+    {
+      "id": "instructor-lane",
+      "kind": "person",
+      "name": "Taylor Lane",
+      "summary": "Fictional ceramics instructor.",
+      "attributes": {
+        "price": null,
+        "date": null,
+        "duration": null,
+        "level": null,
+        "materials": null,
+        "location": "Example North Studio"
+      }
+    },
+    {
+      "id": "north-studio",
+      "kind": "place",
+      "name": "Example North Studio",
+      "summary": "Fictional teaching space; accessibility details not supplied.",
+      "attributes": {
+        "price": null,
+        "date": null,
+        "duration": null,
+        "level": null,
+        "materials": null,
+        "location": "Example North Studio"
+      }
+    }
+  ],
+  "collections": [
+    {
+      "id": "sessions",
+      "name": "Upcoming sessions",
+      "entityIds": [
+        "class-handbuilding",
+        "class-wheel",
+        "class-drawing"
+      ]
+    },
+    {
+      "id": "people-places",
+      "name": "People and places",
+      "entityIds": [
+        "instructor-lane",
+        "north-studio"
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "wheel-prerequisite",
+      "fromEntityId": "class-wheel",
+      "toEntityId": "class-handbuilding",
+      "label": "Requires introductory experience such as"
+    },
+    {
+      "id": "handbuilding-teacher",
+      "fromEntityId": "class-handbuilding",
+      "toEntityId": "instructor-lane",
+      "label": "Taught by"
+    },
+    {
+      "id": "handbuilding-location",
+      "fromEntityId": "class-handbuilding",
+      "toEntityId": "north-studio",
+      "label": "Takes place at"
+    }
+  ],
+  "jobs": [
+    {
+      "id": "choose-class",
+      "label": "Find a class for my experience",
+      "attributeIds": [
+        "level",
+        "date",
+        "duration"
+      ]
+    },
+    {
+      "id": "compare-cost",
+      "label": "Compare cost and included materials",
+      "attributeIds": [
+        "price",
+        "materials"
+      ]
+    }
+  ],
+  "capabilities": []
+}

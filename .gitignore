@@ -1,0 +1,28 @@
+node_modules/
+.next/
+data/
+.env*
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
+packages/*/dist/
+test-results/
+playwright-report/
+
+# Local tooling, reports and archives
+.codex/
+.agents/
+.vercel/
+.firebase/
+coverage/
+*.log
+*.tgz
+
+# Credentials and machine-specific package configuration
+.npmrc
+*.pem
+*.key
+*.p12
+*.pfx
+*service-account*.json
+*serviceAccount*.json
