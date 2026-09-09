@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { requireWorkspaceUser } from '@/lib/firebase/session';
 import { readLimitedBody, respond } from '@/lib/http';
 import { AppError } from '@/lib/errors';
-import { getKnowledgeState, analyzeKnowledge, reviewDraftKnowledge, reviseKnowledge, correctKnowledge, applyKnowledge, discardKnowledge, removeKnowledge } from '@/lib/ingestion';
+import { getKnowledgeState, analyzeKnowledge, reviewDraftKnowledge, reviseKnowledge, resolveKnowledge, correctKnowledge, applyKnowledge, discardKnowledge, removeKnowledge } from '@/lib/ingestion';
 import { getSite } from '@/lib/site-store';
 import { readKnowledgeArtifact } from '@/lib/knowledge-store';
 
@@ -12,11 +12,13 @@ type Context = { params: Promise<{ siteId: string }> };
 const uuid = z.string().uuid();
 const revision = z.number().int().positive();
 const command = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('analyze'), fileId: uuid, revision, requestId: uuid }).strict(),
+  z.object({ action: z.literal('analyze'), fileId: uuid, revision, requestId: uuid, replacesSourceKey: z.string().min(1).max(255).optional() }).strict(),
   z.object({ action: z.literal('review'), revision, requestId: uuid }).strict(),
   z.object({ action: z.literal('revise'), candidateId: uuid, revision, catalog: z.unknown() }).strict(),
+  z.object({ action: z.literal('resolve'), candidateId: uuid, candidateRevisionId: uuid, revision,
+    decisions: z.array(z.object({ id: z.string().min(1).max(80), choice: z.enum(['keep', 'incoming']) }).strict()).min(1).max(2700) }).strict(),
   z.object({ action: z.literal('correct'), candidateId: uuid, revision, text: z.string().trim().min(1).max(2000), requestId: uuid }).strict(),
-  z.object({ action: z.literal('apply'), candidateId: uuid, revision }).strict(),
+  z.object({ action: z.literal('apply'), candidateId: uuid, revision, candidateRevisionId: uuid.optional() }).strict(),
   z.object({ action: z.literal('discard'), candidateId: uuid, revision }).strict(),
   z.object({ action: z.literal('remove'), revision }).strict(),
 ]);
@@ -43,6 +45,7 @@ export async function POST(request: Request, { params }: Context) {
     if (action.action === 'analyze') return analyzeKnowledge(user, siteId, action);
     if (action.action === 'review') return reviewDraftKnowledge(user, siteId, action);
     if (action.action === 'revise') return reviseKnowledge(user, siteId, action);
+    if (action.action === 'resolve') return resolveKnowledge(user, siteId, action);
     if (action.action === 'correct') return correctKnowledge(user, siteId, action);
     if (action.action === 'apply') return applyKnowledge(user, siteId, action);
     if (action.action === 'discard') return discardKnowledge(user, siteId, action.candidateId);

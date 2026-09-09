@@ -6,13 +6,12 @@ import { slugSchema } from '@/lib/site-store';
 import { visitorAccess } from '@/lib/visitor-store';
 import { VisitorAttemptError } from '@/lib/visitor-quota';
 import { visitorRequestSchema } from '@/lib/visitor-request';
-import { visitorTextReply, visitorVoiceReply } from '@/lib/visitor-provider';
+import { visitorRequestContext, visitorTextReply, visitorVoiceReply } from '@/lib/visitor-provider';
 import { demoVisitorReply, MAX_PCM_BYTES } from '@/lib/visitor-model';
 import { getWelcomeMessage } from '@/lib/site-greeting';
 import { demoPresentation, presentationSummary } from '@/lib/site-presentation';
 import { getPublishedMedia } from '@/lib/media-store';
 import { getPublishedKnowledge } from '@/lib/knowledge-store';
-import { validateCatalogState } from '@/lib/catalog-presentation';
 import { recordPlatformEvent } from '@/lib/platform-events';
 import { planForIntent } from '@thevoice/platform-ui/interaction';
 
@@ -59,8 +58,8 @@ export async function POST(request: Request, { params }: Context) {
     const preview = await visitorAccess(slug);
     const catalog = await getPublishedKnowledge(preview.siteId, preview.content.knowledgeRevisionId);
     const media = await getPublishedMedia(preview.siteId, preview.content.mediaRevisionId);
-    if (catalog) input.catalogState = validateCatalogState(input.catalogState, catalog);
-    else if (input.catalogState) throw new AppError('This site changed. Reload to use the current published information.', 409);
+    input.context = visitorRequestContext(preview.content, input, catalog ?? undefined, media ?? undefined);
+    input.catalogState = input.context.catalogState;
     const { content, siteId, availability } = await visitorAccess(slug, { requestId: input.requestId, kind: input.kind === 'chat' ? 'chat' : 'voice', greeting: input.kind === 'greeting' });
     const observed = { surface: 'public' as const, requestId: input.requestId, snapshotId: content.knowledgeRevisionId, kind: input.kind === 'chat' ? 'chat' as const : 'voice' as const };
     try {
@@ -69,7 +68,10 @@ export async function POST(request: Request, { params }: Context) {
       if (!availability.live) {
         if (input.kind === 'greeting') return { text: getWelcomeMessage(content), demo: true, availability };
         if (catalog) return { text: 'Explore the published items below.', catalogPlan: planForIntent(catalog, input.kind === 'chat' ? input.text : '', input.catalogState, media ?? undefined), demo: true, availability };
-        const presentation = demoPresentation(content, input.kind === 'chat' ? input.text : '', input.history, media);
+        const history = input.context.presentation
+          ? [...input.history.slice(-7), { role: 'assistant' as const, text: presentationSummary(input.context.presentation, content, media).slice(0, 2000) }]
+          : input.history;
+        const presentation = demoPresentation(content, input.kind === 'chat' ? input.text : '', history, media);
         return { text: input.kind === 'chat' ? presentationSummary(presentation, content, media) : demoVisitorReply(content, ''), presentation, demo: true, availability };
       }
       await recordPlatformEvent(siteId, { ...observed, type: 'provider_usage', status: 'reserved', count: 1 }).catch(() => undefined);

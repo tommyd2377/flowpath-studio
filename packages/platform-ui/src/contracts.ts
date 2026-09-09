@@ -72,18 +72,19 @@ export const semanticTransitionSchema = z.object({
   type: z.enum(['none', 'focus', 'reveal', 'replace', 'expand', 'workspace-shift', 'restore']),
   targetComponentId: z.enum(componentTypes).optional(),
 }).strict();
+export const catalogFilterSchema = z.object({
+  attributeId: id, operator: z.enum(['eq', 'contains', 'lt', 'lte', 'gt', 'gte']), value: catalogValueSchema,
+}).strict();
+export type CatalogFilter = z.infer<typeof catalogFilterSchema>;
 export const presentationPlanSchema = z.object({
   schemaVersion: z.literal(1), snapshotId: id,
   operation: z.enum(['discover', 'understand', 'narrow', 'compare', 'decide', 'act']),
   components: z.array(presentationComponentSchema).min(1).max(8), transition: semanticTransitionSchema,
+  stateUpdate: z.object({ filters: z.array(catalogFilterSchema).max(24) }).strict().optional(),
 }).strict();
 export type PresentationComponent = z.infer<typeof presentationComponentSchema>;
 export type SemanticTransition = z.infer<typeof semanticTransitionSchema>;
 export type PresentationPlan = z.infer<typeof presentationPlanSchema>;
-export const catalogFilterSchema = z.object({
-  attributeId: id, operator: z.enum(['eq', 'contains', 'lte', 'gte']), value: catalogValueSchema,
-}).strict();
-export type CatalogFilter = z.infer<typeof catalogFilterSchema>;
 
 function invalid(message: string): never {
   throw new z.ZodError([{ code: 'custom', path: [], message }]);
@@ -132,6 +133,19 @@ export function isCatalogValue(value: CatalogValue, definition: AttributeDefinit
   return typeof value === 'string';
 }
 
+export function validateCatalogFilters(input: unknown, catalog: KnowledgeCatalog): CatalogFilter[] {
+  const filters = catalogFilterSchema.array().max(24).parse(input);
+  const definitions = new Map(catalog.attributes.map(attribute => [attribute.id, attribute]));
+  for (const filter of filters) {
+    const definition = definitions.get(filter.attributeId);
+    if (!definition || !isCatalogValue(filter.value, definition)) invalid('Unsupported filter attribute or value.');
+    if (filter.operator === 'contains' && definition.type !== 'text') invalid('Contains applies only to text.');
+    if (['lt', 'lte', 'gt', 'gte'].includes(filter.operator) && !['number', 'money', 'date'].includes(definition.type)) invalid('Range filters require a numeric or date attribute.');
+    if (filter.value === null && filter.operator !== 'eq') invalid('Unknown values support only equality filtering.');
+  }
+  return filters;
+}
+
 export function validateCatalog(input: unknown): KnowledgeCatalog {
   boundPayload(input);
   const catalog = knowledgeCatalogSchema.parse(input);
@@ -168,6 +182,7 @@ export function validateCatalog(input: unknown): KnowledgeCatalog {
 export function validatePlan(input: unknown, catalog: KnowledgeCatalog, snapshotId: string, media?: MediaLibrary | null): PresentationPlan {
   boundPayload(input, 3000, 40000);
   const plan = presentationPlanSchema.parse(input);
+  if (plan.stateUpdate) validateCatalogFilters(plan.stateUpdate.filters, catalog);
   if (plan.snapshotId !== snapshotId) invalid('The presentation belongs to a stale catalog snapshot.');
   const entityIds = new Set(catalog.entities.map(entity => entity.id));
   const attributeIds = new Set(catalog.attributes.map(attribute => attribute.id));

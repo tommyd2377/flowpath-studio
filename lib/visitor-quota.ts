@@ -38,7 +38,8 @@ export function reserveReply(ledger: VisitorLedger, siteId: string, requestId: s
   if (!settings.enabled) throw new AppError('This site has not enabled visitor conversations.', 403);
   const state = availability(ledger, siteId, settings, live);
   if (kind === 'voice' && settings.mode === 'chat') throw new AppError('Voice is not enabled on this site.', 403);
-  if (kind === 'chat' && settings.mode === 'voice' && state.voiceRemaining > 0) throw new AppError('This site currently offers voice. Chat becomes available when voice reaches its limit.', 403);
+  // Text is an independently capped fallback even when the preferred voice mode
+  // still has turns (for example, microphone denial or an unsupported browser).
   if (ledger.requests[requestId]) throw new AppError('This request was already received. Send a new message to continue.', 409);
   if ((kind === 'chat' ? state.chatRemaining : state.voiceRemaining) < 1) {
     throw new VisitorLimitError(kind === 'voice' ? 'Voice has reached its daily limit. You can continue in chat.' : 'Chat has reached its daily limit. Please return after the daily reset.', state);

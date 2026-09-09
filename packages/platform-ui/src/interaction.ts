@@ -14,6 +14,18 @@ export function initialInteraction(catalog: KnowledgeCatalog, snapshotId = catal
   return { snapshotId, filters: [], selectedIds: [], focusedId: null, entityIds: catalog.entities.map(entity => entity.id) };
 }
 
+/** Apply an already validated plan's explicit filters once; omitted updates preserve them. */
+export function applyPresentationState(state: CatalogInteractionState, plan: PresentationPlan): CatalogInteractionState {
+  return plan.stateUpdate ? { ...state, filters: plan.stateUpdate.filters } : state;
+}
+
+/** Replace this bound/equality while keeping an opposite bound and unrelated criteria. */
+export function replaceCatalogFilter(filters: CatalogFilter[], filter: CatalogFilter): CatalogFilter[] {
+  const upper = ['lt', 'lte']; const lower = ['gt', 'gte'];
+  const replaced = upper.includes(filter.operator) ? [...upper, 'eq'] : lower.includes(filter.operator) ? [...lower, 'eq'] : ['eq', 'contains', ...upper, ...lower];
+  return [...filters.filter(current => current.attributeId !== filter.attributeId || !replaced.includes(current.operator)), filter];
+}
+
 export function entityIdsForComponent(catalog: KnowledgeCatalog, component: PresentationComponent): string[] {
   if (component.entityIds.length) return component.entityIds;
   if (component.collectionId) return catalog.collections.find(collection => collection.id === component.collectionId)?.entityIds ?? [];
@@ -45,7 +57,10 @@ export function planForIntent(catalog: KnowledgeCatalog, text: string, state = i
   const snapshotId = state.snapshotId;
   const photos = galleryPlanForIntent(catalog, text, state, media);
   if (photos) return photos;
-  if (!query || /^(all|everything|browse|start over|reset|show all)(\b|$)/.test(query)) return defaultPresentation(catalog, snapshotId);
+  if (!query) return defaultPresentation(catalog, snapshotId);
+  if (/^(all(?: items)?|everything|browse(?: all)?|start over|reset|show (?:me )?all(?: items)?)[.!?]*$/.test(query)) {
+    return validatePlan({ ...defaultPresentation(catalog, snapshotId), stateUpdate: { filters: [] }, transition: { type: 'replace', targetComponentId: 'collection' } }, catalog, snapshotId);
+  }
   const job = catalog.jobs.find(item => item.label.toLocaleLowerCase() === query);
   if (job && !/\bcompare\b/.test(query)) {
     const next = defaultPresentation(catalog, snapshotId);
@@ -53,49 +68,50 @@ export function planForIntent(catalog: KnowledgeCatalog, text: string, state = i
     next.transition = { type: 'focus', ...(next.components.some(component => component.type === 'criteria') ? { targetComponentId: 'criteria' as const } : {}) };
     return validatePlan(next, catalog, snapshotId);
   }
-  const constraints: CatalogFilter[] = [...state.filters];
+  let constraints: CatalogFilter[] = [...state.filters];
+  let changedFilters = false;
+  const replaceConstraint = (filter: CatalogFilter) => {
+    constraints = replaceCatalogFilter(constraints, filter);
+    changedFilters = true;
+  };
+  const withFilters = (plan: PresentationPlan) => validatePlan({ ...plan, ...(changedFilters ? { stateUpdate: { filters: constraints } } : {}) }, catalog, snapshotId);
   const bound = query.match(/(?:under|below|less than|up to|at most|over|above|at least)\s*[$€£]?\s*(\d+(?:\.\d+)?)/);
   if (bound) {
     const numbers = catalog.attributes.filter(attribute => attribute.type === 'money' || attribute.type === 'number');
     const attribute = numbers.find(item => query.includes(item.label.toLocaleLowerCase())) ?? numbers.find(item => item.type === 'money') ?? numbers[0];
-    if (attribute) constraints.push({ attributeId: attribute.id, operator: /^(over|above|at least)/.test(bound[0]) ? 'gte' : 'lte', value: Number(bound[1]) });
+    if (attribute) replaceConstraint({ attributeId: attribute.id, operator: /^(over|above)/.test(bound[0]) ? 'gt' : /^at least/.test(bound[0]) ? 'gte' : /^(under|below|less than)/.test(bound[0]) ? 'lt' : 'lte', value: Number(bound[1]) });
   }
   for (const attribute of catalog.attributes.filter(item => item.type === 'text')) {
     const values = [...new Set(catalog.entities.map(entity => entity.attributes[attribute.id]).filter((value): value is string => typeof value === 'string'))];
     const exact = values.find(value => value.length > 2 && query.includes(value.toLocaleLowerCase()));
-    if (exact) constraints.push({ attributeId: attribute.id, operator: 'eq', value: exact });
+    if (exact) replaceConstraint({ attributeId: attribute.id, operator: 'eq', value: exact });
   }
   let candidates = filterEntities(catalog, constraints);
-  // The schema exposes inclusive bounds; preserve strict visitor wording explicitly.
-  if (bound && /^(under|below|less than|over|above)/.test(bound[0])) {
-    const numeric = [...constraints].reverse().find(filter => ['lte', 'gte'].includes(filter.operator) && filter.value === Number(bound[1]));
-    if (numeric) candidates = candidates.filter(entity => entity.attributes[numeric.attributeId] !== numeric.value);
-  }
   const named = candidates.filter(entity => query.includes(entity.name.toLocaleLowerCase()));
   const ordinal = query.match(/\b(first|second|third|fourth|fifth|sixth)\b/);
   if (ordinal) {
     const id = state.entityIds[['first', 'second', 'third', 'fourth', 'fifth', 'sixth'].indexOf(ordinal[1])];
-    if (id && catalog.entities.some(entity => entity.id === id)) return detailPlan(catalog, id, snapshotId);
+    if (id && catalog.entities.some(entity => entity.id === id)) return withFilters(detailPlan(catalog, id, snapshotId));
   }
   if (/\b(compare|comparison|versus|vs)\b|side by side/.test(query)) {
     const ids = named.length >= 2 ? named.map(entity => entity.id) : state.selectedIds.length >= 2 ? state.selectedIds : candidates.slice(0, 3).map(entity => entity.id);
     if (ids.length < 2) throw new Error('Choose at least two published items to compare.');
-    return comparisonPlan(catalog, ids, snapshotId);
+    return withFilters(comparisonPlan(catalog, ids, snapshotId));
   }
-  if (named.length === 1) return detailPlan(catalog, named[0].id, snapshotId);
+  if (named.length === 1) return withFilters(detailPlan(catalog, named[0].id, snapshotId));
   const collection = catalog.collections.find(item => query.includes(item.name.toLocaleLowerCase()));
   if (collection) candidates = candidates.filter(entity => collection.entityIds.includes(entity.id));
   const ignored = new Set(['show', 'find', 'want', 'looking', 'something', 'would', 'like', 'please', 'with', 'that', 'this', 'under', 'below', 'above', 'over', 'than', 'about', 'options', 'items', 'available', 'have', 'what', 'your', 'give', 'some', 'details']);
   const words = query.split(/[^\p{L}\p{N}]+/u).filter(word => word.length > 3 && !ignored.has(word));
-  if (!collection && constraints.length === state.filters.length && words.length) {
+  if (!collection && !changedFilters && words.length) {
     const relevant = candidates.filter(entity => words.some(word => `${entity.name} ${entity.summary} ${Object.values(entity.attributes).join(' ')}`.toLocaleLowerCase().includes(word)));
     if (relevant.length) candidates = relevant;
     else throw new Error('I could not match that request to the published catalog. Try an item name or use the filters.');
   }
   if (!candidates.length) throw new Error('No published items match those criteria. Your previous view is still available.');
   const plan = defaultPresentation(catalog, snapshotId);
-  return validatePlan({ ...plan, operation: 'narrow', components: plan.components.map(component => component.type === 'collection'
-    ? { ...component, entityIds: candidates.map(entity => entity.id), variant: /\blist\b/.test(query) ? 'list' : 'grid' } : component), transition: { type: 'replace', targetComponentId: 'collection' } }, catalog, snapshotId);
+  return withFilters({ ...plan, operation: 'narrow', components: plan.components.map(component => component.type === 'collection'
+    ? { ...component, entityIds: candidates.map(entity => entity.id), variant: /\blist\b/.test(query) ? 'list' : 'grid' } : component), transition: { type: 'replace', targetComponentId: 'collection' } });
 }
 
 /** Resolve photo requests through publisher associations, never visual resemblance. */

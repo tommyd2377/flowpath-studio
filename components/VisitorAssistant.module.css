@@ -29,6 +29,8 @@
 .voiceMeta { color: #8d997e; font-size: 10px; }
 .status { color: #d5c9ac; max-width: 600px; margin: 16px auto 0; overflow: hidden; }
 .assistant button:focus-visible { outline: 2px solid var(--site-accent); outline-offset: 4px; }
+.endVoice { position: fixed; z-index: 80; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); display: inline-flex; align-items: center; justify-content: center; gap: 9px; min-width: 112px; min-height: 44px; padding: 11px 16px; border: 1px solid; border-radius: 24px; background: #1a211a; color: #f0ece3; box-shadow: 0 5px 25px #0006; font: 13px/1.4 Arial, Helvetica, sans-serif; cursor: pointer; }
+.endVoice:focus-visible { outline: 2px solid #f0ece3; outline-offset: 4px; }
 @container (max-width: 440px) {
   .assistant { padding: 0 19px; }
   .card { margin-top: 25px; }
@@ -40,3 +42,6 @@
   .composerMeta .keyboardHint { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .composer { transition: none; } }
+
+.fallback { display: block; margin: 12px auto; min-height: 44px; padding: 10px 18px; border: 1px solid currentColor; border-radius: 24px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.fallback:focus-visible { outline: 2px solid var(--site-accent, currentColor); outline-offset: 4px; }

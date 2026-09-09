@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "structured": {
+    "before": [
+      {
+        "entityId": "mesa-blanco",
+        "field": "attributes.price-usd",
+        "value": 42
+      },
+      {
+        "entityId": "mesa-small",
+        "field": "attributes.price-usd",
+        "value": null
+      }
+    ],
+    "after": [
+      {
+        "entityId": "mesa-blanco",
+        "field": "attributes.price-usd",
+        "value": 46
+      },
+      {
+        "entityId": "mesa-small",
+        "field": "attributes.price-usd",
+        "value": null
+      },
+      {
+        "entityId": "mesa-new",
+        "field": "attributes.volume-ml",
+        "value": 500
+      }
+    ],
+    "missingIds": [
+      "mesa-reserve"
+    ],
+    "addedIds": [
+      "mesa-new"
+    ]
+  },
+  "corrections": [
+    {
+      "entityId": "mesa-blanco",
+      "field": "attributes.price-usd",
+      "publisherValue": 40,
+      "expectedMergedValue": 40
+    },
+    {
+      "entityId": "mesa-reposado",
+      "field": "name",
+      "publisherValue": "Publisher oak choice",
+      "expectedMergedValue": "Publisher oak choice"
+    }
+  ],
+  "journeys": [
+    {
+      "id": "citrus-budget",
+      "source": "before",
+      "question": "A citrus expression under USD 60; do not infer the small bottle price.",
+      "filters": [
+        {
+          "attributeId": "flavor",
+          "operator": "eq",
+          "value": "citrus"
+        },
+        {
+          "attributeId": "price-usd",
+          "operator": "lte",
+          "value": 60
+        }
+      ],
+      "expectedIds": [
+        "mesa-blanco"
+      ]
+    },
+    {
+      "id": "compare-listed-prices",
+      "source": "before",
+      "question": "Compare the two priced options within USD 70.",
+      "filters": [
+        {
+          "attributeId": "price-usd",
+          "operator": "lte",
+          "value": 70
+        }
+      ],
+      "expectedIds": [
+        "mesa-blanco",
+        "mesa-reposado"
+      ],
+      "compare": true
+    }
+  ],
+  "proseEvaluation": {
+    "status": "reference-only-not-model-tested",
+    "facts": [
+      "Mesa Blanco: 750 ml, 40% ABV, unaged, listed USD 42.",
+      "Mesa Small Bottle: 375 ml; price not supplied.",
+      "Mesa Reposado: 8 months; Mesa Reserve: 18 months."
+    ],
+    "relationships": [
+      {
+        "from": "Mesa Small Bottle",
+        "relation": "size of the same expression as",
+        "to": "Mesa Blanco"
+      }
+    ],
+    "unknowns": [
+      "Current stock quantities",
+      "Shipping destinations",
+      "Checkout capability",
+      "Price of Mesa Small Bottle"
+    ],
+    "forbiddenInferences": [
+      "Small release means available inventory.",
+      "A smaller bottle inherits the larger bottle price.",
+      "A row missing on reimport proves discontinuation."
+    ]
+  }
+}

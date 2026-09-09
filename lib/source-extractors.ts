@@ -4,37 +4,60 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { validateCatalog, type KnowledgeCatalog, type AttributeDefinition } from '@thevoice/platform-ui/contracts';
 import { AppError } from './errors';
+import { MAX_SOURCE_EXCERPT, validateSourceProvenance, type SourceAnchor, type SourceProvenance } from './source-provenance';
 
 export const MAX_EXTRACTED_CHARACTERS = 60_000;
-export type ExtractedSource = { text: string; format: 'csv' | 'text' | 'pdf'; pages?: number };
+export type ExtractedSource = {
+  text: string; format: 'csv' | 'text' | 'pdf'; pages?: number;
+  /** Offsets are into text; end is exclusive. Text is the actual PDF extraction, not the original page layout. */
+  pageRanges?: { page: number; text: string; start: number; end: number }[];
+};
 const slug = (text: string) => text.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 70);
 
-export function parseCsv(text: string): string[][] {
-  const rows: string[][] = []; let row: string[] = []; let cell = ''; let quoted = false; let closed = false;
+type CsvRecord = { cells: string[]; row: number; lineStart: number; lineEnd: number; excerpt: string };
+function csvRecords(text: string): CsvRecord[] {
+  const records: CsvRecord[] = []; let row: string[] = []; let cell = ''; let quoted = false; let closed = false;
   const source = text.replace(/^\uFEFF/, '');
+  let physicalLine = 1; let lineStart = 1; let recordNumber = 1; let start = 0;
+  const finish = (end: number) => {
+    row.push(cell.trim()); cell = ''; closed = false;
+    if (row.some(Boolean)) records.push({ cells: row, row: recordNumber, lineStart, lineEnd: physicalLine, excerpt: source.slice(start, end) });
+    row = []; recordNumber++;
+  };
   for (let i = 0; i < source.length; i++) {
     const char = source[i];
     if (quoted) {
       if (char === '"' && source[i + 1] === '"') { cell += '"'; i++; }
       else if (char === '"') { quoted = false; closed = true; }
-      else cell += char;
+      else {
+        cell += char;
+        if (char === '\r') { if (source[i + 1] === '\n') { cell += '\n'; i++; } physicalLine++; }
+        else if (char === '\n') physicalLine++;
+      }
     } else if (char === '"') {
       if (cell || closed) throw new AppError('CSV contains a misplaced quotation mark.');
       quoted = true;
     } else if (char === ',' || char === '\n' || char === '\r') {
-      row.push(cell.trim()); cell = ''; closed = false;
-      if (char !== ',') { if (row.some(Boolean)) rows.push(row); row = []; if (char === '\r' && source[i + 1] === '\n') i++; }
+      if (char === ',') { row.push(cell.trim()); cell = ''; closed = false; }
+      else {
+        finish(i);
+        if (char === '\r' && source[i + 1] === '\n') i++;
+        physicalLine++; lineStart = physicalLine; start = i + 1;
+      }
     } else {
       if (closed && char.trim()) throw new AppError('CSV contains text after a quoted field.');
       if (!closed) cell += char;
     }
   }
   if (quoted) throw new AppError('CSV contains an unfinished quoted field.');
-  row.push(cell.trim()); if (row.some(Boolean)) rows.push(row);
+  finish(source.length);
+  const rows = records.map(record => record.cells);
   if (rows.length < 2 || rows.length > 101) throw new AppError('Use a CSV header and between 1 and 100 item rows. Larger files need to be split; nothing was truncated.');
   if (rows.some(row => row.length !== rows[0].length)) throw new AppError('Every CSV row must have the same number of columns.');
-  return rows;
+  return records;
 }
+
+export function parseCsv(text: string): string[][] { return csvRecords(text).map(record => record.cells); }
 
 function catalogFromRows(name: string, rows: string[][]): KnowledgeCatalog {
   const headers = rows[0]; const normalized = headers.map(header => slug(header));
@@ -68,14 +91,104 @@ function catalogFromRows(name: string, rows: string[][]): KnowledgeCatalog {
   });
 }
 
-export function interpretStructuredSource(name: string, source: ExtractedSource): KnowledgeCatalog | null {
-  if (source.format === 'csv') return catalogFromRows(name, parseCsv(source.text));
+type TextBlock = { text: string; start: number; end: number; lineStart: number; lineEnd: number };
+function textBlocks(text: string): TextBlock[] {
+  const blocks: TextBlock[] = []; let block: TextBlock | undefined; let number = 1;
+  const lines = /([^\r\n]*)(\r\n|\r|\n|$)/g;
+  for (let match = lines.exec(text); match && match[0]; match = lines.exec(text)) {
+    const value = match[1];
+    if (!value.trim() || /^\s*-{3,}\s*$/.test(value)) { if (block) blocks.push(block); block = undefined; }
+    else if (block) { block.end = match.index + value.length; block.lineEnd = number; block.text = text.slice(block.start, block.end); }
+    else block = { text: value, start: match.index, end: match.index + value.length, lineStart: number, lineEnd: number };
+    number++;
+  }
+  if (block) blocks.push(block);
+  return blocks;
+}
+
+function pdfRanges(source: ExtractedSource) {
+  if (!source.pageRanges) return undefined;
+  let end = 0;
+  if (!source.pageRanges.length || source.pageRanges.length > 40 || source.pages !== undefined && source.pages !== source.pageRanges.length) throw new AppError('PDF source page locations are incomplete.');
+  for (const [index, page] of source.pageRanges.entries()) {
+    if (page.page !== index + 1 || !Number.isInteger(page.start) || !Number.isInteger(page.end) || page.start < end || page.end <= page.start
+      || page.end > source.text.length || source.text.slice(page.start, page.end) !== page.text || !page.text.trim() || source.text.slice(end, page.start).trim()) throw new AppError('PDF source page locations do not match the extracted text.');
+    end = page.end;
+  }
+  if (source.text.slice(end).trim()) throw new AppError('PDF source page locations do not cover the extracted text.');
+  return source.pageRanges;
+}
+
+function blockAnchor(source: ExtractedSource, block: TextBlock): SourceAnchor {
+  const excerpt = sourceExcerpt(block.text);
+  if (source.format !== 'pdf') return { id: `text-lines-${block.lineStart}-${block.lineEnd}`, format: 'text', label: block.lineStart === block.lineEnd ? `Line ${block.lineStart}` : `Lines ${block.lineStart}–${block.lineEnd}`, ...excerpt, lineStart: block.lineStart, lineEnd: block.lineEnd };
+  const pages = pdfRanges(source)?.filter(page => page.start < block.end && page.end > block.start);
+  const pageStart = pages?.[0]?.page; const pageEnd = pages?.at(-1)?.page;
+  return { id: `pdf-block-${block.lineStart}-${block.lineEnd}`, format: 'pdf', ...excerpt,
+    label: pageStart === undefined ? 'Extracted PDF excerpt · page unavailable' : pageStart === pageEnd ? `Page ${pageStart}` : `Pages ${pageStart}–${pageEnd}`,
+    ...(pageStart === undefined ? {} : { pageStart, pageEnd }),
+  };
+}
+
+function sourceExcerpt(text: string): Pick<SourceAnchor, 'excerpt' | 'truncated'> {
+  let end = Math.min(text.length, MAX_SOURCE_EXCERPT);
+  // Keep an excerpt a direct substring without cutting a Unicode surrogate pair.
+  if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1])) end--;
+  return { excerpt: text.slice(0, end), ...(end < text.length ? { truncated: true } : {}) };
+}
+
+function csvAnchor(record: CsvRecord): SourceAnchor {
+  // Logical records include the header and blank records; line ranges count physical source lines.
+  return { id: `csv-row-${record.row}`, format: 'csv', label: `CSV record ${record.row} · ${record.lineStart === record.lineEnd ? `line ${record.lineStart}` : `lines ${record.lineStart}–${record.lineEnd}`}`,
+    ...sourceExcerpt(record.excerpt), row: record.row, lineStart: record.lineStart, lineEnd: record.lineEnd };
+}
+
+function mappedProvenance(catalog: KnowledgeCatalog, rows: string[][], anchors: SourceAnchor[]): SourceProvenance {
+  const headers = rows[0].map(slug);
+  const name = headers.findIndex(header => header === 'name' || header === 'title');
+  const kind = headers.findIndex(header => header === 'kind' || header === 'category');
+  const summary = headers.findIndex(header => header === 'summary' || header === 'description');
+  const fields = catalog.entities.flatMap((entity, index) => headers.flatMap((header, column) => {
+    // Empty/missing cells and generated defaults are not positive source statements.
+    if (anchors[index].truncated || header === 'id' || !rows[index + 1][column]?.trim()) return [];
+    const field = column === name ? 'name' : column === kind ? 'kind' : column === summary ? 'summary' : `attributes.${header}`;
+    return [{ entityId: entity.id, field, anchorIds: [anchors[index].id] }];
+  }));
+  return validateSourceProvenance({ anchors, fields }, catalog);
+}
+
+/** Source excerpts for a semantic interpretation, without claiming which fields they support. */
+export function unlinkedSourceProvenance(source: ExtractedSource): SourceProvenance {
+  let anchors: SourceAnchor[];
+  if (source.format === 'csv') anchors = csvRecords(source.text).map(csvAnchor);
+  else if (source.format === 'pdf' && source.pageRanges) {
+    anchors = pdfRanges(source)!.map(page => ({ id: `pdf-page-${page.page}`, format: 'pdf', label: `Page ${page.page}`, ...sourceExcerpt(page.text), pageStart: page.page, pageEnd: page.page }));
+  } else {
+    // Bound review excerpts without losing or inventing source lines. Small adjacent
+    // paragraphs share an anchor; a long block remains one explicitly bounded excerpt.
+    const blocks = textBlocks(source.text); const grouped: TextBlock[] = [];
+    for (const block of blocks) {
+      const previous = grouped.at(-1);
+      if (previous && block.end - previous.start <= MAX_SOURCE_EXCERPT) {
+        previous.end = block.end; previous.lineEnd = block.lineEnd; previous.text = source.text.slice(previous.start, previous.end);
+      } else grouped.push({ ...block });
+    }
+    anchors = grouped.map(block => blockAnchor(source, block));
+  }
+  return validateSourceProvenance({ anchors, fields: [] });
+}
+
+export function interpretSourceWithProvenance(name: string, source: ExtractedSource): { catalog: KnowledgeCatalog; provenance: SourceProvenance } | null {
+  if (source.format === 'csv') {
+    const records = csvRecords(source.text); const rows = records.map(record => record.cells); const catalog = catalogFromRows(name, rows);
+    return { catalog, provenance: mappedProvenance(catalog, rows, records.slice(1).map(csvAnchor)) };
+  }
   // Explicit field blocks can be interpreted honestly without a semantic model.
-  const blocks = source.text.trim().split(/\n\s*\n|\n\s*---+\s*\n/).filter(Boolean);
+  const blocks = textBlocks(source.text);
   const records: Record<string, string>[] = [];
   for (const block of blocks) {
-    const record: Record<string, string> = {};
-    for (const line of block.split('\n').filter(line => line.trim())) {
+    const record: Record<string, string> = Object.create(null);
+    for (const line of block.text.split(/\r\n|\r|\n/).filter(line => line.trim())) {
       const match = line.match(/^\s*([^:]{1,80}):\s*(.*?)\s*$/);
       if (!match || !match[1].trim() || Object.hasOwn(record, match[1].trim())) return null;
       record[match[1].trim()] = match[2];
@@ -85,8 +198,13 @@ export function interpretStructuredSource(name: string, source: ExtractedSource)
   }
   if (!records.length) return null;
   const headers = [...new Set(records.flatMap(record => Object.keys(record)))];
-  return catalogFromRows(name, [headers, ...records.map(record => headers.map(header => record[header] ?? ''))]);
+  const rows = [headers, ...records.map(record => headers.map(header => record[header] ?? ''))];
+  const catalog = catalogFromRows(name, rows);
+  const provenance = source.format === 'pdf' && !source.pageRanges ? unlinkedSourceProvenance(source) : mappedProvenance(catalog, rows, blocks.map(block => blockAnchor(source, block)));
+  return { catalog, provenance };
 }
+
+export function interpretStructuredSource(name: string, source: ExtractedSource): KnowledgeCatalog | null { return interpretSourceWithProvenance(name, source)?.catalog ?? null; }
 
 export async function extractSource(name: string, mime: string, bytes: Uint8Array): Promise<ExtractedSource> {
   if (mime === 'application/pdf') {
@@ -115,9 +233,11 @@ export async function extractSource(name: string, mime: string, bytes: Uint8Arra
         pages.push(text);
         if (pages.join('\n\n').length > MAX_EXTRACTED_CHARACTERS) throw new AppError('The extracted PDF exceeds this pilot’s text limit. Split it into smaller files; nothing was truncated.');
       }
-      const text = pages.join('\n\n').trim();
+      const text = pages.join('\n\n');
       if (!text) throw new AppError('This PDF has no readable text. Scanned PDFs need OCR, which is not available in this import yet.');
-      return { text, format: 'pdf', pages: pdf.numPages };
+      let start = 0;
+      const pageRanges = pages.map((text, index) => { const page = { page: index + 1, text, start, end: start + text.length }; start = page.end + 2; return page; });
+      return { text, format: 'pdf', pages: pdf.numPages, pageRanges };
     } catch (error) {
       if (error instanceof AppError) throw error;
       throw new AppError('This PDF could not be read within the import limits. It may be encrypted, damaged or require OCR. The source was not interpreted.');

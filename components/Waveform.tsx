@@ -33,6 +33,10 @@ export default function Waveform({
     const context = canvas?.getContext("2d");
     if (!canvas || !context) return;
 
+    const palette = document.createElement("canvas");
+    const paletteContext = palette.getContext("2d");
+    if (!paletteContext) return;
+
     const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
     let reducedMotion = motionQuery.matches;
     let width = 0;
@@ -44,7 +48,7 @@ export default function Waveform({
     let amplitude = 0;
     let sampleAnalyser: AnalyserNode | null = null;
     let samples = new Float32Array(0);
-    let stroke: CanvasGradient | string = "#f6eddb";
+    let stroke: CanvasPattern | string = "#f6eddb";
 
     const resize = () => {
       const bounds = canvas.getBoundingClientRect();
@@ -55,7 +59,11 @@ export default function Waveform({
       canvas.height = Math.max(1, Math.round(height * dpr));
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      const gradient = context.createLinearGradient(0, 0, width, 0);
+      // WebKit rounds the layer position for gradient strokes with shadows.
+      // A cached gradient pattern keeps the animated path in place with the same glow.
+      palette.width = canvas.width;
+      palette.height = 1;
+      const gradient = paletteContext.createLinearGradient(0, 0, width * dpr, 0);
       gradient.addColorStop(0, "rgba(221, 191, 146, 0)");
       gradient.addColorStop(0.13, "rgba(221, 191, 146, 0.32)");
       gradient.addColorStop(0.36, "#d9b98c");
@@ -63,7 +71,11 @@ export default function Waveform({
       gradient.addColorStop(0.64, "#e9d6b6");
       gradient.addColorStop(0.87, "rgba(221, 191, 146, 0.32)");
       gradient.addColorStop(1, "rgba(221, 191, 146, 0)");
-      stroke = gradient;
+      paletteContext.fillStyle = gradient;
+      paletteContext.fillRect(0, 0, palette.width, 1);
+      const pattern = context.createPattern(palette, "repeat-y");
+      pattern?.setTransform(new DOMMatrix().scale(1 / dpr, 1));
+      stroke = pattern ?? "#f6eddb";
       previousDraw = 0;
       // Resizing clears the bitmap after animation frames have run. Paint before
       // this frame reaches the screen, without creating a second animation loop.

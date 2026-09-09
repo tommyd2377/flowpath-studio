@@ -1,0 +1,5 @@
+ID,Name,Kind,Summary,Price [USD],Volume ml,Flavor,Aging months
+mesa-blanco,Mesa Blanco,offering,Unaged expression with citrus and pepper.,46,750,citrus,0
+mesa-small,Mesa Small Bottle,offering,Smaller size; price remains unspecified.,,375,citrus,0
+mesa-reposado,Mesa Oak Reposado,offering,Eight months in barrels.,60,750,barrel,8
+mesa-new,Mesa Festival Bottle,offering,A new listed size; no live stock information.,50,500,citrus,0

@@ -63,6 +63,27 @@ export async function readMediaLibrary(user: WorkspaceUser, siteId: string, revi
   return library;
 }
 
+async function writePrivateMedia(user: WorkspaceUser, siteId: string, library: MediaLibrary) {
+  validateUser(user);
+  const text = encoded(library);
+  if (user.mode === 'firebase') await getFirestore(getFirebaseAdminApp()).collection('voiceMediaPrivate').doc(`${privateKey(user.uid, siteId)}-${library.id}`).create({ ownerId: user.uid, siteId, library: JSON.parse(text) });
+  else {
+    const directory = join(root(), 'media', privateKey(user.uid, siteId)); await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, `${library.id}.json`), text, { flag: 'wx', mode: 0o600 });
+  }
+}
+
+/** Prepare only; the caller installs this revision atomically with knowledge Apply. */
+export async function prepareKnowledgeMedia(user: WorkspaceUser, siteId: string, revisionId: string | undefined, entityIds: ReadonlySet<string>): Promise<MediaLibrary | null> {
+  if (!revisionId) return null;
+  const current = await readMediaLibrary(user, siteId, revisionId);
+  const associations = current.associations.filter(link => link.targetType !== 'entity' || entityIds.has(link.targetId!));
+  if (associations.length === current.associations.length) return null;
+  const library = validateMediaLibrary({ ...current, id: randomUUID(), associations });
+  await writePrivateMedia(user, siteId, library);
+  return library;
+}
+
 export async function saveMediaLibrary(user: WorkspaceUser, siteId: string, revision: number, input: unknown) {
   const { getSite, downloadFile, modifySite } = await import('./site-store');
   const current = await getSite(user, siteId);
@@ -79,12 +100,7 @@ export async function saveMediaLibrary(user: WorkspaceUser, siteId: string, revi
   }
   const library = validateMediaLibrary({ ...proposed, id: randomUUID(), assets: proposed.assets.map(asset => ({ ...asset,
     width: metadata.get(asset.id)!.width, height: metadata.get(asset.id)!.height })) });
-  const text = encoded(library);
-  if (user.mode === 'firebase') await getFirestore(getFirebaseAdminApp()).collection('voiceMediaPrivate').doc(`${privateKey(user.uid, siteId)}-${library.id}`).create({ ownerId: user.uid, siteId, library: JSON.parse(text) });
-  else {
-    const directory = join(root(), 'media', privateKey(user.uid, siteId)); await mkdir(directory, { recursive: true });
-    await writeFile(join(directory, `${library.id}.json`), text, { flag: 'wx', mode: 0o600 });
-  }
+  await writePrivateMedia(user, siteId, library);
   const site = await modifySite(user, siteId, revision, state => {
     for (const asset of library.assets) if (!state.files.some(file => file.id === asset.id && file.kind === 'image')) throw new AppError('A photo was removed before Apply. Reload your draft.', 409);
     state.mediaRefs = { ...state.mediaRefs, [library.id]: library.assets.map(asset => asset.id) };

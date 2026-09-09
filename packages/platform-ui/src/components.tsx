@@ -4,7 +4,7 @@ import { createContext, forwardRef, useContext, useId, useState, type ReactNode 
 import { AnimatePresence, motion, useIsPresent, useReducedMotion, type HTMLMotionProps } from 'motion/react';
 import { z } from 'zod';
 import { createLibrary, defineComponent, useTriggerAction, type ElementNode } from './openui.js';
-import { formatAttribute, filterEntities } from './catalog.js';
+import { formatAttribute, filterEntities, filterOperatorLabel } from './catalog.js';
 import type { AttributeDefinition, KnowledgeCatalog, PresentationPlan } from './contracts.js';
 import type { CatalogInteractionState } from './interaction.js';
 import { Disclosure, MotionHeight, SemanticSurface, motionTiming, revealTransition, surfaceTransition } from './motion.js';
@@ -12,6 +12,7 @@ import { EntityMedia, MediaGallery } from './MediaViews.js';
 
 export type RuntimeContextValue = { catalog: KnowledgeCatalog; state: CatalogInteractionState; plan: PresentationPlan;
   onLinkClick?: (event: { kind: 'link_click'; entityId?: string; capabilityId: string }) => void;
+  onInteraction?: () => void;
 };
 export const RuntimeContext = createContext<RuntimeContextValue | null>(null);
 function useCatalog() {
@@ -64,7 +65,7 @@ const PresentChip = forwardRef<HTMLButtonElement, HTMLMotionProps<'button'>>(fun
 });
 
 function CollectionContent({ entityIds, attributeIds, variant, collectionId }: ComponentProps) {
-  const { catalog, state } = useCatalog();
+  const { catalog, state, onInteraction } = useCatalog();
   const action = useAction();
   const [limit, setLimit] = useState(12);
   const collection = catalog.collections.find(item => item.id === collectionId);
@@ -97,7 +98,7 @@ function CollectionContent({ entityIds, attributeIds, variant, collectionId }: C
         </PresentCard>;
       })}</AnimatePresence>
     </div></MotionHeight>
-    {entities.length > limit && <button className="platform-button platform-load-more" type="button" onClick={() => setLimit(value => value + 12)}>Show more <span>{entities.length - limit} remaining</span></button>}
+    {entities.length > limit && <button className="platform-button platform-load-more" type="button" onClick={() => { onInteraction?.(); setLimit(value => value + 12); }}>Show more <span>{entities.length - limit} remaining</span></button>}
   </section>;
 }
 
@@ -108,17 +109,18 @@ function Criterion({ attribute }: { attribute: AttributeDefinition }) {
   const id = useId();
   if (attribute.type === 'money' || attribute.type === 'number') return <div className="platform-criterion">
     <label htmlFor={id}>{attribute.label}<span>{attribute.currency || attribute.unit || 'Maximum'}</span></label>
-    <div className="platform-number"><span>Up to</span><input id={id} type="number" step="any" inputMode="decimal" placeholder="Any amount" value={typeof filter?.value === 'number' ? filter.value : ''}
-      onChange={event => action('filter', { attributeId: attribute.id, operator: 'lte', value: event.target.value === '' ? null : Number(event.target.value) })}/></div>
+    <div className="platform-number"><span>{filterOperatorLabel(filter?.operator ?? 'lte', attribute.type)}</span><input id={id} type="number" step="any" inputMode="decimal" placeholder="Any amount" value={typeof filter?.value === 'number' ? filter.value : ''}
+      onChange={event => action('filter', { attributeId: attribute.id, operator: filter?.operator ?? 'lte', value: event.target.value === '' ? null : Number(event.target.value) })}/></div>
   </div>;
-  if (attribute.type === 'date') return <div className="platform-criterion"><label htmlFor={id}>{attribute.label}<span>On or after</span></label><input className="platform-date" id={id} type="date" value={typeof filter?.value === 'string' ? filter.value : ''} onChange={event => action('filter', { attributeId: attribute.id, operator: 'gte', value: event.target.value || null })}/></div>;
+  if (attribute.type === 'date') return <div className="platform-criterion"><label htmlFor={id}>{attribute.label}<span>{filterOperatorLabel(filter?.operator ?? 'gte', attribute.type)}</span></label><input className="platform-date" id={id} type="date" value={typeof filter?.value === 'string' ? filter.value : ''} onChange={event => action('filter', { attributeId: attribute.id, operator: filter?.operator ?? 'gte', value: event.target.value || null })}/></div>;
   if (attribute.type === 'boolean') return <div className="platform-criterion"><label htmlFor={id}>{attribute.label}</label><select id={id} value={filter ? String(filter.value) : ''} onChange={event => action('filter', { attributeId: attribute.id, operator: 'eq', value: event.target.value === '' ? null : event.target.value === 'true' })}><option value="">Any</option><option value="true">Yes</option><option value="false">No</option></select></div>;
   const values = [...new Set(catalog.entities.flatMap(entity => typeof entity.attributes[attribute.id] === 'string' ? [entity.attributes[attribute.id] as string] : []))];
+  if (filter?.operator === 'contains') return <div className="platform-criterion"><label htmlFor={id}>{attribute.label}<span>Contains</span></label><input className="platform-date" id={id} type="text" value={typeof filter.value === 'string' ? filter.value : ''} onChange={event => action('filter', { attributeId: attribute.id, operator: 'contains', value: event.target.value || null })}/></div>;
   return <div className="platform-criterion"><label htmlFor={id}>{attribute.label}</label><select id={id} value={typeof filter?.value === 'string' ? filter.value : ''} onChange={event => action('filter', { attributeId: attribute.id, operator: 'eq', value: event.target.value || null })}><option value="">Any {attribute.label.toLocaleLowerCase()}</option>{values.map(value => <option key={value} value={value}>{value}</option>)}</select></div>;
 }
 
 function CriteriaContent({ attributeIds, variant }: ComponentProps) {
-  const { catalog, state } = useCatalog();
+  const { catalog, state, onInteraction } = useCatalog();
   const action = useAction();
   const reduced = useReducedMotion();
   const [expanded, setExpanded] = useState(variant === 'expanded');
@@ -127,9 +129,13 @@ function CriteriaContent({ attributeIds, variant }: ComponentProps) {
   const attributes = definitions(catalog, attributeIds);
   return <motion.section layout={!reduced} style={{ borderRadius: 12 }} transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }} className="platform-criteria" aria-label="Refine the collection"><motion.div layout={reduced ? false : 'position'} transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }}>
     <SectionHeading eyebrow="WHAT MATTERS TO YOU" title="Find your fit"><Icon name="filter"/></SectionHeading>
+    {!!state.filters.length && <ul className="platform-active-filters" aria-label="Active filters">{state.filters.map((filter, index) => {
+      const attribute = catalog.attributes.find(item => item.id === filter.attributeId)!;
+      return <li key={index}>{attribute.label}: {filter.value === null ? 'Not provided' : `${filterOperatorLabel(filter.operator, attribute.type)} ${formatAttribute(filter.value, attribute)}`}</li>;
+    })}</ul>}
     <div className="platform-criteria-fields">{attributes.slice(0, 4).map(attribute => <Criterion key={attribute.id} attribute={attribute}/>)}</div>
     <AnimatePresence initial={false}>{expanded && attributes.length > 4 && <Disclosure key="extra-criteria" name="criteria"><div className="platform-criteria-fields platform-extra-criteria">{attributes.slice(4).map(attribute => <Criterion key={attribute.id} attribute={attribute}/>)}</div></Disclosure>}</AnimatePresence>
-    <div className="platform-criteria-bottom">{attributes.length > 4 && <button className="platform-text-button" type="button" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? 'Fewer filters' : `All ${attributes.length} filters`}</button>}{state.filters.length > 0 && <button className="platform-text-button" type="button" onClick={() => action('clear-filters')}>Clear filters <Icon name="close" size={12}/></button>}</div>
+    <div className="platform-criteria-bottom">{attributes.length > 4 && <button className="platform-text-button" type="button" aria-expanded={expanded} onClick={() => { onInteraction?.(); setExpanded(value => !value); }}>{expanded ? 'Fewer filters' : `All ${attributes.length} filters`}</button>}{state.filters.length > 0 && <button className="platform-text-button" type="button" onClick={() => action('clear-filters')}>Clear filters <Icon name="close" size={12}/></button>}</div>
   </motion.div></motion.section>;
 }
 
@@ -154,8 +160,8 @@ function ComparisonContent({ entityIds, attributeIds }: ComponentProps) {
   return <section className="platform-comparison" aria-label="Compare published attributes">
     <SectionHeading eyebrow="A LITTLE PERSPECTIVE" title="Side by side"><Icon name="compare" size={22}/></SectionHeading>
     <p className="platform-section-intro">The details that make the difference. Missing information stays visible.</p>
-    <div className="platform-comparison-table"><table><caption className="platform-sr-only">Comparison of {entities.map(entity => entity.name).join(', ')}</caption><thead><tr><th scope="col">Published details</th>{entities.map(entity => <th scope="col" key={entity.id}><EntityMedia targetId={entity.id} variant="comparison"/><span>{entity.kind}</span><button type="button" onClick={() => action('focus', { id: entity.id })}>{entity.name}<Icon name="arrow" size={14}/></button></th>)}</tr></thead><tbody>{attributes.map(attribute => <tr key={attribute.id}><th scope="row">{attribute.label}</th>{entities.map(entity => <td key={entity.id} data-unknown={entity.attributes[attribute.id] == null}>{formatAttribute(entity.attributes[attribute.id], attribute)}</td>)}</tr>)}</tbody></table></div>
-    <div className="platform-comparison-mobile">{entities.map(entity => <article key={entity.id}><EntityMedia targetId={entity.id} variant="comparison"/><button type="button" className="platform-item-open" onClick={() => action('focus', { id: entity.id })}><h4>{entity.name}</h4><Icon name="arrow"/></button><dl>{attributes.map(attribute => <div key={attribute.id}><dt>{attribute.label}</dt><dd data-unknown={entity.attributes[attribute.id] == null}>{formatAttribute(entity.attributes[attribute.id], attribute)}</dd></div>)}</dl></article>)}</div>
+    <div className="platform-comparison-table"><table><caption className="platform-sr-only">Comparison of {entities.map(entity => entity.name).join(', ')}</caption><thead><tr><th scope="col">Published details</th>{entities.map(entity => <th scope="col" key={entity.id} data-entity-id={entity.id}><EntityMedia targetId={entity.id} variant="comparison"/><span>{entity.kind}</span><button type="button" onClick={() => action('focus', { id: entity.id })}>{entity.name}<Icon name="arrow" size={14}/></button></th>)}</tr></thead><tbody>{attributes.map(attribute => <tr key={attribute.id}><th scope="row">{attribute.label}</th>{entities.map(entity => <td key={entity.id} data-entity-id={entity.id} data-unknown={entity.attributes[attribute.id] == null}>{formatAttribute(entity.attributes[attribute.id], attribute)}</td>)}</tr>)}</tbody></table></div>
+    <div className="platform-comparison-mobile">{entities.map(entity => <article key={entity.id} data-entity-id={entity.id}><EntityMedia targetId={entity.id} variant="comparison"/><button type="button" className="platform-item-open" onClick={() => action('focus', { id: entity.id })}><h4>{entity.name}</h4><Icon name="arrow"/></button><dl>{attributes.map(attribute => <div key={attribute.id}><dt>{attribute.label}</dt><dd data-unknown={entity.attributes[attribute.id] == null}>{formatAttribute(entity.attributes[attribute.id], attribute)}</dd></div>)}</dl></article>)}</div>
   </section>;
 }
 
@@ -164,7 +170,7 @@ function SelectionContent() {
   const action = useAction();
   const entities = state.selectedIds.flatMap(id => catalog.entities.find(entity => entity.id === id) ?? []);
   return <AnimatePresence>{entities.length > 0 && <Disclosure key="shortlist" name="selection"><section className="platform-selection" aria-label="Selected for comparison"><div className="platform-selection-label"><Icon name="compare"/><span>Your shortlist <b>{entities.length}/6</b></span></div>
-    <div className="platform-selection-items"><AnimatePresence initial={false} mode="popLayout">{entities.map(entity => <PresentChip key={entity.id} type="button" onClick={() => action('select', { id: entity.id })} aria-label={`Remove ${entity.name} from comparison`}>{entity.name}<Icon name="close" size={12}/></PresentChip>)}</AnimatePresence></div>
+    <div className="platform-selection-items"><AnimatePresence initial={false} mode="popLayout">{entities.map(entity => <PresentChip key={entity.id} data-entity-id={entity.id} type="button" onClick={() => action('select', { id: entity.id })} aria-label={`Remove ${entity.name} from comparison`}>{entity.name}<Icon name="close" size={12}/></PresentChip>)}</AnimatePresence></div>
     <button className="platform-button platform-primary" type="button" disabled={entities.length < 2 || !catalog.attributes.length} onClick={() => action('compare')}><span>{entities.length < 2 ? 'Choose one more' : 'Compare selections'}</span><Icon name="arrow" size={14}/></button>
   </section></Disclosure>}</AnimatePresence>;
 }
@@ -177,7 +183,7 @@ function RelationshipsContent({ entityIds }: ComponentProps) {
   return <section className="platform-related"><SectionHeading eyebrow="THE CONNECTIONS" title="A little more context"/><div className="platform-related-items">{relationships.map(relation => {
     const from = catalog.entities.find(entity => entity.id === relation.fromEntityId)!;
     const to = catalog.entities.find(entity => entity.id === relation.toEntityId)!;
-    return <div key={relation.id}><button type="button" onClick={() => action('focus', { id: from.id })}>{from.name}</button><span>{relation.label}</span><button type="button" onClick={() => action('focus', { id: to.id })}>{to.name}<Icon name="arrow" size={13}/></button></div>;
+    return <div key={relation.id}><button type="button" data-entity-id={from.id} onClick={() => action('focus', { id: from.id })}>{from.name}</button><span>{relation.label}</span><button type="button" data-entity-id={to.id} onClick={() => action('focus', { id: to.id })}>{to.name}<Icon name="arrow" size={13}/></button></div>;
   })}</div></section>;
 }
 

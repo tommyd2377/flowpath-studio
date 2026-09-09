@@ -40,7 +40,16 @@ async function isolate(context: BrowserContext) {
 async function openWorkspace(page: Page) {
   await page.goto('/');
   await expect(page.getByRole('navigation', { name: 'Workspace' })).toBeVisible();
-  if (siteId) await page.getByLabel('Current site', { exact: true }).selectOption(siteId);
+  if (siteId) {
+    const picker = page.getByRole('combobox', { name: 'Current site', exact: true });
+    if (await picker.inputValue() !== siteId) {
+      const changed = page.waitForResponse(response => new URL(response.url()).pathname === `/api/sites/${siteId}` && response.request().method() === 'GET');
+      await picker.selectOption(siteId); const response = await changed;
+      expect(response.ok()).toBeTruthy();
+      await expect(page.locator('.breadcrumbs strong')).toHaveText((await response.json()).site.draft.name);
+    }
+    await expect(picker).toHaveValue(siteId); await expect(picker).toBeEnabled();
+  }
 }
 
 async function panel(page: Page, name: string) {
@@ -119,14 +128,14 @@ test.describe.serial('offline publisher-to-visitor proof', () => {
     await knowledgeAction(page, 'Interpret source');
     const proposal = page.getByRole('region', { name: 'Knowledge proposal' });
     await expect(proposal.getByRole('heading', { name: 'Review the interpretation' })).toBeVisible();
-    const first = proposal.locator('details').filter({ has: page.locator('summary', { hasText: 'Example Blanco' }) });
-    await first.locator('summary').click();
+    const first = proposal.locator('.knowledge-item').filter({ has: page.locator('summary', { hasText: 'Example Blanco' }) });
+    await first.locator(':scope > summary').click();
     await first.getByLabel('Name', { exact: true }).fill('Example Blanco Reviewed');
     await first.getByRole('spinbutton', { name: /Price/ }).fill('39');
     await knowledgeAction(page, 'Save corrections');
     await proposal.getByLabel('Correct the interpretation').fill('Rename "Example Reposado" to "Example Reposado Selected"');
     await knowledgeAction(page, 'Propose correction');
-    await expect(proposal.locator('summary', { hasText: 'Example Reposado Selected' })).toBeVisible();
+    await expect(proposal.locator('.knowledge-item > summary', { hasText: 'Example Reposado Selected' })).toBeVisible();
     await screenshot(page, info.outputPath('publisher-correction.png'));
     await knowledgeAction(page, 'Apply to draft');
     await expect(page.getByRole('region', { name: 'Website preview' }).locator('.platform-explorer')).toBeVisible();

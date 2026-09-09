@@ -17,3 +17,5 @@ The local `/lab` route loads the reviewed catalogs for manual interaction. To ex
 - Classes: narrow sessions by experience/date, compare duration and materials, inspect people/place relationships; scheduled sessions must not be labeled available to book.
 
 No model calls are needed to load, validate or exercise these fixtures. Canonical fixtures intentionally preserve explicit unknown values rather than replacing them with guesses. They are starting offline evidence, not proof of extraction quality or cross-domain usability.
+
+The [source review evaluation packs](evaluation-packs/README.md) add imperfect successive imports, realistic synthetic prose, expected corrections and visitor journeys for tequila, books and classes. Structured extraction and typed visitor controls are tested offline; prose expectations are reference answers for future authorized evaluation, not verified model results.

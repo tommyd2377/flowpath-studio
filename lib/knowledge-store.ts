@@ -9,8 +9,9 @@ import { getBackendMode } from './firebase/config';
 import type { WorkspaceUser } from './firebase/types';
 import { withDatabase } from './local-store';
 import { AppError } from './errors';
-import { hashValue, type KnowledgeArtifact, type KnowledgeLedger } from './knowledge-model';
+import { hashValue, validateKnowledgeUpdates, validateKnowledgeUpdateContext, updateAnchorsSchema, type KnowledgeArtifact, type KnowledgeLedger } from './knowledge-model';
 import { validateCatalog, type KnowledgeCatalog } from '@thevoice/platform-ui/contracts';
+import { validateSourceProvenance } from './source-provenance';
 
 const uuid = z.string().uuid();
 const queues = globalThis as typeof globalThis & { knowledgeQueue?: Promise<unknown> };
@@ -27,6 +28,25 @@ const validateSize = (value: unknown) => {
   if (Buffer.byteLength(text) > 700_000) throw new AppError('This knowledge artifact exceeds the pilot storage limit. Split the catalog or remove unused records; nothing was truncated.', 413);
   return text;
 };
+function validateArtifact(value: unknown): KnowledgeArtifact {
+  const parsed = z.object({ schemaVersion: z.literal(1), id: uuid, catalog: z.unknown(),
+    origins: z.array(z.object({ key: z.string().min(1).max(255), fileId: uuid, name: z.string().min(1).max(255), hash: z.string().max(128),
+      entityIds: z.array(z.string().min(1).max(80)).max(100), baseline: z.unknown(), provenance: z.unknown().optional(),
+  }).strict()).max(50), notes: z.array(z.string().max(2000)).max(5000), updates: z.unknown().optional(), updateAnchors: z.unknown().optional(), updateContext: z.unknown().optional(),
+  }).strict().parse(value);
+  const catalog = validateCatalog(parsed.catalog);
+  if (catalog.id !== parsed.id) throw new AppError('Knowledge revision identity does not match.');
+  if (new Set(parsed.origins.map(origin => origin.key)).size !== parsed.origins.length) throw new AppError('Knowledge contains duplicate source identities.');
+  const origins = parsed.origins.map(({ baseline: rawBaseline, provenance, ...origin }) => {
+    const baseline = validateCatalog(rawBaseline);
+    if (new Set(origin.entityIds).size !== origin.entityIds.length || origin.entityIds.length !== baseline.entities.length
+      || origin.entityIds.some(id => !baseline.entities.some(entity => entity.id === id))) throw new AppError('A source contains invalid item references.');
+    return { ...origin, baseline, ...(provenance !== undefined ? { provenance: validateSourceProvenance(provenance, baseline) } : {}) };
+  });
+  const updateAnchors = updateAnchorsSchema.parse(parsed.updateAnchors ?? []);
+  const updateContext = validateKnowledgeUpdateContext(parsed.updateContext ?? { collections: [], relationships: [], capabilities: [] });
+  return { ...parsed, catalog, origins, updateAnchors, updateContext, updates: validateKnowledgeUpdates(parsed.updates ?? [], catalog, updateContext, updateAnchors) };
+}
 async function readOptional(path: string): Promise<unknown | undefined> {
   try { return JSON.parse(await readFile(path, 'utf8')); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; }
@@ -98,9 +118,8 @@ export async function applyLocalKnowledgeClaim<T>(user: WorkspaceUser, siteId: s
 }
 
 export async function writeKnowledgeArtifact(user: WorkspaceUser, siteId: string, artifact: KnowledgeArtifact) {
-  validateUser(user); uuid.parse(artifact.id); validateCatalog(artifact.catalog);
-  if (artifact.catalog.id !== artifact.id) throw new AppError('Knowledge revision identity does not match.');
-  const text = validateSize(artifact);
+  validateUser(user);
+  const text = validateSize(validateArtifact(artifact));
   if (user.mode === 'firebase') {
     const ref = getFirestore(getFirebaseAdminApp()).collection('voiceKnowledgePrivate').doc(`${privateKey(user.uid, siteId)}-${artifact.id}`);
     await ref.create({ ownerId: user.uid, siteId, artifact: JSON.parse(text) });
@@ -118,9 +137,12 @@ export async function readKnowledgeArtifact(user: WorkspaceUser, siteId: string,
     if (data?.ownerId !== user.uid || data?.siteId !== siteId) throw new AppError('Knowledge revision not found.', 404);
     value = data.artifact;
   } else value = await readOptional(join(directory(user.uid, siteId), `${id}.json`));
-  if (!value || typeof value !== 'object' || !('id' in value) || value.id !== id || !('catalog' in value) || !('origins' in value) || !Array.isArray(value.origins) || !('notes' in value) || !Array.isArray(value.notes)) throw new AppError('Knowledge revision could not be validated.', 503);
-  const artifact = value as KnowledgeArtifact;
-  return { ...artifact, catalog: validateCatalog(artifact.catalog) };
+  try {
+    validateSize(value);
+    const artifact = validateArtifact(value);
+    if (artifact.id !== id) throw new Error('Knowledge revision identity does not match.');
+    return artifact;
+  } catch { throw new AppError('Knowledge revision could not be validated.', 503); }
 }
 
 /** Stage a separate, source-free immutable public projection. Serving still requires publication. */

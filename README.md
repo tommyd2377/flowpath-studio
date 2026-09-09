@@ -43,9 +43,9 @@ Local interpretation supports CSV and labeled TXT structures, plus PDF text extr
 | Area | Current behavior |
 | --- | --- |
 | Studio | Multiple sites, chat proposals, branding/content editing, draft and published previews, approval, publication and Undo |
-| Knowledge | Source ingestion, semantic catalogs, reviewable proposals, direct/conversational corrections and preserved publisher overrides on reimport |
+| Knowledge | Source ingestion, private row/line/page excerpts, semantic catalogs, direct/conversational corrections and explicit reimport choices that preserve publisher overrides |
 | Media | PNG/JPEG/WebP upload, folder albums, optional group context, captions/alt/credit, actual/example connections, covers and lead images |
-| Visitor interface | Controlled cards, criteria, details, comparisons, selections, relationships, explicit links and galleries; typed requests and optional bounded voice |
+| Visitor interface | Controlled cards, criteria, details, comparisons, selections, relationships, explicit links and galleries; typed requests and bounded continuous voice that preserves manual browsing |
 | Reliability | Schema/reference validation, local OpenUI parsing, stale-response protection, manual-interaction cancellation, fallbacks and reduced motion |
 | Storage | Local demo files; optional Firebase owner authentication, Firestore state and private object storage; immutable published knowledge/media revisions |
 | Usage | Daily request reservations, duplicate protection, bounded activity records and reported token usage; browsing survives AI exhaustion |
@@ -98,7 +98,7 @@ An optional [manual validation workflow example](docs/examples/github-actions-va
 - **Demo:** `VOICE_BACKEND=demo` and `VOICE_AI_MODE=demo`. This path never sends paid model requests, even if a key exists elsewhere in the process environment.
 - **Connected backend:** see [Firebase setup](docs/firebase-setup.md). Missing configuration fails closed; local demo content is not automatically migrated.
 - **Connected interpretation/editor:** see [AI editor setup](docs/ai-editor-setup.md), [knowledge foundation](docs/platform-foundation.md) and [photo interpretation](docs/photo-library.md). Suggestions require publisher review before Apply and Publish.
-- **Visitor input:** see [visitor conversations](docs/visitor-conversations.md). Text and voice share approved content selection. Voice uses bounded turns of up to 20 seconds, not a continuous full-duplex call.
+- **Visitor input:** see [visitor conversations](docs/visitor-conversations.md). Text and voice share approved content, current view context and bounded ephemeral history. Connected published sites use continuous, interruptible WebRTC voice with server-authorized turns and a two-minute session limit. Browsing keeps the call connected while cancelling stale responses; voice can answer directly or request a validated view/navigation change. Voice errors offer separately capped typing fallback. Demo previews remain local and deterministic; live audio quality and deployed session supervision require separate verification.
 - **Private data:** credentials, environment files, original uploads, local databases, logs and generated artifacts stay out of Git. Never paste credentials or publisher material into issues, prompts, fixtures or logs.
 
 Current pilot limits include 100 photos plus 20 other source files and 100 MB stored per site; 10 MB per photo, 2 MB per PDF and 256 KB per CSV/TXT. PDF extraction is limited to 40 pages and 60,000 characters. Catalogs support up to 100 entities and 24 attributes. See the feature guides for exact limits and failure behavior.
@@ -115,6 +115,7 @@ See [Product philosophy and direction](docs/product-philosophy.md) for the princ
 
 - [Architecture and code map](docs/architecture.md)
 - [Knowledge and shared interfaces](docs/platform-foundation.md)
+- [Source review and updates](docs/source-review.md)
 - [Photos and albums](docs/photo-library.md)
 - [Visitor chat and voice](docs/visitor-conversations.md)
 - [Fixture data](fixtures/README.md)
@@ -122,6 +123,6 @@ See [Product philosophy and direction](docs/product-philosophy.md) for the princ
 - [Coding-agent instructions](AGENTS.md) and [Claude entry point](CLAUDE.md)
 - [Security and private data](SECURITY.md)
 
-Still ahead: DOCX/XLSX/website/OCR ingestion, larger durable import processing, richer provenance/conflict review, live interpretation evaluations, monetary spending limits/accounting, complete funnel/retention analytics, domain routing and self-serve launch onboarding. Subscription billing and live commerce integrations are not implemented.
+Still ahead: DOCX/XLSX/website/OCR ingestion, larger durable import processing, field-level grounding for model-interpreted prose, cross-source identity consolidation, live interpretation evaluations, monetary spending limits/accounting, complete funnel/retention analytics, domain routing and self-serve launch onboarding. Subscription billing and live commerce integrations are not implemented.
 
 This repository is private. No open-source license is included; visibility, licensing and redistribution remain owner decisions.

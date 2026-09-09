@@ -7,11 +7,12 @@ import type { WorkspaceUser } from './firebase/types';
 import { getEditorStatus } from './editor-config';
 import { getSite, downloadFile, modifySite, reserveAiRequest } from './site-store';
 import { updateDraft } from './local-store';
-import { extractSource, interpretStructuredSource } from './source-extractors';
-import { claimKnowledgeJob, changeKnowledgeJob, hashValue, mergeKnowledge, type KnowledgeArtifact, type KnowledgeCandidate } from './knowledge-model';
+import { extractSource, interpretSourceWithProvenance, unlinkedSourceProvenance } from './source-extractors';
+import { claimKnowledgeJob, changeKnowledgeJob, hashValue, mergeKnowledge, resolveSourceOrigin, resolveKnowledgeUpdates, type SourceUpdateDecision, type KnowledgeArtifact, type KnowledgeCandidate } from './knowledge-model';
 import { readKnowledgeArtifact, writeKnowledgeArtifact, readKnowledgeLedger, changeKnowledgeLedger, stagePublicKnowledge, applyLocalKnowledgeClaim } from './knowledge-store';
 import { recordPlatformEvent } from './platform-events';
 import { measuredUsage } from './provider-usage';
+import { prepareKnowledgeMedia } from './media-store';
 
 const id = z.string().min(1).max(80);
 const semanticReplySchema = z.object({
@@ -109,20 +110,25 @@ export async function getKnowledgeState(user: WorkspaceUser, siteId: string) {
   const candidates: KnowledgeCandidate[] = [];
   for (const job of state.jobs.filter(job => job.status === 'needs_review' && job.candidateRevisionId)) {
     const artifact = await readKnowledgeArtifact(user, siteId, job.candidateRevisionId!);
-    candidates.push({ id: job.id, catalog: artifact.catalog, notes: artifact.notes, sourceName: job.sourceName, baseRevision: job.baseRevision });
+    candidates.push({ id: job.id, catalog: artifact.catalog, notes: artifact.notes, sourceName: job.sourceName, baseRevision: job.baseRevision,
+      origins: artifact.origins.map(({ key, name, provenance }) => ({ key, name, ...(provenance ? { provenance } : {}) })), updates: artifact.updates ?? [], updateAnchors: artifact.updateAnchors ?? [] });
   }
-  const catalog = site.draft.knowledgeRevisionId ? (await readKnowledgeArtifact(user, siteId, site.draft.knowledgeRevisionId)).catalog : null;
+  const draft = site.draft.knowledgeRevisionId ? await readKnowledgeArtifact(user, siteId, site.draft.knowledgeRevisionId) : null;
+  const catalog = draft?.catalog ?? null;
   const jobs = state.jobs.map(job => job.status === 'running' && job.stage !== 'review' && Date.now() - job.updatedAt > 120_000
     ? { ...job, status: 'interrupted' as const, message: 'The processing request ended without a saved result. Start an explicit new attempt; paid work is never silently replayed.' } : job)
     .map(job => ({ id: job.id, fileId: job.fileId, operation: job.operation, sourceName: job.sourceName, baseRevision: job.baseRevision, status: job.status, stage: job.stage,
       startedAt: job.startedAt, updatedAt: job.updatedAt, message: job.message, candidateRevisionId: job.candidateRevisionId, appliedRevisionId: job.appliedRevisionId, paidAttempt: job.paidAttempt }));
-  return { catalog, candidates, jobs, semanticMode: getEditorStatus().mode === 'openai' ? 'connected' as const : 'structured' as const };
+  return { catalog, candidates, jobs, sources: draft?.origins.map(({ key, name }) => ({ key, name })) ?? [], semanticMode: getEditorStatus().mode === 'openai' ? 'connected' as const : 'structured' as const };
 }
 
-export async function analyzeKnowledge(user: WorkspaceUser, siteId: string, input: { fileId: string; revision: number; requestId: string }) {
+export async function analyzeKnowledge(user: WorkspaceUser, siteId: string, input: { fileId: string; revision: number; requestId: string; replacesSourceKey?: string }) {
   const site = await getSite(user, siteId);
   if (site.revision !== input.revision) throw new AppError('Your site changed. Reload before interpreting a source.', 409);
+  const current = site.draft.knowledgeRevisionId ? await readKnowledgeArtifact(user, siteId, site.draft.knowledgeRevisionId) : null;
+  if (input.replacesSourceKey && !current?.origins.some(origin => origin.key === input.replacesSourceKey)) throw new AppError('The source to replace is no longer in this draft. Reload before interpreting.', 409);
   const { file, bytes } = await downloadFile(user, siteId, input.fileId);
+  resolveSourceOrigin(current, { name: file.name, ...(input.replacesSourceKey ? { replacesSourceKey: input.replacesSourceKey } : {}) });
   const sourceHash = createHash('sha256').update(bytes).digest('hex');
   const job = await changeKnowledgeLedger(user, siteId, state => claimKnowledgeJob(state, {
     id: input.requestId, fileId: file.id, sourceName: file.name, sourceHash, baseDraftHash: hashValue(site.draft), baseRevision: site.revision,
@@ -130,7 +136,6 @@ export async function analyzeKnowledge(user: WorkspaceUser, siteId: string, inpu
   const startedAt = Date.now();
   let extracted = false;
   try {
-    const current = site.draft.knowledgeRevisionId ? await readKnowledgeArtifact(user, siteId, site.draft.knowledgeRevisionId) : null;
     if (current?.origins.some(origin => origin.hash === sourceHash)) {
       await changeKnowledgeLedger(user, siteId, state => changeKnowledgeJob(state, job.id, job.claim, { status: 'discarded', stage: 'review', message: 'This exact source is already in your draft catalog. No interpretation call or duplicate records were created.' }));
       return getKnowledgeState(user, siteId);
@@ -139,14 +144,16 @@ export async function analyzeKnowledge(user: WorkspaceUser, siteId: string, inpu
     const source = await extractSource(file.name, file.mime, bytes);
     extracted = true;
     await recordPlatformEvent(siteId, { type: 'extraction', surface: 'preview', operation: 'extract', requestId: job.id, operationId: job.id, status: 'succeeded', kind: source.format, durationMs: Date.now() - startedAt, count: source.pages ?? 1 }).catch(() => undefined);
-    let catalog = interpretStructuredSource(file.name, source);
+    const structured = interpretSourceWithProvenance(file.name, source);
+    let catalog = structured?.catalog;
     if (!catalog) {
       if (getEditorStatus().mode !== 'openai') throw new AppError('This document contains prose that needs the connected semantic interpreter. In this offline demo, use CSV or TXT item blocks with Name:, Kind:, Summary: and attribute lines separated by blank lines. The source was stored but not interpreted.');
       await reserveAiRequest(user, siteId, site.revision, input.requestId);
       await changeKnowledgeLedger(user, siteId, state => changeKnowledgeJob(state, job.id, job.claim, { stage: 'interpreting', paidAttempt: true, message: 'Interpreting source meaning. One bounded AI attempt was reserved.' }));
       catalog = await interpretWithProvider(file.name, source.text, { siteId, requestId: input.requestId, operation: 'interpret' });
     }
-    const artifact = mergeKnowledge(current, catalog, { fileId: file.id, name: file.name, hash: sourceHash });
+    const artifact = mergeKnowledge(current, catalog, { fileId: file.id, name: file.name, hash: sourceHash,
+      provenance: structured?.provenance ?? unlinkedSourceProvenance(source), ...(input.replacesSourceKey ? { replacesSourceKey: input.replacesSourceKey } : {}) });
     artifact.notes.unshift(source.format === 'pdf' ? `Text extracted from ${source.pages} PDF pages. Embedded images were not interpreted; check the original for information present only in images. Review all inferred items before applying.` : `${source.format.toUpperCase()} read completely within the import limits. Review item names, types, categories and relationships before applying.`);
     const latest = await getSite(user, siteId);
     if (!latest.files.some(item => item.id === file.id) || hashValue(latest.draft) !== job.baseDraftHash) throw new AppError('The source or draft changed during interpretation. No draft changes were applied. Start a new review against the current draft.', 409);
@@ -173,7 +180,7 @@ export async function reviewDraftKnowledge(user: WorkspaceUser, siteId: string, 
   }));
   try {
     const id = randomUUID();
-    const artifact: KnowledgeArtifact = { ...current, id, catalog: { ...current.catalog, id }, notes: ['Review of your saved draft knowledge. Corrections can be applied without the original upload; publication remains separate.'] };
+    const artifact: KnowledgeArtifact = { ...current, id, catalog: { ...current.catalog, id }, updates: [], updateAnchors: [], updateContext: { collections: [], relationships: [], capabilities: [] }, notes: ['Review of your saved draft knowledge. Corrections can be applied without the original upload; publication remains separate.'] };
     await writeKnowledgeArtifact(user, siteId, artifact);
     await changeKnowledgeLedger(user, siteId, state => changeKnowledgeJob(state, job.id, job.claim, { status: 'needs_review', stage: 'review', candidateRevisionId: id, message: 'Draft knowledge is ready for correction. No interpretation call was made.' }));
   } catch (error) {
@@ -193,7 +200,24 @@ export async function reviseKnowledge(user: WorkspaceUser, siteId: string, input
   if (hashValue(site.draft) !== job.baseDraftHash) throw new AppError('The draft changed since this interpretation. Start a fresh import before applying corrections.', 409);
   const previous = await readKnowledgeArtifact(user, siteId, job.candidateRevisionId);
   const catalog = validateCatalog({ ...proposed, id: randomUUID() });
-  const artifact: KnowledgeArtifact = { ...previous, id: catalog.id, catalog, notes: [...previous.notes, 'Publisher corrections are included in this candidate.'] };
+  // A direct edit supersedes its matching source suggestion. Unaffected suggestions
+  // remain reviewable; an old choice must never overwrite a later manual correction.
+  const updates = previous.updates?.filter(update => {
+    const before = previous.catalog.entities.find(entity => entity.id === update.entityId);
+    const after = catalog.entities.find(entity => entity.id === update.entityId);
+    if (!update.field) return hashValue(before ?? null) === hashValue(after ?? null)
+      && ['attributes', 'collections', 'relationships', 'capabilities'].every(key => hashValue(previous.catalog[key as keyof KnowledgeCatalog] ?? null) === hashValue(proposed[key as keyof KnowledgeCatalog] ?? null));
+    if (!before || !after) return false;
+    if (update.field.startsWith('attributes.')) {
+      const field = update.field.slice('attributes.'.length);
+      const definition = catalog.attributes.find(attribute => attribute.id === field);
+      return !!definition && hashValue(definition) === hashValue(previous.catalog.attributes.find(attribute => attribute.id === field) ?? null)
+        && before.attributes[field] === after.attributes[field];
+    }
+    const field = update.field as 'name' | 'kind' | 'summary';
+    return before[field] === after[field];
+  });
+  const artifact: KnowledgeArtifact = { ...previous, id: catalog.id, catalog, ...(updates ? { updates } : {}), notes: [...previous.notes, 'Publisher corrections are included. Direct edits replace matching source suggestions.'] };
   await writeKnowledgeArtifact(user, siteId, artifact);
   await changeKnowledgeLedger(user, siteId, state => {
     const current = state.jobs.find(item => item.id === job.id);
@@ -201,6 +225,25 @@ export async function reviseKnowledge(user: WorkspaceUser, siteId: string, input
     current.candidateRevisionId = artifact.id; current.updatedAt = Date.now();
   });
   await recordPlatformEvent(siteId, { type: 'correction', surface: 'preview', operation: 'correct', operationId: job.id, status: 'succeeded', snapshotId: artifact.id, count: artifact.catalog.entities.length }).catch(() => undefined);
+  return getKnowledgeState(user, siteId);
+}
+
+export async function resolveKnowledge(user: WorkspaceUser, siteId: string, input: { candidateId: string; candidateRevisionId: string; revision: number; decisions: SourceUpdateDecision[] }) {
+  const site = await getSite(user, siteId);
+  if (site.revision !== input.revision) throw new AppError('Your site changed. Reload before reviewing this update.', 409);
+  const ledger = await readKnowledgeLedger(user, siteId);
+  const job = ledger.jobs.find(item => item.id === input.candidateId && item.status === 'needs_review');
+  if (!job?.candidateRevisionId || job.candidateRevisionId !== input.candidateRevisionId) throw new AppError('This interpretation changed. Reload before choosing source values.', 409);
+  if (hashValue(site.draft) !== job.baseDraftHash) throw new AppError('The draft changed since this interpretation. Start a fresh import.', 409);
+  const previous = await readKnowledgeArtifact(user, siteId, job.candidateRevisionId);
+  const artifact = resolveKnowledgeUpdates(previous, input.decisions);
+  await writeKnowledgeArtifact(user, siteId, artifact);
+  await changeKnowledgeLedger(user, siteId, state => {
+    const current = state.jobs.find(item => item.id === job.id);
+    if (current?.status !== 'needs_review' || current.candidateRevisionId !== previous.id) throw new AppError('This interpretation changed before your choices could be saved.', 409);
+    current.candidateRevisionId = artifact.id; current.updatedAt = Date.now();
+  });
+  await recordPlatformEvent(siteId, { type: 'correction', surface: 'preview', operation: 'correct', operationId: job.id, status: 'succeeded', snapshotId: artifact.id, count: input.decisions.length }).catch(() => undefined);
   return getKnowledgeState(user, siteId);
 }
 
@@ -242,12 +285,13 @@ export async function correctKnowledge(user: WorkspaceUser, siteId: string, inpu
   return reviseKnowledge(user, siteId, { candidateId: job.id, revision: input.revision, catalog });
 }
 
-export async function applyKnowledge(user: WorkspaceUser, siteId: string, input: { candidateId: string; revision: number }) {
+export async function applyKnowledge(user: WorkspaceUser, siteId: string, input: { candidateId: string; revision: number; candidateRevisionId?: string }) {
   const initial = await getSite(user, siteId);
   if (initial.revision !== input.revision) throw new AppError('Your site changed. Reload before applying this interpretation.', 409);
   const job = await changeKnowledgeLedger(user, siteId, state => {
     const current = state.jobs.find(item => item.id === input.candidateId);
     if (!current?.candidateRevisionId || current.status !== 'needs_review') throw new AppError('This candidate is not available to apply.', 409);
+    if (input.candidateRevisionId && current.candidateRevisionId !== input.candidateRevisionId) throw new AppError('This interpretation changed. Reload before applying it.', 409);
     current.status = 'running'; current.stage = 'review'; current.claim = randomUUID(); current.updatedAt = Date.now();
     return { ...current };
   });
@@ -258,10 +302,20 @@ export async function applyKnowledge(user: WorkspaceUser, siteId: string, input:
       const { bytes } = await downloadFile(user, siteId, job.fileId);
       if (createHash('sha256').update(bytes).digest('hex') !== job.sourceHash) throw new AppError('The source changed. Interpret the updated file before applying.', 409);
     }
+    const artifact = await readKnowledgeArtifact(user, siteId, job.candidateRevisionId!);
+    const entityIds = new Set(artifact.catalog.entities.map(entity => entity.id));
+    const capabilityIds = new Set(artifact.catalog.capabilities?.map(capability => capability.id) ?? []);
+    const media = await prepareKnowledgeMedia(user, siteId, initial.draft.mediaRevisionId, entityIds);
     await stagePublicKnowledge(user, siteId, job.candidateRevisionId!);
     const save = () => modifySite(user, siteId, input.revision, current => {
       if (hashValue(current.draft) !== job.baseDraftHash || job.operation !== 'review' && !current.files.some(file => file.id === job.fileId)) throw new AppError('The source or draft changed before Apply. Nothing was applied.', 409);
-      updateDraft(current, { ...current.draft, knowledgeRevisionId: job.candidateRevisionId });
+      if (media) current.mediaRefs = { ...current.mediaRefs, [media.id]: media.assets.map(asset => asset.id) };
+      updateDraft(current, { ...current.draft, knowledgeRevisionId: job.candidateRevisionId,
+        ...(media ? { mediaRevisionId: media.id } : {}),
+        ...(current.draft.opening ? { opening: { ...current.draft.opening,
+          featuredEntityIds: current.draft.opening.featuredEntityIds.filter(id => entityIds.has(id)),
+          capabilityIds: current.draft.opening.capabilityIds.filter(id => capabilityIds.has(id)) } } : {}),
+      });
     }, user.mode === 'firebase' ? { jobId: job.id, claim: job.claim } : undefined);
     const site = user.mode === 'demo' ? await applyLocalKnowledgeClaim(user, siteId, job.id, job.claim, save) : await save();
     await recordPlatformEvent(siteId, { type: 'approval', surface: 'preview', operationId: job.id, status: 'succeeded', snapshotId: job.candidateRevisionId }).catch(() => undefined);
@@ -287,8 +341,15 @@ export async function discardKnowledge(user: WorkspaceUser, siteId: string, cand
 }
 
 export async function removeKnowledge(user: WorkspaceUser, siteId: string, revision: number) {
+  const initial = await getSite(user, siteId);
+  if (initial.revision !== revision) throw new AppError('Your site changed. Reload before removing knowledge.', 409);
+  const media = await prepareKnowledgeMedia(user, siteId, initial.draft.mediaRevisionId, new Set());
   const site = await modifySite(user, siteId, revision, current => {
     const content = { ...current.draft }; delete content.knowledgeRevisionId;
+    if (media) {
+      current.mediaRefs = { ...current.mediaRefs, [media.id]: media.assets.map(asset => asset.id) };
+      content.mediaRevisionId = media.id;
+    }
     if (content.opening) content.opening = { ...content.opening, featuredEntityIds: [], capabilityIds: [] };
     updateDraft(current, content);
   });

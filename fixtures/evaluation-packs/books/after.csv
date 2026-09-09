@@ -1,0 +1,5 @@
+ID,Name,Kind,Summary,Price [USD],Format,Pages,Topic,Work,Author
+harbor-hardcover,The Imaginary Harbor illustrated hardback,edition,Illustrated local-history hardcover.,30,Hardcover,240,local history,The Imaginary Harbor,Alex Vale
+harbor-paperback,The Imaginary Harbor paperback,edition,Paperback of the same work; illustration details absent.,20,Paperback,240,local history,The Imaginary Harbor,Alex Vale
+author-vale,Alex Vale,person,Fictional author biography; not a purchasable edition.,,,,local history,,
+town-walks,Town Walks,edition,New local-history guide; author not supplied.,23,Paperback,144,local history,Town Walks,

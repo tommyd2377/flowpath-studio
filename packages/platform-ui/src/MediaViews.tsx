@@ -54,13 +54,19 @@ function MediaProviderContent({ library, resolveAssetUrl, children, onInteractio
   const activeAssetId = asset?.id;
   useEffect(() => { photoCallback.current = onPhotoView; }, [onPhotoView]);
   useEffect(() => { if (activeAssetId) photoCallback.current?.(activeAssetId); }, [activeAssetId]);
-  const move = (offset: number) => setViewer(value => value ? { ...value, index: Math.max(0, Math.min(value.assetIds.length - 1, value.index + offset)) } : value);
+  const move = (offset: number) => {
+    if (!viewer) return;
+    const index = Math.max(0, Math.min(viewer.assetIds.length - 1, viewer.index + offset));
+    if (index === viewer.index) return;
+    onInteraction?.(); setViewer({ ...viewer, index });
+  };
+  const close = () => { if (viewer) { onInteraction?.(); setViewer(null); } };
   return <MediaContext.Provider value={context}>{children}
-    <dialog ref={dialog} className="platform-lightbox" aria-labelledby={labelId} onCancel={event => { event.preventDefault(); setViewer(null); }}
-      onClick={event => { if (event.target === event.currentTarget) setViewer(null); }}
+    <dialog ref={dialog} className="platform-lightbox" aria-labelledby={labelId} onCancel={event => { event.preventDefault(); close(); }}
+      onClick={event => { if (event.target === event.currentTarget) close(); }}
       onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); move(event.key === 'ArrowLeft' ? -1 : 1); } }}>
       {asset && viewer && <div className="platform-lightbox-content">
-        <div className="platform-lightbox-toolbar"><p id={labelId}>Photo {viewer.index + 1} of {viewer.assetIds.length}</p><button ref={closeButton} type="button" aria-label="Close photo" onClick={() => setViewer(null)}>Close <span aria-hidden="true">×</span></button></div>
+        <div className="platform-lightbox-toolbar"><p id={labelId}>Photo {viewer.index + 1} of {viewer.assetIds.length}</p><button ref={closeButton} type="button" aria-label="Close photo" onClick={close}>Close <span aria-hidden="true">×</span></button></div>
         <div className="platform-lightbox-stage"><AnimatePresence initial={false} mode="wait"><motion.div key={asset.id} className="platform-lightbox-frame"
           initial={reduced ? false : { opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ ...revealTransition, duration: reduced ? 0 : motionTiming.disclosure / 2 }}>
           <div className="platform-lightbox-image"><MediaImage assetId={asset.id} size="display" fit="contain" interactive={false}/></div>
@@ -80,7 +86,7 @@ export function MediaImage({ assetId, size = 'thumb', className = '', fit = 'cov
   if (!asset || !context) return null;
   let src: string | undefined;
   try { src = safeSource(context.resolveAssetUrl(asset.id, size)); } catch { /* A missing host image keeps its reserved space. */ }
-  const image = <span className={`platform-media-image ${className}`} data-fit={fit} style={{ aspectRatio: fit === 'contain' ? `${asset.width} / ${asset.height}` : '4 / 3' }}>
+  const image = <span className={`platform-media-image ${className}`} data-source-id={`photo:${asset.id}`} data-fit={fit} style={{ aspectRatio: fit === 'contain' ? `${asset.width} / ${asset.height}` : '4 / 3' }}>
     {src && failedSource !== src ? <img src={src} width={asset.width} height={asset.height} alt={asset.alt || asset.caption || 'Photo'} loading={size === 'thumb' ? 'lazy' : 'eager'} decoding="async" onError={() => setFailedSource(src)}/>
       : <span className="platform-media-unavailable" role="img" aria-label={asset.alt || asset.caption || 'Photo unavailable'}>Photo unavailable</span>}
   </span>;

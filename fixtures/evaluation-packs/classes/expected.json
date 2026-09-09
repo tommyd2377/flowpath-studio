@@ -1,0 +1,147 @@
+{
+  "schemaVersion": 1,
+  "structured": {
+    "before": [
+      {
+        "entityId": "clay-intro",
+        "field": "attributes.materials-included",
+        "value": true
+      },
+      {
+        "entityId": "drawing",
+        "field": "attributes.materials-included",
+        "value": false
+      },
+      {
+        "entityId": "mara",
+        "field": "attributes.price-usd",
+        "value": null
+      }
+    ],
+    "after": [
+      {
+        "entityId": "clay-intro",
+        "field": "attributes.session-date",
+        "value": "2027-06-10"
+      },
+      {
+        "entityId": "drawing",
+        "field": "attributes.price-usd",
+        "value": null
+      },
+      {
+        "entityId": "drawing",
+        "field": "attributes.session-date",
+        "value": null
+      },
+      {
+        "entityId": "print",
+        "field": "attributes.duration",
+        "value": 75
+      }
+    ],
+    "missingIds": [
+      "mara"
+    ],
+    "addedIds": [
+      "print"
+    ]
+  },
+  "corrections": [
+    {
+      "entityId": "clay-intro",
+      "field": "attributes.price-usd",
+      "publisherValue": 55,
+      "expectedMergedValue": 55
+    },
+    {
+      "entityId": "wheel",
+      "field": "summary",
+      "publisherValue": "Publisher confirms prior introductory experience is required.",
+      "expectedMergedValue": "Publisher confirms prior introductory experience is required."
+    }
+  ],
+  "journeys": [
+    {
+      "id": "beginner-budget",
+      "source": "before",
+      "question": "Compare beginner sessions within USD 70, including the materials difference.",
+      "filters": [
+        {
+          "attributeId": "experience",
+          "operator": "eq",
+          "value": "beginner"
+        },
+        {
+          "attributeId": "price-usd",
+          "operator": "lte",
+          "value": 70
+        }
+      ],
+      "expectedIds": [
+        "clay-intro",
+        "drawing"
+      ],
+      "compare": true
+    },
+    {
+      "id": "revised-cheaper-session",
+      "source": "after",
+      "question": "Find a beginner session within USD 50; unknown drawing price must not match.",
+      "filters": [
+        {
+          "attributeId": "experience",
+          "operator": "eq",
+          "value": "beginner"
+        },
+        {
+          "attributeId": "price-usd",
+          "operator": "lte",
+          "value": 50
+        }
+      ],
+      "expectedIds": [
+        "print"
+      ]
+    }
+  ],
+  "proseEvaluation": {
+    "status": "reference-only-not-model-tested",
+    "facts": [
+      "Introduction to Handbuilding: beginner, 90 minutes, materials included.",
+      "Wheel Skills: intermediate, 120 minutes, prior experience required.",
+      "Drawing: beginner, 60 minutes, materials not included.",
+      "Mara Vale is a person, not a session."
+    ],
+    "relationships": [
+      {
+        "from": "Introduction to Handbuilding",
+        "relation": "taught by",
+        "to": "Mara Vale"
+      },
+      {
+        "from": "Introduction to Handbuilding",
+        "relation": "located at",
+        "to": "Example North Room"
+      },
+      {
+        "from": "Wheel Skills",
+        "relation": "taught by",
+        "to": "Mara Vale"
+      }
+    ],
+    "unknowns": [
+      "Open seats",
+      "Booking capability",
+      "Room accessibility",
+      "Cancellation policy",
+      "Drawing instructor"
+    ],
+    "forbiddenInferences": [
+      "A scheduled class has open seats.",
+      "An instructor biography is a free session.",
+      "Same instructor makes intermediate suitable for a beginner.",
+      "Missing price means free; missing date proves cancellation."
+    ]
+  }
+}

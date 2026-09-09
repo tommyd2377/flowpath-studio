@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { useReducedMotion } from 'motion/react';
 import { validateCatalog, validatePlan, catalogFilterSchema, type KnowledgeCatalog, type PresentationPlan } from './contracts.js';
 import { defaultPresentation, filterEntities } from './catalog.js';
-import { comparisonPlan, detailPlan, entityIdsForComponent, initialInteraction, planForIntent, type CatalogInteractionState } from './interaction.js';
+import { applyPresentationState, comparisonPlan, detailPlan, entityIdsForComponent, initialInteraction, planForIntent, replaceCatalogFilter, type CatalogInteractionState } from './interaction.js';
 import { compilePresentation } from './compile.js';
 import { preflightPresentation } from './preflight.js';
 import { Icon, RuntimeContext, platformLibrary } from './components.js';
@@ -24,6 +24,7 @@ export type CatalogExplorerProps = {
   onOutcome?: (event: { kind: 'selection' | 'link_click'; entityId?: string; capabilityId?: string }) => void;
   onPresentation?: (plan: PresentationPlan) => void;
   onAsk?: (text: string, state: CatalogInteractionState, signal: AbortSignal) => Promise<PresentationPlan>;
+  pending?: boolean;
   showComposer?: boolean;
   media?: MediaLibrary | null;
   resolveAssetUrl?: AssetUrlResolver;
@@ -46,7 +47,7 @@ function useSettledReveal(root: { current: HTMLDivElement | null }, plan: Presen
   const reduced = useReducedMotion();
   useEffect(() => {
     const name = plan.transition.targetComponentId;
-    if (!name || !['detail', 'comparison', 'actions', 'gallery'].includes(name)) return;
+    if (!name) return;
     let frame = 0;
     let cancelled = false;
     let previous = '';
@@ -56,13 +57,16 @@ function useSettledReveal(root: { current: HTMLDivElement | null }, plan: Presen
       if (cancelled) return;
       const target = Array.from(root.current?.querySelectorAll<HTMLElement>('[data-platform-slot]') ?? [])
         .find(element => element.dataset.platformSlot === name && !element.closest('[inert], [aria-hidden="true"]'));
-      if (!target) return;
+      if (!target) {
+        if (performance.now() - started < 900) frame = requestAnimationFrame(follow);
+        return;
+      }
       const bounds = target.getBoundingClientRect();
       const geometry = [bounds.top, bounds.bottom, bounds.width].map(value => Math.round(value * 10)).join(':');
       stable = geometry === previous ? stable + 1 : 0;
       previous = geometry;
       const moving = target.getAnimations({ subtree: true }).some(animation => animation.playState === 'running' && animation.effect?.getComputedTiming().iterations !== Infinity);
-      if (!reduced && (stable < 3 || moving || performance.now() - started < 100) && performance.now() - started < 900) {
+      if ((stable < 3 || !reduced && moving || performance.now() - started < 100) && performance.now() - started < 900) {
         frame = requestAnimationFrame(follow);
         return;
       }
@@ -78,7 +82,12 @@ function useSettledReveal(root: { current: HTMLDivElement | null }, plan: Presen
         }
       }
       if (bounds.top < top || bounds.top > bottom - Math.min(100, bounds.height)) {
-        target.scrollIntoView({ block: 'nearest', behavior: reduced ? 'instant' : 'smooth' });
+        // A tall collection may already span the viewport. Reveal its heading
+        // without start-aligning every ancestor of a scrolling preview pane.
+        const destination = bounds.height > bottom - top
+          ? target.querySelector<HTMLElement>('.platform-section-heading, .platform-media-heading, h3, .platform-selection-label') ?? target
+          : target;
+        destination.scrollIntoView({ block: 'nearest', behavior: reduced ? 'instant' : 'smooth' });
       }
     };
     frame = requestAnimationFrame(follow);
@@ -108,18 +117,23 @@ export function PresentationView({ catalog, plan, state, onAction, onLinkClick, 
     preflightPresentation(compiled);
     return compiled;
   }, [catalog, plan, state.snapshotId, media]);
-  const context = useMemo(() => ({ catalog, state, plan, onLinkClick }), [catalog, state, plan, onLinkClick]);
+  const context = useMemo(() => ({ catalog, state, plan, onLinkClick, onInteraction: onMediaInteraction }), [catalog, state, plan, onLinkClick, onMediaInteraction]);
   const content = <RuntimeContext.Provider value={context}><Renderer response={program} library={platformLibrary}
     isStreaming={false} publishObservability={false} onAction={onAction}/></RuntimeContext.Provider>;
   return media ? <MediaProvider library={media} resolveAssetUrl={resolveAssetUrl ?? (() => '')} onInteraction={onMediaInteraction} onPhotoView={onPhotoView}>{content}</MediaProvider> : content;
 }
 
-function Explorer({ catalog, accent = '#c6af86', snapshotId = catalog.id, plan: suppliedPlan, onStateChange, onInteraction, onOutcome, onPresentation, onAsk, showComposer = true, media, resolveAssetUrl, onPhotoView }: CatalogExplorerProps) {
-  const [accepted, setAccepted] = useState(() => defaultPresentation(catalog, snapshotId));
-  const [state, setState] = useState(() => initialInteraction(catalog, snapshotId));
+function Explorer({ catalog, accent = '#c6af86', snapshotId = catalog.id, plan: suppliedPlan, onStateChange, onInteraction, onOutcome, onPresentation, onAsk, pending: externalPending = false, showComposer = true, media, resolveAssetUrl, onPhotoView }: CatalogExplorerProps) {
+  const [initialView] = useState(() => {
+    const fallback = defaultPresentation(catalog, snapshotId);
+    try { return { plan: suppliedPlan ? checkedView(catalog, suppliedPlan, snapshotId, media) : fallback, error: '' }; }
+    catch { return { plan: fallback, error: 'That view could not be validated. Your previous view is still available.' }; }
+  });
+  const [accepted, setAccepted] = useState(initialView.plan);
+  const [state, setState] = useState(() => applyPresentationState(initialInteraction(catalog, snapshotId), initialView.plan));
   const [history, setHistory] = useState<SavedView[]>([]);
   const [text, setText] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError] = useState(initialView.error);
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
   const pending = useRef<AbortController | null>(null);
@@ -128,7 +142,7 @@ function Explorer({ catalog, accent = '#c6af86', snapshotId = catalog.id, plan: 
   const instanceId = useId();
   const stateCallback = useRef(onStateChange);
   const presentationCallback = useRef(onPresentation);
-  const [previousSupplied, setPreviousSupplied] = useState<PresentationPlan | null | undefined>(undefined);
+  const [previousSupplied, setPreviousSupplied] = useState<PresentationPlan | null | undefined>(suppliedPlan);
   const gallery = accepted.components.find(component => component.type === 'gallery');
   useSettledReveal(root, accepted);
 
@@ -161,7 +175,10 @@ function Explorer({ catalog, accent = '#c6af86', snapshotId = catalog.id, plan: 
 
   const accept = useCallback((value: unknown, remember = true) => {
     const next = checkedView(catalog, value, snapshotId, media);
-    if (remember && JSON.stringify(next) !== JSON.stringify(accepted)) setHistory(items => [...items.slice(-19), { plan: accepted, state: interaction }]);
+    const nextState = applyPresentationState(interaction, next);
+    const changedFilters = JSON.stringify(nextState.filters) !== JSON.stringify(interaction.filters);
+    if (remember && (changedFilters || JSON.stringify(next) !== JSON.stringify(accepted))) setHistory(items => [...items.slice(-19), { plan: accepted, state: interaction }]);
+    if (changedFilters) setState(nextState);
     setAccepted(next);
     setError('');
   }, [catalog, snapshotId, accepted, interaction, media]);
@@ -173,8 +190,13 @@ function Explorer({ catalog, accent = '#c6af86', snapshotId = catalog.id, plan: 
     setBusy(false);
     try {
       const next = checkedView(catalog, suppliedPlan, snapshotId, media);
-      setHistory(items => [...items.slice(-19), { plan: accepted, state: interaction }]);
-      setAccepted(next);
+      const nextState = applyPresentationState(interaction, next);
+      const changedFilters = JSON.stringify(nextState.filters) !== JSON.stringify(interaction.filters);
+      if (changedFilters || JSON.stringify(next) !== JSON.stringify(accepted)) {
+        setHistory(items => [...items.slice(-19), { plan: accepted, state: interaction }]);
+        setAccepted(next);
+        if (changedFilters) setState(nextState);
+      }
       setError('');
     } catch { setError('That view could not be validated. Your previous view is still available.'); }
   }
@@ -194,10 +216,18 @@ function Explorer({ catalog, accent = '#c6af86', snapshotId = catalog.id, plan: 
     try {
       if (action.type === 'focus') {
         if (!catalog.entities.some(entity => entity.id === action.params.id)) throw new Error();
+        const origin = document.activeElement;
+        const current = generation.current;
         accept(detailPlan(catalog, action.params.id, snapshotId));
         // A deliberate navigation can transfer focus; background/model updates never steal it.
-        requestAnimationFrame(() => Array.from(root.current?.querySelectorAll<HTMLElement>('[data-platform-focus]') ?? [])
-          .find(element => element.closest<HTMLElement>('[data-entity-id]')?.dataset.entityId === action.params.id && !element.closest('[inert], [aria-hidden="true"]'))?.focus({ preventScroll: true }));
+        requestAnimationFrame(() => {
+          if (generation.current !== current) return;
+          const active = document.activeElement;
+          const originRetired = !origin?.isConnected || !!origin.closest('[inert], [aria-hidden="true"]');
+          if (active !== origin && !(active === document.body && originRetired)) return;
+          Array.from(root.current?.querySelectorAll<HTMLElement>('[data-platform-focus]') ?? [])
+            .find(element => element.closest<HTMLElement>('[data-entity-id]')?.dataset.entityId === action.params.id && !element.closest('[inert], [aria-hidden="true"]'))?.focus({ preventScroll: true });
+        });
       } else if (action.type === 'select') {
         if (!catalog.entities.some(entity => entity.id === action.params.id)) throw new Error();
         if (!state.selectedIds.includes(action.params.id) && state.selectedIds.length < 6) onOutcome?.({ kind: 'selection', entityId: action.params.id });
@@ -206,7 +236,7 @@ function Explorer({ catalog, accent = '#c6af86', snapshotId = catalog.id, plan: 
       } else if (action.type === 'compare') {
         accept(comparisonPlan(catalog, state.selectedIds, snapshotId));
       } else if (action.type === 'filter') {
-        const nextFilters = [...state.filters.filter(filter => filter.attributeId !== action.params.attributeId), ...(action.params.value === null ? [] : [action.params])];
+        const nextFilters = action.params.value === null ? state.filters.filter(filter => filter.attributeId !== action.params.attributeId) : replaceCatalogFilter(state.filters, action.params);
         filterEntities(catalog, nextFilters);
         setState(value => ({ ...value, filters: nextFilters }));
       } else if (action.type === 'clear-filters') {
@@ -234,8 +264,7 @@ function Explorer({ catalog, accent = '#c6af86', snapshotId = catalog.id, plan: 
   function reset() {
     onInteraction?.();
     cancelPending();
-    accept({ ...defaultPresentation(catalog, snapshotId), transition: { type: 'restore' } });
-    setState(value => ({ ...initialInteraction(catalog, snapshotId), selectedIds: value.selectedIds }));
+    accept({ ...defaultPresentation(catalog, snapshotId), stateUpdate: { filters: [] }, transition: { type: 'restore' } });
   }
   async function ask(event: FormEvent) {
     event.preventDefault();
@@ -264,7 +293,7 @@ function Explorer({ catalog, accent = '#c6af86', snapshotId = catalog.id, plan: 
       {showComposer && <div className="platform-composer-area"><form onSubmit={event => void ask(event)} className="platform-composer"><Icon name="spark" size={20}/><label className="platform-sr-only" htmlFor={`${instanceId}-intent`}>What are you looking for?</label><input ref={composer} id={`${instanceId}-intent`} value={text} maxLength={2000} onChange={event => setText(event.target.value)} placeholder="Tell us what matters to you…" autoComplete="off"/><button className="platform-submit" type="submit" disabled={busy || !text.trim()} aria-label="Explore this request"><Icon name="arrow"/></button></form>
         <div className="platform-prompts"><span>Try a direction</span>{catalog.jobs.slice(0, 3).map(job => <button type="button" key={job.id} disabled={busy} onClick={() => { setText(job.label); composer.current?.focus({ preventScroll: true }); }}>{job.label}<Icon name="arrow" size={12}/></button>)}</div>
       </div>}
-      <div className="platform-view-toolbar"><div><button className="platform-text-button" type="button" disabled={!history.length} onClick={back}><Icon name="back" size={14}/>Back</button><span className="platform-toolbar-divider"/><button className="platform-text-button" type="button" onClick={reset}>All items</button>{!!media?.assets.length && <button className="platform-text-button" type="button" onClick={() => { onInteraction?.(); cancelPending(); accept(planForIntent(catalog, 'show photos', interaction, media)); }}>Photos</button>}</div><span className="platform-view-status" role="status" aria-live="polite">{busy ? 'Shaping your view…' : gallery && media ? `${galleryAssetIds(media, gallery).length} photos in this view` : interaction.focusedId ? 'A closer look' : `${interaction.entityIds.length} ${accepted.operation === 'compare' ? 'items side by side' : 'items in this view'}`}</span></div>
+      <div className="platform-view-toolbar"><div><button className="platform-text-button" type="button" disabled={!history.length} onClick={back}><Icon name="back" size={14}/>Back</button><span className="platform-toolbar-divider"/><button className="platform-text-button" type="button" onClick={reset}>All items</button>{!!media?.assets.length && <button className="platform-text-button" type="button" onClick={() => { onInteraction?.(); cancelPending(); accept(planForIntent(catalog, 'show photos', interaction, media)); }}>Photos</button>}</div><span className="platform-view-status" role="status" aria-live="polite">{busy || externalPending ? 'Shaping your view…' : gallery && media ? `${galleryAssetIds(media, gallery).length} photos in this view` : interaction.focusedId ? 'A closer look' : `${interaction.entityIds.length} ${accepted.operation === 'compare' ? 'items side by side' : 'items in this view'}`}</span></div>
       {error && <div className="platform-error" role="alert"><p>{error}</p><button type="button" aria-label="Dismiss message" onClick={() => setError('')}><Icon name="close" size={14}/></button></div>}
       <PresentationView catalog={catalog} plan={visiblePlan} state={interaction} media={media} resolveAssetUrl={resolveAssetUrl} onPhotoView={onPhotoView} onMediaInteraction={() => { onInteraction?.(); cancelPending(); }} onAction={handleAction} onLinkClick={event => { onInteraction?.(); onOutcome?.(event); }}/>
     </InterfaceMotion>
@@ -273,5 +302,5 @@ function Explorer({ catalog, accent = '#c6af86', snapshotId = catalog.id, plan: 
 
 export function CatalogExplorer(props: CatalogExplorerProps) {
   const catalog = useMemo(() => validateCatalog(props.catalog), [props.catalog]);
-  return <Explorer {...props} catalog={catalog} key={`${catalog.id}-${props.snapshotId ?? catalog.id}`}/>;
+  return <div className="platform-container"><Explorer {...props} catalog={catalog} key={`${catalog.id}-${props.snapshotId ?? catalog.id}`}/></div>;
 }

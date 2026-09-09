@@ -1,4 +1,9 @@
-import { catalogFilterSchema, isCatalogValue, validatePlan, type AttributeDefinition, type CatalogFilter, type CatalogValue, type KnowledgeCatalog, type PresentationPlan } from './contracts.js';
+import { validateCatalogFilters, isCatalogValue, validatePlan, type AttributeDefinition, type CatalogFilter, type CatalogValue, type KnowledgeCatalog, type PresentationPlan } from './contracts.js';
+
+export function filterOperatorLabel(operator: CatalogFilter['operator'], type: AttributeDefinition['type']): string {
+  return type === 'date' ? { eq: 'On', contains: 'Contains', lt: 'Before', lte: 'On or before', gt: 'After', gte: 'On or after' }[operator]
+    : { eq: 'Exactly', contains: 'Contains', lt: 'Under', lte: 'Up to', gt: 'Over', gte: 'At least' }[operator];
+}
 
 export function formatAttribute(value: CatalogValue | undefined, definition: AttributeDefinition): string {
   if (value === null || value === undefined) return 'Not provided';
@@ -15,15 +20,7 @@ export function formatAttribute(value: CatalogValue | undefined, definition: Att
 
 /** Unknown values never match a positive constraint except an explicit unknown-value equality. */
 export function filterEntities(catalog: KnowledgeCatalog, input: CatalogFilter[]) {
-  const filters = catalogFilterSchema.array().max(24).parse(input);
-  const definitions = new Map(catalog.attributes.map(attribute => [attribute.id, attribute]));
-  for (const filter of filters) {
-    const definition = definitions.get(filter.attributeId);
-    if (!definition || !isCatalogValue(filter.value, definition)) throw new Error('Unsupported filter attribute or value.');
-    if (filter.operator === 'contains' && definition.type !== 'text') throw new Error('Contains applies only to text.');
-    if (['lte', 'gte'].includes(filter.operator) && !['number', 'money', 'date'].includes(definition.type)) throw new Error('Range filters require a numeric or date attribute.');
-    if (filter.value === null && filter.operator !== 'eq') throw new Error('Unknown values support only equality filtering.');
-  }
+  const filters = validateCatalogFilters(input, catalog);
   return catalog.entities.filter(entity => filters.every(filter => {
     const value = entity.attributes[filter.attributeId] ?? null;
     if (filter.value === null) return value === null;
@@ -31,6 +28,8 @@ export function filterEntities(catalog: KnowledgeCatalog, input: CatalogFilter[]
     if (filter.operator === 'eq') return typeof value === 'string' && typeof filter.value === 'string' ? value.toLocaleLowerCase('en-US') === filter.value.toLocaleLowerCase('en-US') : value === filter.value;
     if (filter.operator === 'contains') return typeof value === 'string' && typeof filter.value === 'string' && value.toLocaleLowerCase('en-US').includes(filter.value.toLocaleLowerCase('en-US'));
     if (typeof value !== typeof filter.value || typeof value === 'boolean' || typeof filter.value === 'boolean') return false;
+    if (filter.operator === 'lt') return value < filter.value;
+    if (filter.operator === 'gt') return value > filter.value;
     return filter.operator === 'lte' ? value <= filter.value : value >= filter.value;
   }));
 }
