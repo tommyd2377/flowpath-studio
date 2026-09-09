@@ -91,7 +91,7 @@ npm run test:browser
 
 The browser suite rejects unexpected external browser requests and microphone access. Storage/provider transports are mocked in unit tests; image decoding, PDF extraction, local persistence, OpenUI parsing and browser rendering are exercised locally. Passing tests does not establish live model quality, hosted Firebase behavior or billing accuracy.
 
-A [manual validation workflow](.github/workflows/validate.yml) is included for GitHub Actions. It runs checks and isolated browser tests when explicitly launched, with read-only repository permissions and no deployment step. It does not run on pushes or pull requests; the initial repository upload will not start it. See [GitHub's manual workflow guide](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
+An optional [manual validation workflow example](docs/examples/github-actions-validate.yml) is included as documentation. It is not installed in `.github/workflows`, so no GitHub Actions job runs from this repository. An authorized maintainer can review and copy it there later using a GitHub login with workflow permissions. The example uses explicit manual launch, read-only repository permissions and no deployment step. See [GitHub's manual workflow guide](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
 
 ## Configuration and data boundaries
 
