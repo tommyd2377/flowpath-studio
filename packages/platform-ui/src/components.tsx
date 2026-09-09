@@ -4,7 +4,7 @@ import { createContext, forwardRef, useContext, useId, useState, type ReactNode 
 import { AnimatePresence, motion, useIsPresent, useReducedMotion, type HTMLMotionProps } from 'motion/react';
 import { z } from 'zod';
 import { createLibrary, defineComponent, useTriggerAction, type ElementNode } from './openui.js';
-import { formatAttribute, filterEntities, filterOperatorLabel } from './catalog.js';
+import { formatAttribute, filterEntities, filterOperatorLabel, knownAttributes, usefulAttributes } from './catalog.js';
 import type { AttributeDefinition, KnowledgeCatalog, PresentationPlan } from './contracts.js';
 import type { CatalogInteractionState } from './interaction.js';
 import { Disclosure, MotionHeight, SemanticSurface, motionTiming, revealTransition, surfaceTransition } from './motion.js';
@@ -40,6 +40,11 @@ type ComponentProps = z.infer<ReturnType<typeof componentProps>>;
 function definitions(catalog: KnowledgeCatalog, ids: string[]) {
   return ids.flatMap(id => catalog.attributes.find(attribute => attribute.id === id) ?? []);
 }
+function cardAttributes(catalog: KnowledgeCatalog, entity: KnowledgeCatalog['entities'][number], preferred: AttributeDefinition[]) {
+  const preferredIds = new Set(preferred.map(attribute => attribute.id));
+  const ordered = [...preferred, ...catalog.attributes.filter(attribute => !preferredIds.has(attribute.id))];
+  return knownAttributes(entity, ordered).slice(0, 3);
+}
 function SectionHeading({ eyebrow, title, children }: { eyebrow?: string; title: string; children?: ReactNode }) {
   return <div className="platform-section-heading"><div>{eyebrow && <span className="platform-eyebrow">{eyebrow}</span>}<h3>{title}</h3></div>{children}</div>;
 }
@@ -47,7 +52,7 @@ function SectionHeading({ eyebrow, title, children }: { eyebrow?: string; title:
 const PresentCard = forwardRef<HTMLElement, HTMLMotionProps<'article'>>(function PresentCard(props, ref) {
   const present = useIsPresent();
   const reduced = useReducedMotion();
-  return <motion.article {...props} ref={ref} layout={!reduced} style={{ ...props.style, borderRadius: 13 }} inert={!present} aria-hidden={!present || undefined}
+  return <motion.article {...props} ref={ref} layout={!reduced} whileHover={reduced ? undefined : { y: -3 }} whileTap={reduced ? undefined : { scale: 0.995 }} style={{ ...props.style, borderRadius: 13 }} inert={!present} aria-hidden={!present || undefined}
     initial={reduced ? false : { opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
     exit={{ opacity: 0, transition: { ...revealTransition, duration: reduced ? 0 : motionTiming.exit } }}
     transition={{ ...revealTransition, duration: reduced ? 0 : motionTiming.reveal, layout: reduced ? { duration: 0 } : surfaceTransition }}>
@@ -87,12 +92,13 @@ function CollectionContent({ entityIds, attributeIds, variant, collectionId }: C
       {entities.slice(0, limit).map((entity, index) => {
         const selected = state.selectedIds.includes(entity.id);
         const selectDisabled = !selected && state.selectedIds.length >= 6;
-        return <PresentCard key={`item-${entity.id}`} className="platform-item" data-entity-id={entity.id} data-selected={selected}>
+        const details = cardAttributes(catalog, entity, attributes);
+        return <PresentCard key={`item-${entity.id}`} className="platform-item" data-entity-id={entity.id} data-selected={selected} data-detail-count={details.length}>
           <EntityMedia targetId={entity.id}/>
           <div className="platform-item-kicker"><span>{entity.kind}</span><span>{String(index + 1).padStart(2, '0')}</span></div>
           <button className="platform-item-open" type="button" onClick={() => action('focus', { id: entity.id })}><h4>{entity.name}</h4><Icon name="arrow"/></button>
           <p className="platform-item-summary">{entity.summary}</p>
-          {!!attributes.length && <dl className="platform-item-attributes">{attributes.map(attribute => <div key={attribute.id}><dt>{attribute.label}</dt><dd data-unknown={entity.attributes[attribute.id] == null}>{formatAttribute(entity.attributes[attribute.id], attribute)}</dd></div>)}</dl>}
+          {!!details.length && <dl className="platform-item-attributes">{details.map(attribute => <div key={attribute.id}><dt>{attribute.label}</dt><dd>{formatAttribute(entity.attributes[attribute.id], attribute)}</dd></div>)}</dl>}
           <div className="platform-item-bottom"><button className="platform-text-button" type="button" onClick={() => action('focus', { id: entity.id })}>Take a closer look <Icon name="arrow" size={13}/></button>
             <button className="platform-select" type="button" aria-pressed={selected} disabled={selectDisabled} aria-label={`${selected ? 'Remove' : 'Select'} ${entity.name} ${selected ? 'from' : 'for'} comparison`} onClick={() => action('select', { id: entity.id })}><Icon name={selected ? 'check' : 'plus'} size={15}/><span>{selected ? 'Selected' : 'Compare'}</span></button></div>
         </PresentCard>;
@@ -126,7 +132,7 @@ function CriteriaContent({ attributeIds, variant }: ComponentProps) {
   const [expanded, setExpanded] = useState(variant === 'expanded');
   const [previousVariant, setPreviousVariant] = useState(variant);
   if (previousVariant !== variant) { setPreviousVariant(variant); setExpanded(variant === 'expanded'); }
-  const attributes = definitions(catalog, attributeIds);
+  const attributes = usefulAttributes(catalog, definitions(catalog, attributeIds));
   return <motion.section layout={!reduced} style={{ borderRadius: 12 }} transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }} className="platform-criteria" aria-label="Refine the collection"><motion.div layout={reduced ? false : 'position'} transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }}>
     <SectionHeading eyebrow="WHAT MATTERS TO YOU" title="Find your fit"><Icon name="filter"/></SectionHeading>
     {!!state.filters.length && <ul className="platform-active-filters" aria-label="Active filters">{state.filters.map((filter, index) => {
@@ -144,10 +150,11 @@ function DetailContent({ entityIds, attributeIds }: ComponentProps) {
   const action = useAction();
   const entity = catalog.entities.find(item => item.id === entityIds[0])!;
   const selected = state.selectedIds.includes(entity.id);
+  const details = knownAttributes(entity, definitions(catalog, attributeIds));
   return <section className="platform-detail" data-entity-id={entity.id} aria-label={`Details of ${entity.name}`}>
     <span className="platform-eyebrow">{entity.kind} · A CLOSER LOOK</span><h3 tabIndex={-1} data-platform-focus>{entity.name}</h3><p className="platform-detail-summary">{entity.summary}</p>
     <EntityMedia targetId={entity.id} variant="detail" includeExamples/>
-    <dl className="platform-detail-attributes">{definitions(catalog, attributeIds).map(attribute => <div key={attribute.id}><dt>{attribute.label}</dt><dd data-unknown={entity.attributes[attribute.id] == null}>{formatAttribute(entity.attributes[attribute.id], attribute)}</dd></div>)}</dl>
+    {!!details.length && <dl className="platform-detail-attributes">{details.map(attribute => <div key={attribute.id}><dt>{attribute.label}</dt><dd>{formatAttribute(entity.attributes[attribute.id], attribute)}</dd></div>)}</dl>}
     <button className="platform-button" type="button" aria-pressed={selected} disabled={!selected && state.selectedIds.length >= 6} onClick={() => action('select', { id: entity.id })}><Icon name={selected ? 'check' : 'plus'}/>{selected ? 'Selected for comparison' : 'Add to comparison'}</button>
   </section>;
 }
@@ -156,12 +163,12 @@ function ComparisonContent({ entityIds, attributeIds }: ComponentProps) {
   const { catalog } = useCatalog();
   const action = useAction();
   const entities = entityIds.flatMap(id => catalog.entities.find(entity => entity.id === id) ?? []);
-  const attributes = definitions(catalog, attributeIds);
+  const attributes = definitions(catalog, attributeIds).filter(attribute => entities.some(entity => knownAttributes(entity, [attribute]).length));
   return <section className="platform-comparison" aria-label="Compare published attributes">
     <SectionHeading eyebrow="A LITTLE PERSPECTIVE" title="Side by side"><Icon name="compare" size={22}/></SectionHeading>
-    <p className="platform-section-intro">The details that make the difference. Missing information stays visible.</p>
-    <div className="platform-comparison-table"><table><caption className="platform-sr-only">Comparison of {entities.map(entity => entity.name).join(', ')}</caption><thead><tr><th scope="col">Published details</th>{entities.map(entity => <th scope="col" key={entity.id} data-entity-id={entity.id}><EntityMedia targetId={entity.id} variant="comparison"/><span>{entity.kind}</span><button type="button" onClick={() => action('focus', { id: entity.id })}>{entity.name}<Icon name="arrow" size={14}/></button></th>)}</tr></thead><tbody>{attributes.map(attribute => <tr key={attribute.id}><th scope="row">{attribute.label}</th>{entities.map(entity => <td key={entity.id} data-entity-id={entity.id} data-unknown={entity.attributes[attribute.id] == null}>{formatAttribute(entity.attributes[attribute.id], attribute)}</td>)}</tr>)}</tbody></table></div>
-    <div className="platform-comparison-mobile">{entities.map(entity => <article key={entity.id} data-entity-id={entity.id}><EntityMedia targetId={entity.id} variant="comparison"/><button type="button" className="platform-item-open" onClick={() => action('focus', { id: entity.id })}><h4>{entity.name}</h4><Icon name="arrow"/></button><dl>{attributes.map(attribute => <div key={attribute.id}><dt>{attribute.label}</dt><dd data-unknown={entity.attributes[attribute.id] == null}>{formatAttribute(entity.attributes[attribute.id], attribute)}</dd></div>)}</dl></article>)}</div>
+    <p className="platform-section-intro">The details that make the difference.</p>
+    <div className="platform-comparison-table"><table><caption className="platform-sr-only">Comparison of {entities.map(entity => entity.name).join(', ')}</caption><thead><tr><th scope="col">Published details</th>{entities.map(entity => <th scope="col" key={entity.id} data-entity-id={entity.id}><EntityMedia targetId={entity.id} variant="comparison"/><span>{entity.kind}</span><button type="button" onClick={() => action('focus', { id: entity.id })}>{entity.name}<Icon name="arrow" size={14}/></button></th>)}</tr></thead><tbody>{attributes.map(attribute => <tr key={attribute.id}><th scope="row">{attribute.label}</th>{entities.map(entity => <td key={entity.id} data-entity-id={entity.id}>{knownAttributes(entity, [attribute]).length ? formatAttribute(entity.attributes[attribute.id], attribute) : ''}</td>)}</tr>)}</tbody></table></div>
+    <div className="platform-comparison-mobile">{entities.map(entity => { const details = knownAttributes(entity, attributes); return <article key={entity.id} data-entity-id={entity.id}><EntityMedia targetId={entity.id} variant="comparison"/><button type="button" className="platform-item-open" onClick={() => action('focus', { id: entity.id })}><h4>{entity.name}</h4><Icon name="arrow"/></button>{!!details.length && <dl>{details.map(attribute => <div key={attribute.id}><dt>{attribute.label}</dt><dd>{formatAttribute(entity.attributes[attribute.id], attribute)}</dd></div>)}</dl>}</article>; })}</div>
   </section>;
 }
 

@@ -68,13 +68,14 @@ test('hostile publisher strings remain escaped React data, never OpenUI instruct
   assert.doesNotMatch(html, /<script>|<iframe/);
 });
 
-test('comparison resolves the same attributes and exposes missing values on desktop and mobile', () => {
+test('comparison resolves the same attributes and leaves missing values empty on desktop and mobile', () => {
   const catalog = fixture('tequila');
   const plan = comparisonPlan(catalog, ['agave-blanco', 'agave-small']);
   const html = renderToStaticMarkup(createElement(PresentationView, { catalog, plan, state: initialInteraction(catalog) }));
   assert.match(html, /scope="row">Price/);
   assert.match(html, /\$36\.00/);
-  assert.match(html, /Not provided/);
+  assert.doesNotMatch(html, /Not provided/);
+  assert.match(html, /data-entity-id="agave-small"><\/td>/);
   assert.match(html, /platform-comparison-mobile/);
 });
 

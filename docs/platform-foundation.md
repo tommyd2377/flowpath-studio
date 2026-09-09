@@ -48,7 +48,7 @@ Existing daily request limits remain in force. Direct generation has a single bo
 ## Current pilot limits
 
 - Upload: 10 MB photos, 2 MB PDFs, 256 KB CSV/TXT; 100 photos plus 20 other sources, with a 100 MB site cap including photo originals and display variants.
-- Extraction: 40 PDF pages and 60,000 extracted characters. Empty/unreadable pages, encrypted or damaged PDFs and unsupported OCR paths fail explicitly. Embedded PDF images are not interpreted.
+- Extraction: 40 PDF pages and 60,000 extracted characters. Empty/unreadable pages, encrypted or damaged PDFs and unsupported OCR paths fail explicitly. Embedded PDF images are not interpreted. Connected interpretation and correction have a 90-second provider timeout, with no automatic retries; timed-out attempts still count toward the AI limit.
 - Catalog: 100 entities, 24 attributes and bounded collections/relationships/jobs. Oversized records fail rather than silently truncating.
 - Import/review activity: 50 explicit attempts per site in this pilot. No unattended worker or automatic paid retry. Ambiguous interruptions require an explicit new attempt after checking saved state.
 - The demo correction grammar supports exact-name rename and attribute changes; broader conversational corrections require the configured interpreter.

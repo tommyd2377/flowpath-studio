@@ -25,3 +25,18 @@ test('invalid mount updates retain an unfiltered useful view and an error', () =
   assert.match(html, /Example Blanco/);
   assert.match(html, /could not be validated/);
 });
+
+test('published cards omit unknown attributes instead of rendering placeholder values', () => {
+  const sparse = validateCatalog({
+    schemaVersion: 1, id: 'sparse-catalog', name: 'Sparse catalog', description: '', capabilities: [], collections: [], relationships: [], jobs: [],
+    attributes: [{ id: 'county', label: 'County', type: 'text' }, { id: 'website', label: 'Website', type: 'text' }],
+    entities: [
+      { id: 'one', kind: 'place', name: 'One', summary: 'First place.', attributes: { county: 'Orange', website: null } },
+      { id: 'two', kind: 'place', name: 'Two', summary: 'Second place.', attributes: { county: null, website: 'example.org' } },
+    ],
+  });
+  const html = renderToStaticMarkup(createElement(CatalogExplorer, { catalog: sparse, showComposer: false }));
+  assert.doesNotMatch(html, /Not provided/);
+  assert.match(html, /Orange/);
+  assert.match(html, /example\.org/);
+});

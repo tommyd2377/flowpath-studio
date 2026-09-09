@@ -1,4 +1,4 @@
-import { validateCatalogFilters, isCatalogValue, validatePlan, type AttributeDefinition, type CatalogFilter, type CatalogValue, type KnowledgeCatalog, type PresentationPlan } from './contracts.js';
+import { validateCatalogFilters, isCatalogValue, validatePlan, type AttributeDefinition, type CatalogEntity, type CatalogFilter, type CatalogValue, type KnowledgeCatalog, type PresentationPlan } from './contracts.js';
 
 export function filterOperatorLabel(operator: CatalogFilter['operator'], type: AttributeDefinition['type']): string {
   return type === 'date' ? { eq: 'On', contains: 'Contains', lt: 'Before', lte: 'On or before', gt: 'After', gte: 'On or after' }[operator]
@@ -18,6 +18,25 @@ export function formatAttribute(value: CatalogValue | undefined, definition: Att
   return String(value);
 }
 
+/** Return only facts that this entity actually publishes. Renderers must never turn an absent value into content. */
+export function knownAttributes(entity: CatalogEntity, attributes: AttributeDefinition[]) {
+  return attributes.filter(attribute => {
+    const value = entity.attributes[attribute.id];
+    return value !== null && value !== undefined && isCatalogValue(value, attribute);
+  });
+}
+
+/** Attributes with real variation make useful filters and card details; sparse placeholders do neither. */
+export function usefulAttributes(catalog: KnowledgeCatalog, attributes = catalog.attributes) {
+  return attributes.filter(attribute => {
+    const values = catalog.entities.flatMap(entity => {
+      const value = entity.attributes[attribute.id];
+      return value !== null && value !== undefined && isCatalogValue(value, attribute) ? [value] : [];
+    });
+    return values.length >= 2 && new Set(values.map(value => String(value))).size >= 2;
+  });
+}
+
 /** Unknown values never match a positive constraint except an explicit unknown-value equality. */
 export function filterEntities(catalog: KnowledgeCatalog, input: CatalogFilter[]) {
   const filters = validateCatalogFilters(input, catalog);
@@ -35,8 +54,9 @@ export function filterEntities(catalog: KnowledgeCatalog, input: CatalogFilter[]
 }
 
 export function defaultPresentation(catalog: KnowledgeCatalog, snapshotId = catalog.id): PresentationPlan {
+  const attributes = usefulAttributes(catalog);
   return validatePlan({ schemaVersion: 1, snapshotId, operation: 'discover', components: [
-    { id: 'collection', type: 'collection', variant: 'grid', entityIds: [], attributeIds: catalog.attributes.slice(0, 3).map(attribute => attribute.id) },
-    ...(catalog.attributes.length ? [{ id: 'criteria', type: 'criteria', variant: 'compact', entityIds: [], attributeIds: catalog.attributes.map(attribute => attribute.id) }] : []),
+    { id: 'collection', type: 'collection', variant: 'grid', entityIds: [], attributeIds: attributes.slice(0, 3).map(attribute => attribute.id) },
+    ...(attributes.length ? [{ id: 'criteria', type: 'criteria', variant: 'compact', entityIds: [], attributeIds: attributes.map(attribute => attribute.id) }] : []),
   ], transition: { type: 'none' } }, catalog, snapshotId);
 }
