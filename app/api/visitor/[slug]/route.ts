@@ -14,6 +14,8 @@ import { getPublishedMedia } from '@/lib/media-store';
 import { getPublishedKnowledge } from '@/lib/knowledge-store';
 import { recordPlatformEvent } from '@/lib/platform-events';
 import { planForIntent } from '@thevoice/platform-ui/interaction';
+import { meterDemoUsage } from '@/lib/billing-store';
+import { assertNoStripeTestPaidAi } from '@/lib/billing-ai-guard';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -60,12 +62,14 @@ export async function POST(request: Request, { params }: Context) {
     const media = await getPublishedMedia(preview.siteId, preview.content.mediaRevisionId);
     input.context = visitorRequestContext(preview.content, input, catalog ?? undefined, media ?? undefined);
     input.catalogState = input.context.catalogState;
+    if (preview.availability.live) await assertNoStripeTestPaidAi(preview.siteId);
     const { content, siteId, availability } = await visitorAccess(slug, { requestId: input.requestId, kind: input.kind === 'chat' ? 'chat' : 'voice', greeting: input.kind === 'greeting' });
     const observed = { surface: 'public' as const, requestId: input.requestId, snapshotId: content.knowledgeRevisionId, kind: input.kind === 'chat' ? 'chat' as const : 'voice' as const };
     try {
       if (content.knowledgeRevisionId !== preview.content.knowledgeRevisionId || content.mediaRevisionId !== preview.content.mediaRevisionId) throw new AppError('The published catalog changed during this request. Reload to continue.', 409);
       await recordPlatformEvent(siteId, { ...observed, type: 'visitor_intent', status: 'started' }).catch(() => undefined);
       if (!availability.live) {
+        await meterDemoUsage(siteId, input.kind === 'chat' ? 'chat' : 'voice', input.requestId);
         if (input.kind === 'greeting') return { text: getWelcomeMessage(content), demo: true, availability };
         if (catalog) return { text: 'Explore the published items below.', catalogPlan: planForIntent(catalog, input.kind === 'chat' ? input.text : '', input.catalogState, media ?? undefined), demo: true, availability };
         const history = input.context.presentation

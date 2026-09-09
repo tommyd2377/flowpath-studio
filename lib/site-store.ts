@@ -11,6 +11,7 @@ import { createCloudSite, downloadCloudFile, downloadCloudPublishedImage, getClo
 import type { KnowledgeClaim } from './cloud-store';
 import { readLocalImage, removeLocalImage, saveLocalImage } from './media-store';
 import { processImage } from './image-processing';
+import { assertNoStripeTestPaidAi } from './billing-ai-guard';
 
 const idSchema = z.string().uuid();
 export const slugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).min(3).max(50);
@@ -35,6 +36,7 @@ export async function getSite(user: WorkspaceUser, id: string): Promise<StoredSi
 export async function reserveAiRequest(user: WorkspaceUser, id: string, revision: number, requestId: string) {
   idSchema.parse(id); idSchema.parse(requestId);
   if (!isCloud(user)) throw new AppError('AI requests require a signed-in Firebase workspace.', 403);
+  await assertNoStripeTestPaidAi(id, user.uid);
   return reserveCloudAiRequest(user.uid, id, revision, requestId);
 }
 

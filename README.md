@@ -49,6 +49,7 @@ Local interpretation supports CSV and labeled TXT structures, plus PDF text extr
 | Reliability | Schema/reference validation, local OpenUI parsing, stale-response protection, manual-interaction cancellation, fallbacks and reduced motion |
 | Storage | Local demo files; optional Firebase owner authentication, Firestore state and private object storage; immutable published knowledge/media revisions |
 | Usage | Daily request reservations, duplicate protection, bounded activity records and reported token usage; browsing survives AI exhaustion |
+| Launch offer | $29/month or $300/year per site; $10 monthly retail AI allowance; prepaid top-ups, optional capped replenishment, local billing preview and Stripe test-mode Checkout/Billing |
 
 Photos can appear in several albums and several visitor contexts without duplicating their meaning. Publishers review the relationships; the runtime chooses the appropriate placement. Photos alone do not establish inventory, availability, prices or booking capabilities.
 
@@ -99,6 +100,7 @@ An optional [manual validation workflow example](docs/examples/github-actions-va
 - **Connected backend:** see [Firebase setup](docs/firebase-setup.md). Missing configuration fails closed; local demo content is not automatically migrated.
 - **Connected interpretation/editor:** see [AI editor setup](docs/ai-editor-setup.md), [knowledge foundation](docs/platform-foundation.md) and [photo interpretation](docs/photo-library.md). Suggestions require publisher review before Apply and Publish.
 - **Visitor input:** see [visitor conversations](docs/visitor-conversations.md). Text and voice share approved content, current view context and bounded ephemeral history. Connected published sites use continuous, interruptible WebRTC voice with server-authorized turns and a two-minute session limit. Browsing keeps the call connected while cancelling stale responses; voice can answer directly or request a validated view/navigation change. Voice errors offer separately capped typing fallback. Demo previews remain local and deterministic; live audio quality and deployed session supervision require separate verification.
+- **Launch billing:** see [the launch offer](docs/launch-offer.md). Usage & billing supports persistent synthetic payments locally. The Stripe integration is test-only and requires separately supplied test configuration; signed confirmations, durable orders and credit reservations are implemented. Test credits cannot fund live AI. Existing unenrolled pilots retain their attempt limits. No real payment, merchant setup or domain connection happens automatically.
 - **Private data:** credentials, environment files, original uploads, local databases, logs and generated artifacts stay out of Git. Never paste credentials or publisher material into issues, prompts, fixtures or logs.
 
 Current pilot limits include 100 photos plus 20 other source files and 100 MB stored per site; 10 MB per photo, 2 MB per PDF and 256 KB per CSV/TXT. PDF extraction is limited to 40 pages and 60,000 characters. Catalogs support up to 100 entities and 24 attributes. See the feature guides for exact limits and failure behavior.
@@ -123,6 +125,6 @@ See [Product philosophy and direction](docs/product-philosophy.md) for the princ
 - [Coding-agent instructions](AGENTS.md) and [Claude entry point](CLAUDE.md)
 - [Security and private data](SECURITY.md)
 
-Still ahead: DOCX/XLSX/website/OCR ingestion, larger durable import processing, field-level grounding for model-interpreted prose, cross-source identity consolidation, live interpretation evaluations, monetary spending limits/accounting, complete funnel/retention analytics, domain routing and self-serve launch onboarding. Subscription billing and live commerce integrations are not implemented.
+Still ahead: DOCX/XLSX/website/OCR ingestion, larger durable import processing, field-level grounding for model-interpreted prose, cross-source identity consolidation, live interpretation evaluations, production payment activation and provider-usage reconciliation, complete funnel/retention analytics, domain routing and self-serve launch onboarding. Visitor-to-publisher commerce will use Stripe Connect by default; that separate integration is not implemented.
 
 This repository is private. No open-source license is included; visibility, licensing and redistribution remain owner decisions.

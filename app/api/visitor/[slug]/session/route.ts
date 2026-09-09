@@ -14,6 +14,7 @@ import { visitorRequestSchema } from '@/lib/visitor-request';
 import { recordPlatformEvent } from '@/lib/platform-events';
 import { validateVisitorOffer, visitorRealtimeSession } from '@/lib/visitor-realtime-session';
 import { validateVisitorContext, visitorContextSchema, visitorHistorySchema } from '@/lib/visitor-realtime-context';
+import { assertNoStripeTestPaidAi } from '@/lib/billing-ai-guard';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -44,6 +45,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
     if (request.signal.aborted) throw new AppError('Voice request cancelled.', 499);
     const preview = await visitorAccess(slug);
     if (!preview.availability.live) throw new AppError('Continuous voice is unavailable in the demo preview.', 503);
+    await assertNoStripeTestPaidAi(preview.siteId);
     const catalog = await getPublishedKnowledge(preview.siteId, preview.content.knowledgeRevisionId);
     const media = await getPublishedMedia(preview.siteId, preview.content.mediaRevisionId);
     const context = validateVisitorContext(input.context ?? (input.catalogState ? { catalogState: input.catalogState } : {}), preview.content, catalog ?? undefined, media ?? undefined);
@@ -60,7 +62,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
         throw new AppError('This site was updated. Reload to continue with its current information.', 409);
       }
     };
-    const assertCurrent = async () => { matches(await visitorAccess(slug)); };
+    const assertCurrent = async () => {
+      matches(await visitorAccess(slug));
+      // Enrollment can change while a continuous session is already connected.
+      await assertNoStripeTestPaidAi(preview.siteId);
+    };
     const observed = { surface: 'public' as const, snapshotId: preview.content.knowledgeRevisionId, kind: 'voice' as const };
     let currentRequestId = input.requestId;
     const reserve = async (requestId: string) => {

@@ -31,7 +31,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return body;
 }
 
-export default function Dashboard({ initialSites, initialSite, user, editor }: { initialSites: SiteSummary[]; initialSite: Site; user: WorkspaceUser; editor: EditorStatus }) {
+export default function Dashboard({ initialSites, initialSite, user, editor, initialPanel }: { initialSites: SiteSummary[]; initialSite: Site; user: WorkspaceUser; editor: EditorStatus; initialPanel?: 'billing' }) {
   const cloud = user.mode === 'firebase';
   const liveEditor = editor.mode === 'openai';
   const editorUnavailable = editor.mode === 'unavailable';
@@ -40,7 +40,7 @@ export default function Dashboard({ initialSites, initialSite, user, editor }: {
   const [sites, setSites] = useState(initialSites);
   const [site, setSite] = useState(initialSite);
   const [content, setContent] = useState<SiteContent>(() => visitorDraft(initialSite.draft));
-  const [panel, setPanel] = useState<Panel>('chat');
+  const [panel, setPanel] = useState<Panel>(initialPanel ?? 'chat');
   const [text, setText] = useState('');
   const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);

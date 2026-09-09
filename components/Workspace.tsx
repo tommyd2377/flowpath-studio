@@ -12,7 +12,7 @@ import PersonalFooter from './PersonalFooter';
 import SignOutButton from './SignOutButton';
 import ThemeToggle from './ThemeToggle';
 
-export default function Workspace({ initialSites, initialSite, user, editor }: { initialSites: SiteSummary[]; initialSite: Site | null; user: WorkspaceUser; editor: EditorStatus }) {
+export default function Workspace({ initialSites, initialSite, user, editor, initialPanel }: { initialSites: SiteSummary[]; initialSite: Site | null; user: WorkspaceUser; editor: EditorStatus; initialPanel?: 'billing' }) {
   const [site, setSite] = useState(initialSite);
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -34,7 +34,7 @@ export default function Workspace({ initialSites, initialSite, user, editor }: {
     }
   }
 
-  if (site) return <Dashboard initialSite={site} initialSites={initialSites.some(item => item.id === site.id) ? initialSites : [...initialSites, summarize(site)]} user={user} editor={editor}/>;
+  if (site) return <Dashboard initialSite={site} initialSites={initialSites.some(item => item.id === site.id) ? initialSites : [...initialSites, summarize(site)]} user={user} editor={editor} initialPanel={initialPanel}/>;
 
   return <main className="auth-page">
     <header className="auth-topbar"><span className="auth-brand"><AudioLines size={25}/>Voice Studio</span><div className="inline-actions"><ThemeToggle/>{user.mode === 'firebase' && <SignOutButton disabled={busy || creating} onBusyChange={value => { inFlight.current = value; setBusy(value); }}/>}</div></header>
@@ -42,7 +42,7 @@ export default function Workspace({ initialSites, initialSite, user, editor }: {
       <span className="eyebrow">Your workspace is ready</span><h1 id="onboarding-title">Let’s create your first site.</h1><p>Start with a sample, add your branding, and shape the content in your editor. You can review every change before publishing.</p>
       <div className="workspace-owner"><span>{(user.displayName || user.email || 'W').slice(0, 1).toUpperCase()}</span><div><strong>{user.displayName || user.email || 'Your workspace'}</strong><small>{user.mode === 'firebase' ? 'Signed in · saved with Firebase' : 'Local demo workspace'}</small></div></div>
       <div className="onboarding-actions"><button className="button primary" disabled={busy} onClick={() => { setError(''); setCreating(true); }}><Plus size={17}/>Create your first site</button>{user.mode === 'demo' && <Link href="/sign-in" prefetch={false} className="text-button">Connect Firebase</Link>}</div>
-      <p className="auth-note">{editor.message} Visitor chat and voice can be enabled in Content. Custom domains and billing are not connected yet.</p>
+      <p className="auth-note">{editor.message} Visitor chat and voice can be enabled in Content. Review the launch offer in Usage & billing after creating your site. Live payments and custom domains require separate setup.</p>
     </section>
     <div className="auth-footer"><PersonalFooter/></div>
     {creating && <CreateSiteDialog mode={user.mode} busy={busy} error={error} onClose={() => { setCreating(false); setError(''); }} onCreate={(name, slug, kind) => void createSite(name, slug, kind)}/>}

@@ -1,0 +1,60 @@
+.panel { color: var(--ink); }
+.banner { display: flex; align-items: flex-start; gap: 11px; padding: 16px; background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line)); border-radius: 10px; margin-bottom: 22px; }
+.banner > svg { flex: none; color: var(--accent); margin-top: 1px; }
+.banner strong { font-size: 13px; font-weight: 600; }
+.banner p { font-size: 12px; color: var(--muted); line-height: 1.7; margin: 5px 0 0; }
+.feedback:empty { display: none; }
+.status { font-size: 13px; color: var(--muted); line-height: 1.7; margin: 0 0 16px; border-radius: 4px; }
+.status:empty { display: none; }
+.status:focus { outline: 2px solid var(--accent); outline-offset: 5px; }
+.error { font-size: 13px; line-height: 1.65; color: #ab503d; margin: 0 0 14px; }
+.card { border: 1px solid var(--line); border-radius: 12px; padding: 22px; margin-bottom: 20px; overflow-wrap: anywhere; }
+.plan { background: linear-gradient(155deg, var(--accent-soft), transparent 58%); }
+.cardHeading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 19px; }
+.kicker { display: block; color: var(--muted); text-transform: uppercase; font-size: 10px; letter-spacing: 1px; margin-bottom: 8px; }
+.card h3 { font-size: 17px; line-height: 1.35; font-weight: 500; letter-spacing: -.3px; margin: 0; display: flex; align-items: center; gap: 9px; }
+.badge { flex: none; border: 1px solid var(--line); border-radius: 100px; padding: 5px 8px; font-size: 10px; line-height: 1.2; color: var(--muted); background: var(--surface); }
+.cycles, .creditChoices { border: 0; padding: 0; margin: 0 0 19px; display: flex; gap: 8px; }
+.cycles legend, .creditChoices legend { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+.cycles label, .creditChoices label { position: relative; display: flex; align-items: center; flex: 1; gap: 7px; min-height: 44px; padding: 11px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; font-size: 13px; background: color-mix(in srgb, var(--surface) 45%, transparent); }
+.cycles input, .creditChoices input, .toggle input { accent-color: var(--accent); flex: none; margin: 0; width: 15px; height: 15px; }
+.cycles small { display: block; font-size: 10px; color: var(--muted); margin-top: 4px; }
+.cycles .selected, .creditChoices .selected { border-color: var(--accent); background: var(--accent-soft); }
+.cycles label:focus-within, .creditChoices label:focus-within { outline: 2px solid var(--accent); outline-offset: 3px; }
+.cycles:disabled label, .creditChoices:disabled label { cursor: default; opacity: .7; }
+.price { display: flex; align-items: baseline; gap: 7px; margin: 23px 0 4px; }
+.price strong { font-size: 44px; font-weight: 500; line-height: 1; letter-spacing: -2px; }
+.price > span, .priceNote { font-size: 12px; color: var(--muted); }
+.priceNote { margin: 10px 0 22px; }
+.features { list-style: none; padding: 0; margin: 0 0 18px; display: flex; flex-direction: column; gap: 13px; }
+.features li { display: flex; align-items: flex-start; gap: 9px; line-height: 1.6; font-size: 13px; }
+.features svg { flex: none; color: var(--accent); margin-top: 2px; }
+.small { font-size: 12px; color: var(--muted); line-height: 1.8; margin: 12px 0 17px; }
+.wideButton { width: 100%; }
+.renewal { padding-top: 15px; margin-top: 18px; border-top: 1px solid var(--line); }
+.renewal p { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
+.renewal strong { font-weight: 500; color: var(--ink); }
+.total { display: flex; flex-direction: column; gap: 7px; margin: 23px 0; }
+.total strong { font-size: 33px; font-weight: 500; letter-spacing: -1px; }
+.total > span { color: var(--muted); font-size: 12px; }
+.balances { margin: 0; }
+.balances > div { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 15px 0; border-top: 1px solid var(--line); font-size: 12px; }
+.balances dt { line-height: 1.5; }
+.balances dt > span { display: block; color: var(--muted); font-size: 11px; margin-top: 5px; }
+.balances dd { margin: 0; font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rateNote { display: flex; align-items: flex-start; gap: 8px; background: var(--surface); border-radius: 7px; padding: 12px; }
+.rateNote > svg { color: var(--muted); flex: none; margin-top: 2px; }
+.rateNote p { color: var(--muted); font-size: 11px; line-height: 1.8; margin: 0; }
+.creditChoices { margin-top: 24px; }
+.creditChoices label { justify-content: center; gap: 6px; padding: 11px 5px; }
+.toggle { display: flex; align-items: flex-start; gap: 10px; line-height: 1.65; font-size: 13px; margin: 20px 0; cursor: pointer; }
+.toggle input { margin-top: 3px; }
+.autoFields { padding: 0; border: 0; margin: 0; min-width: 0; }
+.autoFields:disabled { opacity: .6; }
+.autoFields > label { font-size: 12px; margin-bottom: 17px; }
+.srOnly { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.simulation { padding: 0 0 23px; color: var(--muted); font-size: 12px; }
+.simulation summary { cursor: pointer; padding: 7px 0; }
+.simulationActions { display: flex; flex-wrap: wrap; gap: 9px; }
+:global(html[data-theme='dark']) .error { color: #efad9c; }
+@media (max-width: 430px) { .card { padding: 17px; } .cardHeading { flex-wrap: wrap; } .cycles label { padding: 10px 8px; } .cycles small { font-size: 9px; } .features li { font-size: 12px; } }

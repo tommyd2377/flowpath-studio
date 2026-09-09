@@ -3,7 +3,7 @@
 import Image from 'next/image';
 
 import { useEffect, useId, useRef, useState } from 'react';
-import { ArrowUpRight, Check, CircleHelp, Clock3, FileText, Globe2, Image as ImageIcon, Link2, Plus, Trash2, Upload, X } from 'lucide-react';
+import { ArrowUpRight, Check, CircleHelp, FileText, Globe2, Image as ImageIcon, Link2, Plus, Trash2, Upload, X } from 'lucide-react';
 import type { Site, SiteContent } from '@/lib/site-model';
 import type { WorkspaceUser } from '@/lib/firebase/types';
 import type { EditorStatus } from '@/lib/editor-types';
@@ -11,6 +11,7 @@ import GreetingSettings from './GreetingSettings';
 import VisitorSettings from './VisitorSettings';
 import OpeningSettings from './OpeningSettings';
 import RecentActivity from './RecentActivity';
+import BillingPanel from './BillingPanel';
 import MediaPanel, { type UploadFiles } from './MediaPanel';
 
 export type Panel = 'chat' | 'branding' | 'content' | 'knowledge' | 'files' | 'domains' | 'billing';
@@ -84,10 +85,8 @@ export function EditorPanels({ editor, mode, panel, site, content, setContent, b
   </div>;
 
   return <div className="settings-panel">
-    <div className="panel-heading"><span className="eyebrow">Your account</span><h2>Usage & billing</h2><p>Your subscription and usage will live here.</p></div>
-    <div className="domain-card"><div className="section-heading"><h3>{cloud ? 'Your Firebase workspace' : 'Local demo workspace'}</h3><span className="badge">No subscription connected</span></div><p>{cloud ? 'Firebase sign-in, website data, and file storage are connected. ' : 'This workspace uses sample sites and local files. '}{editor.message} Visitor conversations can be enabled in Content. Subscriptions and payment processing are not connected.</p><div className="usage-line"><span>AI editor</span><strong>{editor.mode === 'openai' ? 'Enabled' : editor.mode === 'demo' ? 'Demo mode' : 'Unavailable'}</strong></div>{editor.mode !== 'demo' && <><div className="usage-line"><span>Daily AI request limit</span><strong>{editor.dailyLimit}</strong></div><p>Usage is checked when you send a request. Live usage totals are not displayed here yet.</p></>}<div className="usage-line"><span>Visitor conversations</span><strong>Manage in Content</strong></div></div>
-    <div className="info-note"><Clock3 size={18}/><p>{cloud ? 'Stripe subscription management is planned for a later integration stage.' : 'Firebase sign-in can be connected next. Stripe subscription management is planned for a later integration stage.'}</p></div>
-    <RecentActivity key={site.id} siteId={site.id}/>
+    <BillingPanel key={`billing-${site.id}`} siteId={site.id} siteName={site.draft.name}/>
+    <RecentActivity key={`activity-${site.id}`} siteId={site.id}/>
   </div>;
 }
 

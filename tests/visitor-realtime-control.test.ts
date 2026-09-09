@@ -238,6 +238,23 @@ test('speech cannot start a second tool round', async t => {
   assert.equal(h.fatal.length, 1); assert.equal(h.socket.requests().length, 2);
 });
 
+test('billing eligibility revoked during a connected call prevents the next paid turn', async t => {
+  let testingBilling = false;
+  const h = setup({ assertCurrent: async () => {
+    if (testingBilling) throw new AppError('Test credits cannot fund live AI.', 503);
+  } });
+  t.after(() => h.control.close());
+  await h.ready(); h.user(); await flush();
+  h.socket.created('first'); h.socket.done('first', spoken);
+  h.socket.frame({ type: 'output_audio_buffer.stopped', response_id: 'first' });
+  await flush();
+  testingBilling = true;
+  h.user('after-test-enrollment'); await h.control.closed;
+  assert.equal(h.socket.requests().length, 1);
+  assert.match(h.fatal[0], /Test credits cannot fund live AI/);
+  assert.equal(h.socket.readyState, 3);
+});
+
 test('readiness, input, generation, playback and idle deadlines release the sideband', async t => {
   for (const phase of ['ready', 'input', 'generation', 'playback', 'idle']) await t.test(phase, async subtest => {
     subtest.mock.timers.enable({ apis: ['setTimeout'] });
