@@ -5,15 +5,15 @@ import { animate, LayoutGroup, MotionConfig, motion, stagger, useIsPresent, useM
 import type { SemanticTransition } from './contracts.js';
 
 /** The only motion roles available to a published presentation. */
-export const motionTiming = { reveal: 0.48, disclosure: 0.48, reflow: 0.56, workspace: 0.62, exit: 0.4, feedback: 0.22 } as const;
-export const surfaceTransition = { type: 'spring', visualDuration: 0.46, bounce: 0.08 } as const;
+export const motionTiming = { reveal: 0.96, disclosure: 0.96, reflow: 1.12, workspace: 1.24, exit: 0.8, feedback: 0.44 } as const;
+export const surfaceTransition = { type: 'spring', visualDuration: 0.92, bounce: 0.08 } as const;
 export const revealTransition = { type: 'tween', duration: motionTiming.reveal, ease: [0.22, 0.61, 0.36, 1] } as const;
 export const feedbackTransition = { type: 'spring', visualDuration: motionTiming.feedback, bounce: 0.12 } as const;
 
 /** Coordinated page rhythm: one restrained entrance per new collection or reading view. */
 export const sequenceVariants: Variants = {
   hidden: { opacity: 0 },
-  visible: { opacity: 1, transition: { when: 'beforeChildren', delayChildren: stagger(0.055, { startDelay: 0.02 }) } },
+  visible: { opacity: 1, transition: { when: 'beforeChildren', delayChildren: stagger(0.11, { startDelay: 0.04 }) } },
 };
 export const sequenceItemVariants: Variants = {
   hidden: { opacity: 0, y: 14 },

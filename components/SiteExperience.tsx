@@ -25,7 +25,7 @@ export default function SiteExperience({ content, siteId, publishedSlug, catalog
   const waveControl = useRef<HTMLButtonElement>(null);
   const assistantControl = useRef<HTMLDivElement>(null);
   const reduce = useReducedMotion();
-  const duration = reduce ? 0 : 0.55;
+  const duration = reduce ? 0 : 1.1;
   const settings = visitorSettings(content);
   const assistantEnabled = settings.enabled;
   const chatOpening = assistantEnabled && settings.mode === 'chat' || Boolean(catalog);

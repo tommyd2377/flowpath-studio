@@ -7,7 +7,7 @@ import { galleryAssetIds, mediaForTarget, validateMediaLibrary, type AssetUrlRes
 import { galleryItemVariants, MotionHeight, motionTiming, revealTransition, sequenceVariants, surfaceTransition } from './motion.js';
 
 type Viewer = { assetIds: string[]; index: number; examples: string[] };
-type MediaContextValue = { library: MediaLibrary; resolveAssetUrl: AssetUrlResolver; open: (ids: string[], initialId: string, examples?: string[]) => void; onInteraction?: () => void };
+type MediaContextValue = { library: MediaLibrary; resolveAssetUrl: AssetUrlResolver; open: (ids: string[], initialId: string, examples?: string[]) => void; onInteraction?: () => void; onPhotoView?: (assetId: string) => void };
 const MediaContext = createContext<MediaContextValue | null>(null);
 
 function safeSource(value: string): string | undefined {
@@ -48,7 +48,7 @@ function MediaProviderContent({ library, resolveAssetUrl, children, onInteractio
       if (opener.current?.isConnected && !opener.current.closest('[inert], [aria-hidden="true"]')) opener.current.focus({ preventScroll: true });
     };
   }, [active]);
-  const context = useMemo(() => ({ library, resolveAssetUrl, open, onInteraction }), [library, resolveAssetUrl, open, onInteraction]);
+  const context = useMemo(() => ({ library, resolveAssetUrl, open, onInteraction, onPhotoView }), [library, resolveAssetUrl, open, onInteraction, onPhotoView]);
   const asset = viewer ? library.assets.find(item => item.id === viewer.assetIds[viewer.index]) : undefined;
   const activeAssetId = asset?.id;
   useEffect(() => { photoCallback.current = onPhotoView; }, [onPhotoView]);
@@ -117,32 +117,48 @@ function visibleCaption(value: string | undefined) {
   return caption && !/^(?:photo|image|full ?size ?render|img[_ -]?\d+)$/i.test(caption) ? caption : '';
 }
 
+function photoLabel(asset: MediaLibrary['assets'][number], index: number) {
+  const supplied = visibleCaption(asset.caption) || (asset.alt && !/^photo$/i.test(asset.alt.trim()) ? asset.alt.trim() : '');
+  return supplied || `Photo ${String(index + 1).padStart(2, '0')}`;
+}
+
 function GalleryContent({ assetIds, albumId, entityIds, variant = 'grid', title = 'Photos', showAlbums = true, onInteraction }: Omit<MediaGalleryProps, 'library' | 'resolveAssetUrl'>) {
   const context = useContext(MediaContext);
   const reduced = useReducedMotion();
   const scopeKey = JSON.stringify([assetIds, albumId, entityIds]);
   const [selection, setSelection] = useState({ scopeKey, albumId: albumId ?? '' });
+  const [focusedAssetId, setFocusedAssetId] = useState<string | null>(null);
   const selectedAlbumId = selection.scopeKey === scopeKey ? selection.albumId : albumId ?? '';
   if (!context) return null;
   const { library } = context;
   const album = library.albums.find(item => item.id === selectedAlbumId);
   const ids = galleryAssetIds(library, { assetIds, entityIds, albumId: selectedAlbumId || undefined });
   const assets = ids.flatMap(id => library.assets.find(asset => asset.id === id) ?? []);
+  const focusedIndex = focusedAssetId ? assets.findIndex(asset => asset.id === focusedAssetId) : -1;
+  const focusedAsset = focusedIndex >= 0 ? assets[focusedIndex] : undefined;
   const examples = entityIds?.length
     ? ids.filter(id => !library.associations.some(item => item.assetId === id && item.targetType === 'entity' && entityIds.includes(item.targetId!) && item.role === 'depicts'))
     : ids.filter(id => library.associations.some(item => item.assetId === id && item.role === 'example'));
-  function chooseAlbum(id: string) { (onInteraction ?? context?.onInteraction)?.(); setSelection({ scopeKey, albumId: id }); }
+  function chooseAlbum(id: string) { (onInteraction ?? context?.onInteraction)?.(); setFocusedAssetId(null); setSelection({ scopeKey, albumId: id }); }
+  function focusPhoto(asset: MediaLibrary['assets'][number]) { (onInteraction ?? context?.onInteraction)?.(); context?.onPhotoView?.(asset.id); setFocusedAssetId(asset.id); }
+  function movePhoto(offset: number) { const next = assets[focusedIndex + offset]; if (next) focusPhoto(next); }
   return <section className="platform-media-gallery" data-layout={variant === 'grid' ? 'editorial' : 'list'} aria-label={title || 'Photos'}>
     <div className="platform-media-heading"><div>{title && <h3>{title}</h3>}{album?.description && <p>{album.description}</p>}</div><span>{assets.length} {assets.length === 1 ? 'photo' : 'photos'}</span></div>
     {showAlbums && !albumId && library.albums.length > 0 && <div className="platform-media-albums" aria-label="Photo albums"><button type="button" aria-pressed={!selectedAlbumId} onClick={() => chooseAlbum('')}>All photos</button>{library.albums.map(item => <button type="button" key={item.id} aria-pressed={selectedAlbumId === item.id} onClick={() => chooseAlbum(item.id)}>
       {(item.coverAssetId || item.assetIds[0]) && <MediaImage assetId={item.coverAssetId || item.assetIds[0]} interactive={false}/>}<span>{item.title}</span></button>)}</div>}
-    <MotionHeight><motion.div layout={reduced ? false : 'position'} variants={reduced ? undefined : sequenceVariants} initial={reduced ? false : 'hidden'} whileInView="visible" viewport={{ once: true, amount: 0.16 }} className="platform-media-grid" data-variant={variant} data-layout={variant === 'grid' ? 'editorial' : 'list'} transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }}>
-      <AnimatePresence initial={false} mode="popLayout">{assets.map((asset, index) => { const caption = visibleCaption(asset.caption); const orientation = asset.width / asset.height > 1.25 ? 'landscape' : asset.height / asset.width > 1.25 ? 'portrait' : 'square'; return <MediaFigure key={asset.id} className="platform-media-card" data-order={index} data-orientation={orientation}>
-        <MediaImage assetId={asset.id} size="display" layoutId={`gallery-photo-${asset.id}`} aspectRatio={`${asset.width} / ${asset.height}`} onOpen={() => context.open(ids, asset.id, examples)}/>
+    <AnimatePresence mode="popLayout" initial={false}>{focusedAsset ? <motion.section key={`photo-detail-${focusedAsset.id}`} layoutId={`gallery-card-${focusedAsset.id}`} layout="position" className="platform-detail platform-photo-detail" aria-label={`Details of ${photoLabel(focusedAsset, focusedIndex)}`} transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }} initial={reduced ? false : { opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
+      <span className="platform-eyebrow">PHOTO · A CLOSER LOOK</span><motion.h3 layoutId={`gallery-title-${focusedAsset.id}`} tabIndex={-1}>{photoLabel(focusedAsset, focusedIndex)}</motion.h3>
+      <div className="platform-photo-detail-image"><MediaImage assetId={focusedAsset.id} size="display" fit="contain" interactive={false} layoutId={`gallery-photo-${focusedAsset.id}`}/></div>
+      {(visibleCaption(focusedAsset.caption) || focusedAsset.credit || examples.includes(focusedAsset.id)) && <div className="platform-photo-detail-copy">{examples.includes(focusedAsset.id) && <span className="platform-media-example">Example photo</span>}{visibleCaption(focusedAsset.caption) && <p>{visibleCaption(focusedAsset.caption)}</p>}{focusedAsset.credit && <small>{focusedAsset.credit}</small>}</div>}
+      <div className="platform-photo-detail-bottom"><button className="platform-text-button" type="button" onClick={() => setFocusedAssetId(null)}>← Back to photos</button>{assets.length > 1 && <div><button className="platform-button" type="button" disabled={focusedIndex === 0} onClick={() => movePhoto(-1)}>Previous</button><button className="platform-button" type="button" disabled={focusedIndex === assets.length - 1} onClick={() => movePhoto(1)}>Next</button></div>}</div>
+    </motion.section> : <MotionHeight key="photo-grid"><motion.div layout={reduced ? false : 'position'} variants={reduced ? undefined : sequenceVariants} initial={reduced ? false : 'hidden'} whileInView="visible" viewport={{ once: true, amount: 0.16 }} className="platform-media-grid platform-items" data-variant={variant} data-layout={variant === 'grid' ? 'editorial' : 'list'} transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }}>
+      {assets.map((asset, index) => { const caption = visibleCaption(asset.caption); const orientation = asset.width / asset.height > 1.25 ? 'landscape' : asset.height / asset.width > 1.25 ? 'portrait' : 'square'; return <MediaFigure key={asset.id} layoutId={`gallery-card-${asset.id}`} className="platform-media-card platform-item" data-order={index} data-orientation={orientation}>
+        <MediaImage assetId={asset.id} size="display" layoutId={`gallery-photo-${asset.id}`} aspectRatio={`${asset.width} / ${asset.height}`} onOpen={() => focusPhoto(asset)}/>
+        <div className="platform-item-kicker"><span>Photo</span><span>{String(index + 1).padStart(2, '0')}</span></div><button className="platform-item-open" type="button" onClick={() => focusPhoto(asset)}><motion.h4 layoutId={`gallery-title-${asset.id}`}>{photoLabel(asset, index)}</motion.h4><span aria-hidden="true">↗</span></button>
         {(caption || asset.credit || examples.includes(asset.id)) && <figcaption>{examples.includes(asset.id) && <span className="platform-media-example">Example photo</span>}{caption && <p>{caption}</p>}{asset.credit && <small>{asset.credit}</small>}</figcaption>}
+        <div className="platform-item-bottom"><button className="platform-text-button" type="button" onClick={() => focusPhoto(asset)}>Take a closer look <span aria-hidden="true">↗</span></button></div>
       </MediaFigure>; })}
-      {!assets.length && <MediaFigure key="empty" className="platform-media-empty"><p role="status">No photos are available in this view.</p></MediaFigure>}</AnimatePresence>
-    </motion.div></MotionHeight>
+      {!assets.length && <MediaFigure key="empty" className="platform-media-empty"><p role="status">No photos are available in this view.</p></MediaFigure>}</motion.div></MotionHeight>}</AnimatePresence>
   </section>;
 }
 

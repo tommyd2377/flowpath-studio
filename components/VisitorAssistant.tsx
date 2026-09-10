@@ -110,7 +110,7 @@ export default function VisitorAssistant({ content, slug, entered, onExplore, on
   const activeMode = voiceExhausted && !voiceBusy ? 'chat' : mode;
   const disabled = !state?.enabled;
   const demo = !slug || !!state?.enabled && !state.live;
-  const reveal = { initial: { opacity: 0, y: reduce ? 0 : 10 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: reduce ? 0 : -6 }, transition: { duration: reduce ? 0 : 0.28, ease } };
+  const reveal = { initial: { opacity: 0, y: reduce ? 0 : 10 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: reduce ? 0 : -6 }, transition: { duration: reduce ? 0 : 0.56, ease } };
 
   useEffect(() => () => { clearTimeout(focusReturnTimer.current); cancelAnimationFrame(focusReturnFrame.current); }, []);
   function restoreControlFocus() {
@@ -251,7 +251,7 @@ export default function VisitorAssistant({ content, slug, entered, onExplore, on
     : activeMode === 'chat' && state.chatRemaining === 0 ? 'Chat has reached its daily limit. Please return after the daily reset.'
     : voiceExhausted && !voiceBusy && settings.mode !== 'chat' ? 'Voice has reached its daily limit. Continue by typing below.' : '');
 
-  return <MotionConfig reducedMotion="user" transition={{ ...revealTransition, duration: 0.18, layout: surfaceTransition }}><LayoutGroup id={layoutId}>
+  return <MotionConfig reducedMotion="user" transition={{ ...revealTransition, duration: 0.36, layout: surfaceTransition }}><LayoutGroup id={layoutId}>
     <motion.section ref={assistantRoot} layout={!reduce} className={styles.assistant} aria-label="Site assistant">
       {(settings.mode === 'both' || settings.mode === 'voice' && (activeMode === 'chat' || voiceExhausted && !voiceBusy)) && <motion.div layout="position" className={styles.modes} role="group" aria-label="Conversation mode" {...reveal}>
         {(['voice', 'chat'] as const).map(option => <motion.button type="button" key={option} aria-pressed={activeMode === option} disabled={option === 'voice' && voiceExhausted}
@@ -279,17 +279,17 @@ export default function VisitorAssistant({ content, slug, entered, onExplore, on
               onChange={event => setText(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }}/>
             <motion.button className={styles.send} type={busy ? 'button' : 'submit'} aria-label={busy ? 'Stop request' : 'Show me'} title={busy ? 'Stop request' : 'Show me'} disabled={!busy && (disabled || !state?.chatRemaining || !text.trim())}
               onClick={event => { if (busy) { event.preventDefault(); pending.current?.abort(); } }} whileHover={reduce || !text.trim() && !busy ? undefined : { scale: 1.04 }} whileTap={reduce ? undefined : { scale: 0.93 }}>
-              <AnimatePresence mode="wait" initial={false}><motion.span key={busy ? 'stop' : 'send'} initial={{ opacity: 0, y: reduce ? 0 : 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: reduce ? 0 : -5 }} transition={{ duration: reduce ? 0 : 0.12 }}>{busy ? <Square size={14} fill="currentColor"/> : <ArrowUp size={18}/>}</motion.span></AnimatePresence>
+              <AnimatePresence mode="wait" initial={false}><motion.span key={busy ? 'stop' : 'send'} initial={{ opacity: 0, y: reduce ? 0 : 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: reduce ? 0 : -5 }} transition={{ duration: reduce ? 0 : 0.24 }}>{busy ? <Square size={14} fill="currentColor"/> : <ArrowUp size={18}/>}</motion.span></AnimatePresence>
             </motion.button>
           </form>
           <AnimatePresence initial={false}>{!presentation && <motion.div className={styles.suggestions} aria-label="Ideas to explore" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, height: 0 }}>
             {suggestions.map((suggestion, index) => <motion.button key={suggestion.label} type="button" disabled={busy || disabled || !state?.chatRemaining} onClick={() => { setText(suggestion.question.slice(0, 2000)); input.current?.focus({ preventScroll: true }); }}
-              initial={{ opacity: 0, y: reduce ? 0 : 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reduce ? 0 : 0.35, delay: reduce ? 0 : 0.05 * index, ease }} whileHover={reduce ? undefined : { y: -2 }} whileTap={reduce ? undefined : { scale: 0.97 }}><suggestion.icon size={13}/><span>{suggestion.label}</span></motion.button>)}
+              initial={{ opacity: 0, y: reduce ? 0 : 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reduce ? 0 : 0.7, delay: reduce ? 0 : 0.1 * index, ease }} whileHover={reduce ? undefined : { y: -2 }} whileTap={reduce ? undefined : { scale: 0.97 }}><suggestion.icon size={13}/><span>{suggestion.label}</span></motion.button>)}
           </motion.div>}</AnimatePresence>
           <div className={styles.composerMeta}><span><span className={styles.statusDot}/>{demo ? 'Preview · no AI calls' : 'AI guide · information from this site'}</span><span className={styles.keyboardHint}>Enter to explore <CornerDownLeft size={10}/></span>{text.length > 1600 && <span>{text.length}/2000</span>}</div>
         </ModeSurface>}
       </AnimatePresence>
-      <AnimatePresence initial={false}>{status && <motion.p key={status} className={styles.status} role={error || voice.error ? 'alert' : 'status'} initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} transition={{ duration: reduce ? 0 : 0.2 }}>{status}</motion.p>}</AnimatePresence>
+      <AnimatePresence initial={false}>{status && <motion.p key={status} className={styles.status} role={error || voice.error ? 'alert' : 'status'} initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} transition={{ duration: reduce ? 0 : 0.4 }}>{status}</motion.p>}</AnimatePresence>
       {activeMode === 'voice' && !voiceBusy && !!(voice.error || liveVoice.message || error) && !!state?.chatRemaining && state.enabled && <button type="button" className={styles.fallback} onClick={() => { requestControlFocus(false, 'chat'); switchMode('chat'); }}>Continue by typing</button>}
       {activeMode === 'voice' && <p className={styles.voiceMeta}>{demo ? 'Preview · no AI calls' : 'AI voice · information from this site'}</p>}
       {catalog ? <CatalogExplorer key={catalog.id} catalog={catalog} media={media} resolveAssetUrl={resolveAssetUrl} onPhotoView={onPhotoView} accent={content.accent} plan={catalogPlan} pending={preparingView || liveVoice.active && liveVoice.phase === 'thinking'} showComposer={false} onStateChange={next => { catalogState.current = next; updateContext(getContext()); }} onInteraction={() => { manualInteraction(); onExplore(); }} onOutcome={event => onCatalogEvent?.({ ...event, type: 'outcome' })} onPresentation={plan => { acceptedCatalogPlan.current = plan; onCatalogEvent?.({ type: 'presentation_accepted', kind: 'display', operation: plan.operation }); updateContext(getContext()); }}/>
