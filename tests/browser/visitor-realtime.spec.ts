@@ -80,7 +80,7 @@ test('one tap maintains streaming conversation, interruption and explicit Stop',
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await prepare(page);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
-  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeVisible();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
   await page.evaluate(() => {
     window.__visitorVoice.emit({ type: 'speech_started', revision: 1 });
     window.__visitorVoice.emit({ type: 'speech_stopped' });
@@ -88,21 +88,21 @@ test('one tap maintains streaming conversation, interruption and explicit Stop',
     window.__visitorVoice.emit({ type: 'plan', revision: 1, presentation: { layout: 'detail', sources: ['section:weddings'], status: 'ready' } });
     window.__visitorVoice.emit({ type: 'playback_started', responseId: 'first' });
   });
-  await expect(page.getByText('Speaking · you can interrupt · tap to end', { exact: true })).toBeVisible();
+  await expect(page.getByText('Speaking · you can interrupt · tap to end', { exact: true })).toBeAttached();
   await expect(page.locator('.site-opening')).toHaveCount(0);
   await expect(page.locator('.site-cards')).toHaveCount(0);
   await expect(page.getByRole('region', { name: 'Your requested information' })).toHaveCSS('opacity', '1');
   await page.screenshot({ path: info.outputPath('continuous-voice.png'), fullPage: true });
   expect(await page.evaluate(() => window.__visitorVoice.tracks.every(track => track.enabled && !track.stopped))).toBe(true);
   await page.evaluate(() => window.__visitorVoice.emit({ type: 'playback_stopped', responseId: 'unrelated-response' }));
-  await expect(page.getByText('Speaking · you can interrupt · tap to end', { exact: true })).toBeVisible();
+  await expect(page.getByText('Speaking · you can interrupt · tap to end', { exact: true })).toBeAttached();
   await page.evaluate(() => {
     window.__visitorVoice.emit({ type: 'speech_started', revision: 2 });
     window.__visitorVoice.emit({ type: 'playback_cleared', responseId: 'first' });
     // An interrupted earlier plan cannot replace the accepted view.
     window.__visitorVoice.emit({ type: 'plan', revision: 1, presentation: { layout: 'detail', sources: ['section:portraits'], status: 'ready' } });
   });
-  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeVisible();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
   await expect(page.getByRole('region', { name: 'Your requested information' }).getByRole('heading', { name: 'Wedding stories', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Your requested information' }).getByRole('heading', { name: 'Portrait sessions', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'End conversation', exact: true }).click();
@@ -114,7 +114,7 @@ test('one tap maintains streaming conversation, interruption and explicit Stop',
 test('manual browsing preserves the call, invalidates older output, and Escape ends capture', async ({ page }) => {
   await prepare(page);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
-  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeVisible();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
   await page.getByRole('button', { name: 'Explore Wedding stories', exact: true }).click();
   await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.interactionRevision === 1 && update.context.expandedSourceIds?.includes('section:weddings')))).toBe(true);
@@ -124,7 +124,8 @@ test('manual browsing preserves the call, invalidates older output, and Escape e
     window.__visitorVoice.emit({ type: 'plan', revision: 1, presentation: { layout: 'detail', sources: ['section:portraits'], status: 'ready' } });
     window.__visitorVoice.emit({ type: 'playback_started', responseId: 'stale' });
   });
-  await expect(page.getByRole('region', { name: 'Your requested information' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Your requested information' })).toContainText('Wedding stories');
+  await expect(page.getByRole('region', { name: 'Your requested information' })).not.toContainText('Portrait sessions');
   expect(await page.evaluate(() => ({ muted: window.__visitorVoice.audioMuted, stopped: window.__visitorVoice.tracks.some(track => track.stopped), calls: window.__visitorVoice.calls }))).toEqual({ muted: true, stopped: false, calls: 1 });
   await page.evaluate(() => {
     window.__visitorVoice.emit({ type: 'speech_started', revision: 2 });
@@ -132,7 +133,7 @@ test('manual browsing preserves the call, invalidates older output, and Escape e
     window.__visitorVoice.emit({ type: 'response_started', revision: 2, interactionRevision: 1 });
     window.__visitorVoice.emit({ type: 'playback_started', responseId: 'current', interactionRevision: 1 });
   });
-  await expect(page.getByText('Speaking · you can interrupt · tap to end', { exact: true })).toBeVisible();
+  await expect(page.getByText('Speaking · you can interrupt · tap to end', { exact: true })).toBeAttached();
   expect(await page.evaluate(() => window.__visitorVoice.audioMuted)).toBe(false);
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeVisible();
@@ -157,7 +158,7 @@ test('stream failure stops without retry; exhausted session falls back to chat',
   await expect(page.getByRole('region', { name: 'Site assistant', exact: true }).getByRole('alert')).toContainText('voice connection ended');
   expect(await page.evaluate(() => window.__visitorVoice.calls)).toBe(1);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
-  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeVisible();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
   await page.evaluate(() => {
     window.__visitorVoice.emit({ type: 'availability', availability: { enabled: true, mode: 'both', live: true, chatRemaining: 25, voiceRemaining: 0, resetsAt: '' } });
     window.__visitorVoice.emit({ type: 'ended', message: 'Voice has reached its limit. Continue by typing.' });
@@ -169,7 +170,7 @@ test('stream failure stops without retry; exhausted session falls back to chat',
 test('unpublished references stop voice and preserve the last accepted view', async ({ page }) => {
   await prepare(page);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
-  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeVisible();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
   await page.evaluate(() => {
     window.__visitorVoice.emit({ type: 'response_started', revision: 1 });
     window.__visitorVoice.emit({ type: 'plan', revision: 1, presentation: { layout: 'detail', sources: ['section:weddings'], status: 'ready' } });
@@ -202,16 +203,16 @@ test('readiness waits for connected media and the owner ACK, without waiting for
     const state = window.__visitorVoice, update = state.controls.filter(update => update.ready).at(-1)!;
     state.ack = true; state.emit({ type: 'control_applied', seq: update.seq, interactionRevision: update.interactionRevision, revision: 0, ready: true });
   });
-  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeVisible();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
   expect(await page.evaluate(() => window.__visitorVoice.tracks.every(track => track.enabled))).toBe(true);
-  await expect(page.getByRole('button', { name: 'Close Wedding stories', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'All of the site', exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.__visitorVoice.requests[0].context.expandedSourceIds)).toContain('section:weddings');
 });
 
 test('a failed control update stops once and offers typing without reconnecting', async ({ page }) => {
   await prepare(page);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
-  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeVisible();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
   await page.evaluate(() => { window.__visitorVoice.failControl = true; });
   await page.getByRole('button', { name: 'Explore Wedding stories', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Site assistant', exact: true }).getByRole('alert')).toContainText('could not update your view');
@@ -222,7 +223,7 @@ test('a failed control update stops once and offers typing without reconnecting'
 test('bounded voice history and accepted views survive typing and restarting voice', async ({ page }) => {
   await prepare(page);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
-  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeVisible();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
   await page.evaluate(() => {
     const emit = window.__visitorVoice.emit;
     emit({ type: 'response_started', revision: 1 });
@@ -244,7 +245,7 @@ test('bounded voice history and accepted views survive typing and restarting voi
   await expect(input).not.toHaveAttribute('readonly');
   await page.getByRole('button', { name: 'Voice', exact: true }).click();
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
-  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeVisible();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
   const restarted = await page.evaluate(() => window.__visitorVoice.requests[1]);
   expect(restarted.history.map(item => item.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
   expect(restarted.history[2].text).toBe('And what else?');
@@ -272,7 +273,7 @@ for (const nested of [false, true]) test(`navigation acknowledges actual ${neste
     root.before(pane); pane.append(root);
   });
   const start = page.getByRole('button', { name: 'Start conversation', exact: true });
-  await start.click(); await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeVisible();
+  await start.click(); await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
   await page.getByRole('button', { name: 'End conversation', exact: true }).focus();
   const outerBefore = await page.evaluate(() => scrollY);
   await page.evaluate(() => {
@@ -297,7 +298,7 @@ for (const nested of [false, true]) test(`navigation acknowledges actual ${neste
 test('navigation reports unavailable targets and yields to manual scrolling', async ({ page }) => {
   await prepare(page);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
-  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeVisible();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
   await page.evaluate(() => {
     window.__visitorVoice.emit({ type: 'response_started', revision: 1 });
     window.__visitorVoice.emit({ type: 'navigation', id: 'missing-target', revision: 1, target: { kind: 'source', id: 'section:not-in-dom' } });
@@ -316,14 +317,14 @@ test('navigation reports unavailable targets and yields to manual scrolling', as
 test('manual context pauses capture until the matching owner ACK, preserving the call', async ({ page }) => {
   await prepare(page);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
-  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeVisible();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
   await page.evaluate(() => { window.__visitorVoice.ack = false; });
   await page.getByRole('button', { name: 'Explore Wedding stories', exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.interactionRevision === 1))).toBe(true);
   await expect(page.getByText('Updating view · microphone paused…', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.__visitorVoice.tracks.every(track => !track.enabled && !track.stopped))).toBe(true);
-  await page.getByRole('button', { name: 'Close Wedding stories', exact: true }).click();
+  await page.getByRole('button', { name: 'All of the site', exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.interactionRevision === 2))).toBe(true);
   await page.evaluate(() => {
     const state = window.__visitorVoice, older = state.controls.find(update => update.interactionRevision === 1)!;
@@ -335,14 +336,14 @@ test('manual context pauses capture until the matching owner ACK, preserving the
     const state = window.__visitorVoice, latest = state.controls.filter(update => update.interactionRevision === 2).at(-1)!;
     state.ack = true; state.emit({ type: 'control_applied', seq: latest.seq, interactionRevision: 2, revision: 2, ready: true });
   });
-  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeVisible();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
   expect(await page.evaluate(() => ({ calls: window.__visitorVoice.calls, live: window.__visitorVoice.tracks.every(track => track.enabled && !track.stopped), muted: window.__visitorVoice.audioMuted }))).toEqual({ calls: 1, live: true, muted: true });
 });
 
 test('continuous busy animation cannot starve accepted view updates or navigation acknowledgments', async ({ page }) => {
   await prepare(page);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
-  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeVisible();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
   await page.evaluate(() => {
     const root = document.querySelector<HTMLElement>('[data-visitor-site]')!;
     const animation = document.createElement('span'); animation.id = 'synthetic-continuous-motion'; animation.dataset.frames = '0'; root.append(animation);

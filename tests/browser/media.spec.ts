@@ -125,7 +125,7 @@ test('batch photos work before knowledge, preserve review state, and publish onl
   await expect(gallery).not.toContainText('Unapplied caption');
   const opener = gallery.getByRole('button', { name: 'Open photo: Reviewed wedding detail', exact: true });
   await opener.click();
-  const lightbox = page.getByRole('dialog'); await expect(lightbox).toBeVisible();
+  const lightbox = page.locator('.platform-photo-detail'); await expect(lightbox).toBeVisible();
   await expect(lightbox).toContainText('Offline fixture');
   await page.keyboard.press('Escape'); await expect(lightbox).not.toBeVisible();
   await expect(opener).toBeFocused();

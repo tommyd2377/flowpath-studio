@@ -9,6 +9,7 @@ const cli = createRequire(import.meta.url).resolve('@playwright/test/cli');
 const groups = {
   core: ['media.spec.ts', 'media-runtime.spec.ts', 'motion.spec.ts', 'platform.spec.ts', 'shared-reveal.spec.ts', 'source-review.spec.ts'],
   voice: ['visitor-realtime.spec.ts', 'visitor-quality.spec.ts'],
+  search: ['search-explore.spec.ts'],
   billing: ['billing.spec.ts'],
 };
 

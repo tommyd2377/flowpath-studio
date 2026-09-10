@@ -124,8 +124,14 @@ function expectOpacityTransition(trace: MotionTrace, name: string) {
   expect(new Set(opacity.filter(value => value > 0.03 && value < 0.95).map(value => value.toFixed(2))).size).toBeGreaterThan(3);
 }
 
-function expectNominalDuration(trace: MotionTrace, duration: number) {
-  expect(trace.frames.some(frame => frame.durations.some(value => Math.abs(value - duration) < 2)), `A native ${duration}ms animation should run during this interaction.`).toBeTruthy();
+function expectMeasuredShift(trace: MotionTrace, name: string, expectedMs: number) {
+  const frames = trace.frames.filter(frame => frame.elements[name]?.length === 1);
+  const final = frames.at(-1)!.elements[name][0].x;
+  const lastMoving = frames.findLast(frame => Math.abs(frame.elements[name][0].x - final) > 0.05);
+  expect(lastMoving).toBeTruthy();
+  const span = lastMoving!.ms - frames[0].ms;
+  expect(span).toBeGreaterThan(expectedMs * .72);
+  expect(span).toBeLessThan(expectedMs * 1.4);
 }
 
 function expectMeasuredReflow(trace: MotionTrace, name: string, expectedMs: number) {
@@ -140,7 +146,7 @@ function expectMeasuredReflow(trace: MotionTrace, name: string, expectedMs: numb
   expect(span).toBeLessThan(expectedMs * 1.4);
 }
 
-test('criteria disclose over 480 ms while retaining the first four controls and keyboard focus', async ({ page }, info) => {
+test('criteria disclose over 450 ms while retaining the first four controls and keyboard focus', async ({ page }, info) => {
   await openGallery(page, 'Classes & experiences');
   const criteria = page.getByRole('region', { name: 'Refine the collection' });
   const controls = criteria.locator('input, select');
@@ -160,7 +166,7 @@ test('criteria disclose over 480 ms while retaining the first four controls and 
   expect(await toggleNode!.evaluate(element => element === document.activeElement)).toBeTruthy();
   expectIntermediateGeometry(expanded, 'criteria', 'height');
   expectOpacityTransition(expanded, 'extra');
-  expectNominalDuration(expanded, 480);
+  expectMeasuredReflow(expanded, 'criteria', 450);
   for (let index = 0; index < original.length; index++) expect(await original[index].evaluate((element, index) => element === document.querySelectorAll('.platform-criteria input, .platform-criteria select')[index], index)).toBeTruthy();
   await expect(price).toHaveValue('100');
 
@@ -185,7 +191,7 @@ test('filter reflow passes through intermediate heights and zero-result exits re
   const narrowed = await finishMotion(page, info, 'filter-reflow');
   await expect(page.locator('.platform-item')).toHaveCount(2);
   expectIntermediateGeometry(narrowed, 'items', 'height');
-  expectMeasuredReflow(narrowed, 'items', 560);
+  expectMeasuredReflow(narrowed, 'items', 480);
   expect(narrowed.frames.some(frame => frame.elements.leaving.some(element => element.inert && element.hidden && element.opacity > 0 && element.opacity < 1))).toBeTruthy();
   await expect(price).toBeFocused();
 
@@ -204,14 +210,14 @@ test('filter reflow passes through intermediate heights and zero-result exits re
   await expect(page.locator('.platform-explorer [inert]')).toHaveCount(0);
 });
 
-test('selection reveals over 480 ms and comparison shifts workspace over 620 ms', async ({ page }, info) => {
+test('selection reveals over 450 ms and comparison shifts workspace over 520 ms', async ({ page }, info) => {
   await openGallery(page);
   await recordMotion(page, { selection: '[data-platform-disclosure="selection"]' });
   await page.getByRole('button', { name: 'Select Example Blanco for comparison', exact: true }).click();
   const selection = await finishMotion(page, info, 'selection-reveal');
   expectOpacityTransition(selection, 'selection');
   expectIntermediateGeometry(selection, 'selection', 'height');
-  expectNominalDuration(selection, 480);
+  expectMeasuredReflow(selection, 'selection', 450);
   await page.getByRole('button', { name: 'Select Example Reposado for comparison', exact: true }).click();
   await settled(page);
   await recordMotion(page, { comparison: '.platform-slot-comparison', collection: '.platform-slot-collection' });
@@ -219,7 +225,7 @@ test('selection reveals over 480 ms and comparison shifts workspace over 620 ms'
   const comparison = await finishMotion(page, info, 'comparison-workspace-shift');
   expectOpacityTransition(comparison, 'comparison');
   expectIntermediateGeometry(comparison, 'comparison', 'x');
-  expectNominalDuration(comparison, 620);
+  expectMeasuredShift(comparison, 'comparison', 520);
   await expect(page.getByRole('region', { name: 'Compare published attributes' })).toBeVisible();
   await expect(page.locator('.platform-explorer [inert]')).toHaveCount(0);
 });
@@ -350,7 +356,7 @@ test('legacy source cards retain expanded content across plans and animate discl
   await page.keyboard.press('Enter');
   const disclosure = await finishMotion(page, info, 'legacy-source-disclosure');
   expectIntermediateGeometry(disclosure, 'copy', 'height');
-  expectMeasuredReflow(disclosure, 'copy', 480);
+  expectMeasuredReflow(disclosure, 'copy', 450);
   await expect(source.getByRole('button', { name: 'Show less', exact: true })).toBeFocused();
 
   presentation = { layout: 'comparison', sources: ['section:weddings', 'section:portraits', 'overview'], status: 'ready' };

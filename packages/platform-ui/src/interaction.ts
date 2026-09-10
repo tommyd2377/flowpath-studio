@@ -1,5 +1,5 @@
 import { validatePlan, type CatalogFilter, type KnowledgeCatalog, type PresentationComponent, type PresentationPlan } from './contracts.js';
-import { defaultPresentation, filterEntities } from './catalog.js';
+import { defaultPresentation, filterEntities, knownAttributes } from './catalog.js';
 import { galleryAssetIds, type MediaLibrary } from './media.js';
 
 export type CatalogInteractionState = {
@@ -45,8 +45,11 @@ export function detailPlan(catalog: KnowledgeCatalog, id: string, snapshotId = c
 }
 
 export function comparisonPlan(catalog: KnowledgeCatalog, ids: string[], snapshotId = catalog.id): PresentationPlan {
+  const entities = catalog.entities.filter(entity => ids.includes(entity.id));
+  const coverage = (attribute: KnowledgeCatalog['attributes'][number]) => entities.filter(entity => knownAttributes(entity, [attribute]).length).length;
+  const attributes = catalog.attributes.filter(attribute => coverage(attribute) > 0).sort((a, b) => coverage(b) - coverage(a));
   return validatePlan({ schemaVersion: 1, snapshotId, operation: 'compare', components: [
-    { id: 'comparison', type: 'comparison', variant: 'expanded', entityIds: [...new Set(ids)].slice(0, 6), attributeIds: catalog.attributes.map(attribute => attribute.id) },
+    { id: 'comparison', type: 'comparison', variant: 'expanded', entityIds: [...new Set(ids)].slice(0, 6), attributeIds: attributes.map(attribute => attribute.id) },
     { id: 'selection', type: 'selection', variant: 'compact', entityIds: [], attributeIds: [] },
   ], transition: { type: 'workspace-shift', targetComponentId: 'comparison' } }, catalog, snapshotId);
 }

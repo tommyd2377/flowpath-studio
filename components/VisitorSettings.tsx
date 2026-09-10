@@ -24,8 +24,8 @@ export default function VisitorSettings({ content, setContent, busy }: {
         <label className="field">Voice quality<select disabled={busy} value={settings.voiceTier} onChange={event => change({ voiceTier: event.target.value as Settings['voiceTier'] })}>
           <option value="standard">Standard — lower cost</option><option value="premium">Premium — more capable</option>
         </select></label>
-        <label className="field">Daily voice reply limit<input disabled={busy} type="number" min={0} max={20} step={1} value={settings.voiceDailyLimit} onChange={event => change({ voiceDailyLimit: Number(event.target.value) })}/>
-          <span className="field-help">Up to 20 replies per day across all visitors. The opening greeting counts as a reply. At the limit, visitors can continue in chat.</span>
+        <label className="field">Daily voice reply limit<input disabled={busy} type="number" min={0} max={100} step={1} value={settings.voiceDailyLimit} onChange={event => change({ voiceDailyLimit: Number(event.target.value) })}/>
+          <span className="field-help">Up to 100 replies per day across all visitors. The opening greeting counts as a reply. At the limit, visitors can continue in chat.</span>
         </label>
       </>}
       <label className="field">Daily chat message limit<input disabled={busy} type="number" min={1} max={100} step={1} value={settings.chatDailyLimit} onChange={event => change({ chatDailyLimit: Number(event.target.value) })}/>

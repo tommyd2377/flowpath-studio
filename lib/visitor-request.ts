@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { MAX_PCM_BYTES } from './visitor-model';
 import { catalogFilterSchema, presentationPlanSchema } from '@thevoice/platform-ui/contracts';
 import { presentationSchema } from './site-presentation';
+import { exploreContextSchema } from './explore-model';
 
 export const visitorHistorySchema = z.array(z.object({ role: z.enum(['user', 'assistant']), text: z.string().trim().min(1).max(2000) }).strict()).max(8).default([]);
 export type VisitorHistory = z.infer<typeof visitorHistorySchema>;
@@ -12,11 +13,14 @@ export const visitorScreenSchema = z.object({
   viewportWidth: z.number().int().min(0).max(20000), viewportHeight: z.number().int().min(0).max(20000),
   scrollY: z.number().int().min(0).max(10000000), documentHeight: z.number().int().min(0).max(10000000),
   visibleEntityIds: ids, visibleSourceIds: ids,
+  fullyVisibleEntityIds: ids.default([]), expandedEntityIds: ids.default([]),
+  primaryEntityId: z.string().min(1).max(100).nullable().default(null),
   visibleComponentTypes: z.array(z.enum(['collection', 'criteria', 'detail', 'comparison', 'selection', 'relationships', 'actions', 'gallery'])).max(8),
   visibleControls: z.array(z.string().trim().min(1).max(160)).max(60).default([]),
   focusedEntityId: z.string().min(1).max(100).nullable(), focusedSourceId: z.string().min(1).max(100).nullable(),
 }).strict();
 export const visitorContextSchema = z.object({
+  explore: exploreContextSchema.optional(),
   catalogState: visitorCatalogStateSchema.optional(), catalogPlan: presentationPlanSchema.optional(), presentation: presentationSchema.optional(),
   expandedSourceIds: ids.optional(), screen: visitorScreenSchema.optional(),
 }).strict();

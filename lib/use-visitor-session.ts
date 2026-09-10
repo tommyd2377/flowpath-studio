@@ -30,6 +30,7 @@ type Session = {
 export function useVisitorSession() {
   const [phase, setPhase] = useState<VoicePhase>('idle');
   const [message, setMessage] = useState('');
+  const [activity, setActivity] = useState('');
   const [active, setActive] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [inputAnalyser, setInputAnalyser] = useState<AnalyserNode | null>(null);
@@ -49,7 +50,7 @@ export function useVisitorSession() {
       if (session.audio) { session.audio.pause(); session.audio.srcObject = null; }
       if (session.context?.state !== 'closed') void session.context?.close().catch(() => undefined);
     }
-    setActive(false); setUpdating(false); setPhase('idle'); setMessage(notice); setInputAnalyser(null); setOutputAnalyser(null);
+    setActivity(''); setActive(false); setUpdating(false); setPhase('idle'); setMessage(notice); setInputAnalyser(null); setOutputAnalyser(null);
   }, []);
   const fail = useCallback((session: Session, notice: string) => {
     if (current.current !== session) return;
@@ -69,7 +70,7 @@ export function useVisitorSession() {
   }, []);
   const manualInterrupt = useCallback(() => {
     const session = current.current; if (!session) return;
-    session.interactionRevision++; session.navigation?.abort();
+    setActivity(''); session.interactionRevision++; session.navigation?.abort();
     // Keep the peer open; pause input until the owner accepts the manual context.
     session.stream?.getAudioTracks().forEach(track => { track.enabled = false; });
     setUpdating(true); setPhase('connecting');
@@ -80,7 +81,7 @@ export function useVisitorSession() {
 
   const start = useCallback(async (options: Options) => {
     if (current.current) return;
-    setMessage('');
+    setMessage(''); setActivity('');
     if (!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection || !window.AudioContext) {
       setPhase('error'); setMessage('This browser cannot start a voice conversation. You can still browse this site.'); return;
     }
@@ -236,17 +237,19 @@ export function useVisitorSession() {
           // An accepted user utterance remains history even if they then browse.
           if (session.transcripts.has(event.id) || event.role === 'assistant' && event.interactionRevision !== session.interactionRevision) return;
           session.transcripts.add(event.id); options.onTranscript(event);
+        } else if (event.type === 'activity') {
+          if (event.revision === session.revision && event.interactionRevision === session.interactionRevision) setActivity(event.activity === 'images' ? 'Finding images…' : event.activity === 'map' ? 'Preparing the map…' : 'Searching the web…');
         } else if (event.type === 'speech_started') {
           if (session.appliedInteractionRevision !== session.interactionRevision) return;
           session.revision = Math.max(session.revision, event.revision); session.navigation?.abort();
-          session.userSpeaking = true; session.speaking = false; session.thinking = false; session.playingId = undefined; restingPhase();
+          setActivity(''); session.userSpeaking = true; session.speaking = false; session.thinking = false; session.playingId = undefined; restingPhase();
         } else if (event.type === 'speech_stopped') { if (session.appliedInteractionRevision !== session.interactionRevision) return; session.userSpeaking = false; session.thinking = true; restingPhase(); }
         else if (event.type === 'response_started') {
           if (event.interactionRevision !== session.interactionRevision || event.revision < session.revision) return;
-          session.revision = event.revision; session.thinking = true; restingPhase();
+          setActivity(''); session.revision = event.revision; session.thinking = true; restingPhase();
         } else if (event.type === 'playback_started') {
           if (event.interactionRevision !== session.interactionRevision) return;
-          audio.muted = false; session.playingId = event.responseId; session.speaking = true; session.thinking = false; restingPhase();
+          setActivity(''); audio.muted = false; session.playingId = event.responseId; session.speaking = true; session.thinking = false; restingPhase();
         } else if (event.type === 'playback_stopped' || event.type === 'playback_cleared') {
           if (!session.playingId || event.responseId && event.responseId !== session.playingId) return;
           session.playingId = undefined; session.speaking = false; session.thinking = false; restingPhase();
@@ -255,7 +258,7 @@ export function useVisitorSession() {
           options.onPlan(event); session.planRevision = event.revision; session.viewRevision = event.revision; session.queue(true);
         } else if (event.type === 'navigation') {
           if (event.interactionRevision !== session.interactionRevision || event.revision !== session.revision) return;
-          session.navigation?.abort(); const navigation = new AbortController(); session.navigation = navigation;
+          setActivity(''); session.navigation?.abort(); const navigation = new AbortController(); session.navigation = navigation;
           void options.onNavigate(event, navigation.signal).then(status => {
             if (!alive() || navigation.signal.aborted || event.interactionRevision !== session.interactionRevision) return;
             session.navigationAck = { id: event.id, status }; session.queue(true);
@@ -270,5 +273,5 @@ export function useVisitorSession() {
       fail(session, notice);
     }
   }, [fail, stop]);
-  return { phase, message, active, updating, inputAnalyser, outputAnalyser, start, stop, manualInterrupt, updateContext };
+  return { phase, message, activity, active, updating, inputAnalyser, outputAnalyser, start, stop, manualInterrupt, updateContext };
 }

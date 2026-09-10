@@ -9,6 +9,7 @@ import type { WorkspaceUser } from '@/lib/firebase/types';
 import type { EditorStatus } from '@/lib/editor-types';
 import GreetingSettings from './GreetingSettings';
 import VisitorSettings from './VisitorSettings';
+import ExploreSettings from './ExploreSettings';
 import OpeningSettings from './OpeningSettings';
 import RecentActivity from './RecentActivity';
 import BillingPanel from './BillingPanel';
@@ -46,11 +47,10 @@ export function EditorPanels({ editor, mode, panel, site, content, setContent, b
 
   if (panel === 'content') return <div className="settings-panel">
     <div className="panel-heading"><span className="eyebrow">Your story</span><h2>Content</h2><p>Keep the information on your site clear and current.</p></div>
-    <label className="field">Opening headline<input disabled={busy} value={content.headline} maxLength={140} onChange={e => change('headline', e.target.value)}/></label>
-    <label className="field">Introduction<textarea disabled={busy} rows={4} value={content.description} maxLength={1500} onChange={e => change('description', e.target.value)}/></label>
     <label className="field">Hours or availability<input disabled={busy} value={content.hours} maxLength={180} onChange={e => change('hours', e.target.value)}/></label>
     <label className="field">Contact information<input disabled={busy} value={content.contact} maxLength={180} onChange={e => change('contact', e.target.value)}/></label>
     <VisitorSettings content={content} setContent={setContent} busy={busy}/>
+    <ExploreSettings content={content} setContent={setContent} busy={busy}/>
     <GreetingSettings key={site.id} content={content} setContent={setContent} busy={busy}/>
     <OpeningSettings siteId={site.id} content={content} setContent={setContent} busy={busy}/>
     <div className="section-heading"><h3>Content sections</h3><span>{content.sections.length} / 12</span></div>

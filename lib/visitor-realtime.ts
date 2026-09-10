@@ -9,6 +9,7 @@ export const VISITOR_MAX_PLAYBACK_MS = 30_000;
 export const visitorAvailabilitySchema = z.object({
   enabled: z.boolean(), mode: z.enum(['chat', 'voice', 'both']), live: z.boolean(),
   chatRemaining: z.number().int().min(0).max(10000), voiceRemaining: z.number().int().min(0).max(10000), resetsAt: z.string().max(100),
+  searchRemaining: z.number().int().min(0).max(100).optional(),
 }).strict();
 const revision = z.number().int().nonnegative();
 const responseId = z.string().min(1).max(200);
@@ -20,6 +21,7 @@ export const visitorRealtimeEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('navigation'), id: responseId, revision, interactionRevision: revision, target: visitorNavigationSchema }).strict(),
   z.object({ type: z.literal('speech_started'), revision }).strict(),
   z.object({ type: z.literal('speech_stopped') }).strict(),
+  z.object({ type: z.literal('activity'), revision, interactionRevision: revision, activity: z.enum(['web', 'images', 'map']) }).strict(),
   z.object({ type: z.literal('response_started'), revision, interactionRevision: revision }).strict(),
   z.object({ type: z.literal('playback_started'), responseId, interactionRevision: revision }).strict(),
   z.object({ type: z.enum(['playback_stopped', 'playback_cleared']), responseId: responseId.optional() }).strict(),

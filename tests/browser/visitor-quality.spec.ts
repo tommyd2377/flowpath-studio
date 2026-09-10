@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { Site } from '../../lib/site-model';
 
 const origin = 'http://127.0.0.1:3225';
-type QualityHarness = { calls: number; stopped: number; denyMicrophone: boolean; emit: (event: unknown) => void };
+type QualityHarness = { navigation: { id: string; status: string }[]; calls: number; stopped: number; denyMicrophone: boolean; emit: (event: unknown) => void };
 declare global { interface Window { __visitorQuality: QualityHarness } }
 test.use({ hasTouch: true });
 const publications = new Map<string, Site>();
@@ -40,7 +40,7 @@ async function prepare(page: Page, mode: 'voice' | 'chat' = 'voice', withCatalog
   await page.addInitScript(mode => {
     const availability = { enabled: true, mode, live: true, chatRemaining: 25, voiceRemaining: 5, resetsAt: '' };
     let sink: ReadableStreamDefaultController<Uint8Array> | undefined;
-    const state: QualityHarness = { calls: 0, stopped: 0, denyMicrophone: false,
+    const state: QualityHarness = { navigation: [], calls: 0, stopped: 0, denyMicrophone: false,
       emit(event) { const frame = event as { type: string; interactionRevision?: number }; sink?.enqueue(new TextEncoder().encode(`${JSON.stringify(['response_started', 'plan', 'playback_started', 'transcript', 'navigation'].includes(frame.type) ? { interactionRevision: 0, ...frame } : frame)}\n`)); } };
     window.__visitorQuality = state;
     class Track { enabled = true; onended: (() => void) | null = null; stop() { state.stopped++; } }
@@ -76,6 +76,7 @@ async function prepare(page: Page, mode: 'voice' | 'chat' = 'voice', withCatalog
       }
       if (/\/api\/visitor\/[^/]+\/session\/control$/.test(path)) {
         const { update } = JSON.parse(String(init?.body));
+        if (update.navigationAck) state.navigation.push(update.navigationAck);
         if (!update.end) state.emit({ type: 'control_applied', seq: update.seq, interactionRevision: update.interactionRevision, revision: update.viewRevision, ready: update.ready });
         return new Response(null, { status: 204 });
       }
@@ -106,7 +107,8 @@ async function scrollAway(page: Page) {
   // Keep focus where the visitor left it while physically moving away from the controls.
   await page.evaluate(() => document.querySelector<HTMLButtonElement>('.site-wave')?.focus({ preventScroll: true }));
   await page.mouse.wheel(0, 10000);
-  await expect.poll(async () => (await page.locator('.site-wave').boundingBox())!.y + (await page.locator('.site-wave').boundingBox())!.height).toBeLessThan(0);
+  await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(0);
+  await expect(page.locator('.site-wave')).toBeInViewport();
   // Wheel delivery can precede the final scroll frames. The next mocked reply
   // represents a new turn after that manual movement, not during its momentum.
   await page.evaluate(() => new Promise<void>((resolve, reject) => {
@@ -124,12 +126,43 @@ async function scrollAway(page: Page) {
   }));
 }
 
-test('mobile visitors can end a live conversation by touch after the wave scrolls offscreen', async ({ page }, info) => {
+for (const width of [390, 1600]) test(`shared invitation and dock use the available ${width}px viewport`, async ({ page }, info) => {
+  await page.setViewportSize({ width, height: 900 });
+  await prepare(page, 'voice', true);
+  const wave = page.getByRole('button', { name: 'Start conversation', exact: true });
+  const canvas = await wave.locator('canvas').elementHandle();
+  const opening = await page.locator('.site-opening').boundingBox();
+  expect(opening!.y).toBeGreaterThanOrEqual(899);
+  await expect(page.locator('.site-wordmark')).toHaveCSS('font-size', '11px');
+  await page.screenshot({ path: info.outputPath(`opening-${width}.png`) });
+  await wave.click();
+  await expect(page.locator('.site-opening')).toHaveCount(0);
+  await expect.poll(() => page.locator('[data-voice-dock]').evaluate(node => Number(getComputedStyle(node).getPropertyValue('--opening-progress')))).toBe(0);
+  expect(await canvas!.evaluate(node => node.isConnected)).toBe(true);
+  await expect(page.locator('.site-wordmark').locator('..')).toHaveCSS('opacity', '0');
+  const content = (await page.locator('.platform-container').boundingBox())!;
+  expect(content.width).toBeGreaterThan(width - 65);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.evaluate(() => window.__visitorQuality.emit({ type: 'activity', activity: 'web', revision: 0, interactionRevision: 0 }));
+  await expect(page.getByText('Searching the web…', { exact: true })).toBeVisible();
+  await expect(page.getByText('Searching the web…', { exact: true }).locator('..')).toHaveCSS('opacity', '1');
+  await page.screenshot({ path: info.outputPath(`docked-${width}.png`) });
+  await page.getByRole('button', { name: 'End voice conversation', exact: true }).click();
+});
+
+test('mobile visitors retain docked voice and a reachable touch End control while scrolling', async ({ page }, info) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await prepare(page);
+  await expect(page.locator('.site-sample-note, .site-signature')).toHaveCount(0);
+  await expect(page.getByText('AI voice · information from this site', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Explore the site', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).tap();
   const end = page.getByRole('button', { name: 'End voice conversation', exact: true });
-  await expect(end).toBeVisible(); await expect(page.locator('.site-opening')).toHaveCount(0); await scrollAway(page);
+  await expect(end).toBeVisible(); await expect(page.locator('.site-opening')).toHaveCount(0);
+  const dock = page.locator('[data-voice-dock]');
+  await expect.poll(async () => Math.abs((await dock.boundingBox())!.y)).toBeLessThan(3);
+  await scrollAway(page);
+  expect(Math.abs((await dock.boundingBox())!.y)).toBeLessThan(3);
   const box = (await end.boundingBox())!;
   expect(box.width).toBeGreaterThanOrEqual(44); expect(box.height).toBeGreaterThanOrEqual(44);
   expect(box.x).toBeGreaterThanOrEqual(0); expect(box.y).toBeGreaterThanOrEqual(0);
@@ -220,7 +253,7 @@ test('a voice-only publisher offers an explicit typing fallback when microphone 
   expect(await page.evaluate(() => window.__visitorQuality.calls)).toBe(0);
   await page.screenshot({ path: info.outputPath('voice-typing-fallback.png') });
   const topic = page.getByRole('button', { name: 'Explore Published topic 1', exact: true });
-  await topic.tap(); await expect(page.getByRole('button', { name: 'Close Published topic 1', exact: true })).toHaveAttribute('aria-expanded', 'true');
+  await topic.tap(); await expect(page.getByRole('region', { name: 'Your requested information' })).toContainText('Published topic 1');
   await page.getByRole('button', { name: 'Continue by typing', exact: true }).tap();
   await expect(page.getByRole('textbox', { name: 'What would you like to see?', exact: true })).toBeFocused();
 });
@@ -245,4 +278,38 @@ test('a pending host chat request announces progress while manual catalog naviga
     await expect(page.getByRole('region', { name: 'Details of First published item', exact: true })).toBeVisible();
     await expect(status).not.toHaveText('Shaping your view…');
   } finally { release(); }
+});
+
+test('voice spotlight, reading view, comparison and back reuse the catalog without reconnecting', async ({ page }, info) => {
+  await prepare(page, 'voice', true);
+  const ids = await page.locator('.platform-item[data-entity-id]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-entity-id')!));
+  expect(ids.length).toBe(2);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
+  async function command(revision: number, target: { kind: string; id?: string; ids?: string[] }) {
+    await page.evaluate(({ revision, target }) => {
+      const emit = window.__visitorQuality.emit;
+      emit({ type: 'speech_started', revision }); emit({ type: 'speech_stopped' });
+      emit({ type: 'response_started', revision });
+      emit({ type: 'navigation', id: `command-${revision}`, revision, target });
+    }, { revision, target });
+    await expect.poll(() => page.evaluate(id => window.__visitorQuality.navigation.find(item => item.id === id)?.status, `command-${revision}`)).toBe('applied');
+  }
+  await command(1, { kind: 'spotlight', id: ids[1] });
+  await expect(page.locator('.platform-item[data-spotlight="true"]')).toHaveAttribute('data-entity-id', ids[1]);
+  await expect(page.locator('.platform-item')).toHaveCount(2);
+  await command(2, { kind: 'open', id: ids[1] });
+  await expect(page.locator('.platform-detail')).toHaveAttribute('data-entity-id', ids[1]);
+  await expect(page.locator('.platform-item')).toHaveCount(0);
+  await page.evaluate(() => window.__visitorQuality.emit({ type: 'playback_started', responseId: 'reading' }));
+  await expect(page.getByText('Speaking · you can interrupt · tap to end', { exact: true })).toBeAttached();
+  await page.screenshot({ path: info.outputPath('voice-reading-view.png') });
+  await command(3, { kind: 'back' });
+  await expect(page.locator('.platform-item')).toHaveCount(2);
+  await command(4, { kind: 'compare', ids });
+  await expect(page.locator('.platform-comparison-table')).toBeVisible();
+  await command(5, { kind: 'collapse' });
+  await expect(page.locator('.platform-item')).toHaveCount(2);
+  expect(await page.evaluate(() => window.__visitorQuality.calls)).toBe(1);
+  await page.getByRole('button', { name: 'End voice conversation', exact: true }).click();
 });

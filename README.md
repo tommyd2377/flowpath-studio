@@ -47,6 +47,7 @@ Local interpretation supports CSV and labeled TXT structures, plus PDF text extr
 | Media | PNG/JPEG/WebP upload, folder albums, optional group context, captions/alt/credit, actual/example connections, covers and lead images |
 | Visitor interface | Controlled cards, criteria, details, comparisons, selections, relationships, explicit links and galleries; typed requests and bounded continuous voice that preserves manual browsing |
 | Reliability | Schema/reference validation, local OpenUI parsing, stale-response protection, manual-interaction cancellation, fallbacks and reduced motion |
+| Optional search | Published opt-in for cited web results, attributed web images and interactive map overviews; separate daily caps, offline previews and bounded voice controls. Live provider quality remains unverified. |
 | Storage | Local demo files; optional Firebase owner authentication, Firestore state and private object storage; immutable published knowledge/media revisions |
 | Usage | Daily request reservations, duplicate protection, bounded activity records and reported token usage; browsing survives AI exhaustion |
 | Launch offer | $29/month or $300/year per site; $10 monthly retail AI allowance; prepaid top-ups, optional capped replenishment, local billing preview and Stripe test-mode Checkout/Billing |
@@ -120,6 +121,7 @@ See [Product philosophy and direction](docs/product-philosophy.md) for the princ
 - [Source review and updates](docs/source-review.md)
 - [Photos and albums](docs/photo-library.md)
 - [Visitor chat and voice](docs/visitor-conversations.md)
+- [Optional web search, images and maps](docs/search-and-explore.md)
 - [Fixture data](fixtures/README.md)
 - [Contributing](CONTRIBUTING.md)
 - [Coding-agent instructions](AGENTS.md) and [Claude entry point](CLAUDE.md)

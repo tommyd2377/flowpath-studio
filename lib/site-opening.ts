@@ -3,7 +3,16 @@ import { validatePlan, type KnowledgeCatalog, type PresentationPlan } from '@the
 import type { SiteContent } from './site-model';
 import { AppError } from './errors';
 
-export const DEFAULT_OPENING = { highlights: [], featuredEntityIds: [], capabilityIds: [], tone: 'warm' as const };
+export const DEFAULT_OPENING: NonNullable<SiteContent['opening']> = { highlights: [], featuredEntityIds: [], capabilityIds: [], tone: 'warm' };
+
+export function openingCopy(content: SiteContent, catalog?: KnowledgeCatalog | null) {
+  if (content.opening?.copyMode === 'personalized') return { headline: content.headline, description: content.description };
+  // Compose only from the current snapshot; never generate facts or make a paid call on page load.
+  if (catalog) return { headline: catalog.name, description: catalog.description || `Explore ${catalog.entities.length} published items and find what matters to you.` };
+  return { headline: `Explore ${content.name}`, description: content.sections.length
+    ? `Discover ${content.sections.slice(0, 3).map(section => section.title).join(', ')}. Ask a question or browse at your own pace.`
+    : 'Ask a question or browse the information on this site at your own pace.' };
+}
 
 export function validateOpening(content: SiteContent, catalog: KnowledgeCatalog | null) {
   const opening = content.opening;

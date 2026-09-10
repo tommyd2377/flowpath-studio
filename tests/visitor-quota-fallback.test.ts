@@ -1,7 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { currentLedger, reserveReply, VisitorLimitError } from '../lib/visitor-quota';
-import { DEFAULT_VISITOR_SETTINGS, GLOBAL_VISITOR_LIMITS } from '../lib/visitor-model';
+import { DEFAULT_VISITOR_SETTINGS, GLOBAL_VISITOR_LIMITS, visitorSettingsSchema } from '../lib/visitor-model';
+
+test('published voice allowances can exceed 20 and remain bounded at 100', () => {
+  const settings = visitorSettingsSchema.parse({ ...DEFAULT_VISITOR_SETTINGS, voiceDailyLimit: 100 });
+  assert.equal(visitorSettingsSchema.safeParse({ ...settings, voiceDailyLimit: 101 }).success, false);
+  const ledger = currentLedger(undefined);
+  for (let turn = 1; turn <= 100; turn++) {
+    const state = reserveReply(ledger, 'publisher', `voice-${turn}`, 'voice', settings, true);
+    assert.equal(state.voiceRemaining, 100 - turn);
+  }
+  assert.throws(() => reserveReply(ledger, 'publisher', 'over-site', 'voice', settings, true), VisitorLimitError);
+  assert.throws(() => reserveReply(ledger, 'another-publisher', 'over-global', 'voice', settings, true), VisitorLimitError);
+});
 
 test('voice-preferred sites allow independently capped chat before voice exhaustion', () => {
   const ledger = currentLedger(undefined);

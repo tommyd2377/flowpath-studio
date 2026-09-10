@@ -8,17 +8,19 @@ import { AppError } from './errors';
 import { contentSchema } from './site-model';
 import { visitorSettings } from './visitor-model';
 import { availability, currentLedger, reserveReply } from './visitor-quota';
+import { reserveSearch, searchRemaining } from './explore-quota';
 
-export async function visitorAccess(slug: string, request?: { requestId: string; kind: 'chat' | 'voice'; greeting?: boolean }) {
+export async function visitorAccess(slug: string, request?: { requestId: string; kind: 'chat' | 'voice' | 'search'; greeting?: boolean }) {
   const live = getEditorStatus().mode === 'openai';
   const useContent = (raw: unknown, siteId: string, storedUsage: unknown) => {
     const content = contentSchema.parse(raw);
     if (request?.greeting && content.visitorSpeaksFirst) throw new AppError('This site lets the visitor speak first.', 403);
     const settings = visitorSettings(content);
     const ledger = currentLedger(storedUsage);
-    const state = request ? reserveReply(ledger, siteId, request.requestId, request.kind, settings, live)
+    if (request?.kind === 'search') reserveSearch(ledger, siteId, request.requestId, content);
+    const state = request && request.kind !== 'search' ? reserveReply(ledger, siteId, request.requestId, request.kind, settings, live)
       : availability(ledger, siteId, settings, live);
-    return { content, siteId, ledger, availability: state };
+    return { content, siteId, ledger, availability: { ...state, searchRemaining: searchRemaining(ledger, siteId, content) } };
   };
   if (getBackendMode() === 'demo') return withDatabase(db => {
     const site = db.sites.find(site => site.slug === slug && site.ownerId === 'local-demo');

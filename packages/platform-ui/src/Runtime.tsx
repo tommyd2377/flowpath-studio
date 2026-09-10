@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type FormEvent, type MutableRefObject } from 'react';
 import { z } from 'zod';
 import { useReducedMotion } from 'motion/react';
 import { validateCatalog, validatePlan, catalogFilterSchema, type KnowledgeCatalog, type PresentationPlan } from './contracts.js';
@@ -14,7 +14,9 @@ import { InterfaceMotion } from './motion.js';
 import { MediaProvider } from './MediaViews.js';
 import { galleryAssetIds, type AssetUrlResolver, type MediaLibrary } from './media.js';
 
+export type CatalogViewCommand = { kind: string; id?: string; ids?: string[] };
 export type CatalogExplorerProps = {
+  commandRef?: MutableRefObject<((command: CatalogViewCommand) => boolean) | null>;
   catalog: KnowledgeCatalog;
   accent?: string;
   snapshotId?: string;
@@ -40,7 +42,13 @@ const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('compare'), params: z.object({}).strict() }).strict(),
 ]);
 
-type SavedView = { plan: PresentationPlan; state: CatalogInteractionState };
+type SavedView = { plan: PresentationPlan; state: CatalogInteractionState; scrollTop: number; spotlightId: string | null };
+function scrollContainer(root: HTMLElement | null) {
+  for (let node = root; node; node = node.parentElement) {
+    if (/(auto|scroll)/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight) return node;
+  }
+  return null;
+}
 
 /** Reveal a requested destination after its geometry settles, unless the visitor takes over. */
 function useSettledReveal(root: { current: HTMLDivElement | null }, plan: PresentationPlan) {
@@ -71,7 +79,8 @@ function useSettledReveal(root: { current: HTMLDivElement | null }, plan: Presen
         return;
       }
       const viewport = window.visualViewport;
-      let top = (viewport?.offsetTop ?? 0) + 16;
+      const dock = root.current?.closest('[data-visitor-site]')?.querySelector('[data-voice-dock="true"]')?.getBoundingClientRect();
+      let top = Math.max((viewport?.offsetTop ?? 0) + 16, dock && dock.top <= 1 ? dock.bottom + 16 : 0);
       let bottom = (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight) - 16;
       // Studio may embed the same runtime in a scrolling preview pane.
       for (let parent = target.parentElement; parent; parent = parent.parentElement) {
@@ -106,7 +115,8 @@ function checkedView(catalog: KnowledgeCatalog, value: unknown, snapshotId: stri
 }
 
 /** Render a complete validated view. Data and actions are supplied by the embedding application. */
-export function PresentationView({ catalog, plan, state, onAction, onLinkClick, media, resolveAssetUrl, onMediaInteraction, onPhotoView }: {
+export function PresentationView({ catalog, plan, state, onAction, onLinkClick, media, resolveAssetUrl, onMediaInteraction, onPhotoView, spotlightId }: {
+  spotlightId?: string | null;
   catalog: KnowledgeCatalog; plan: PresentationPlan; state: CatalogInteractionState;
   onAction?: (event: { type: string; params: Record<string, unknown> }) => void;
   onLinkClick?: (event: { kind: 'link_click'; entityId?: string; capabilityId: string }) => void;
@@ -117,13 +127,13 @@ export function PresentationView({ catalog, plan, state, onAction, onLinkClick, 
     preflightPresentation(compiled);
     return compiled;
   }, [catalog, plan, state.snapshotId, media]);
-  const context = useMemo(() => ({ catalog, state, plan, onLinkClick, onInteraction: onMediaInteraction }), [catalog, state, plan, onLinkClick, onMediaInteraction]);
+  const context = useMemo(() => ({ catalog, state, plan, spotlightId, onLinkClick, onInteraction: onMediaInteraction }), [catalog, state, plan, spotlightId, onLinkClick, onMediaInteraction]);
   const content = <RuntimeContext.Provider value={context}><Renderer response={program} library={platformLibrary}
     isStreaming={false} publishObservability={false} onAction={onAction}/></RuntimeContext.Provider>;
   return media ? <MediaProvider library={media} resolveAssetUrl={resolveAssetUrl ?? (() => '')} onInteraction={onMediaInteraction} onPhotoView={onPhotoView}>{content}</MediaProvider> : content;
 }
 
-function Explorer({ catalog, accent = '#c6af86', snapshotId = catalog.id, plan: suppliedPlan, onStateChange, onInteraction, onOutcome, onPresentation, onAsk, pending: externalPending = false, showComposer = true, media, resolveAssetUrl, onPhotoView }: CatalogExplorerProps) {
+function Explorer({ commandRef, catalog, accent = '#c6af86', snapshotId = catalog.id, plan: suppliedPlan, onStateChange, onInteraction, onOutcome, onPresentation, onAsk, pending: externalPending = false, showComposer = true, media, resolveAssetUrl, onPhotoView }: CatalogExplorerProps) {
   const [initialView] = useState(() => {
     const fallback = defaultPresentation(catalog, snapshotId);
     try { return { plan: suppliedPlan ? checkedView(catalog, suppliedPlan, snapshotId, media) : fallback, error: '' }; }
@@ -132,6 +142,7 @@ function Explorer({ catalog, accent = '#c6af86', snapshotId = catalog.id, plan: 
   const [accepted, setAccepted] = useState(initialView.plan);
   const [state, setState] = useState(() => applyPresentationState(initialInteraction(catalog, snapshotId), initialView.plan));
   const [history, setHistory] = useState<SavedView[]>([]);
+  const [spotlightId, setSpotlightId] = useState<string | null>(null);
   const [text, setText] = useState('');
   const [error, setError] = useState(initialView.error);
   const [busy, setBusy] = useState(false);
@@ -139,6 +150,7 @@ function Explorer({ catalog, accent = '#c6af86', snapshotId = catalog.id, plan: 
   const pending = useRef<AbortController | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLInputElement>(null);
+  const restoreScroll = useRef<number | null>(null);
   const instanceId = useId();
   const stateCallback = useRef(onStateChange);
   const presentationCallback = useRef(onPresentation);
@@ -177,11 +189,11 @@ function Explorer({ catalog, accent = '#c6af86', snapshotId = catalog.id, plan: 
     const next = checkedView(catalog, value, snapshotId, media);
     const nextState = applyPresentationState(interaction, next);
     const changedFilters = JSON.stringify(nextState.filters) !== JSON.stringify(interaction.filters);
-    if (remember && (changedFilters || JSON.stringify(next) !== JSON.stringify(accepted))) setHistory(items => [...items.slice(-19), { plan: accepted, state: interaction }]);
+    if (remember && (changedFilters || JSON.stringify(next) !== JSON.stringify(accepted))) setHistory(items => [...items.slice(-19), { plan: accepted, state: interaction, scrollTop: scrollContainer(root.current)?.scrollTop ?? window.scrollY, spotlightId }]);
     if (changedFilters) setState(nextState);
     setAccepted(next);
     setError('');
-  }, [catalog, snapshotId, accepted, interaction, media]);
+  }, [catalog, snapshotId, accepted, interaction, media, spotlightId]);
 
   // Synchronize an accepted prop during render so an obsolete view is never committed
   // for a frame. This guarded state adjustment is confined to this component.
@@ -193,7 +205,7 @@ function Explorer({ catalog, accent = '#c6af86', snapshotId = catalog.id, plan: 
       const nextState = applyPresentationState(interaction, next);
       const changedFilters = JSON.stringify(nextState.filters) !== JSON.stringify(interaction.filters);
       if (changedFilters || JSON.stringify(next) !== JSON.stringify(accepted)) {
-        setHistory(items => [...items.slice(-19), { plan: accepted, state: interaction }]);
+        setHistory(items => [...items.slice(-19), { plan: accepted, state: interaction, scrollTop: scrollContainer(root.current)?.scrollTop ?? window.scrollY, spotlightId }]);
         setAccepted(next);
         if (changedFilters) setState(nextState);
       }
@@ -211,6 +223,7 @@ function Explorer({ catalog, accent = '#c6af86', snapshotId = catalog.id, plan: 
     if (!parsed.success) { setError('That interface action is not available.'); return; }
     const action = parsed.data;
     onInteraction?.();
+    setSpotlightId(null);
     cancelPending();
     setError('');
     try {
@@ -251,14 +264,17 @@ function Explorer({ catalog, accent = '#c6af86', snapshotId = catalog.id, plan: 
     } catch { setError('That change could not be applied to this catalog. Your previous view is still available.'); }
   }
 
-  function back() {
-    onInteraction?.();
+  function back(manual = true) {
+    if (manual) onInteraction?.();
     cancelPending();
+    setSpotlightId(null);
     const previous = history.at(-1);
     if (!previous) return;
     setHistory(items => items.slice(0, -1));
     setAccepted({ ...previous.plan, transition: { type: 'restore' } });
     setState(previous.state);
+    setSpotlightId(previous.spotlightId);
+    restoreScroll.current = previous.scrollTop;
     setError('');
   }
   function reset() {
@@ -266,6 +282,48 @@ function Explorer({ catalog, accent = '#c6af86', snapshotId = catalog.id, plan: 
     cancelPending();
     accept({ ...defaultPresentation(catalog, snapshotId), stateUpdate: { filters: [] }, transition: { type: 'restore' } });
   }
+  useEffect(() => {
+    if (restoreScroll.current === null) return;
+    const position = restoreScroll.current; restoreScroll.current = null;
+    let frame = 0;
+    const began = performance.now();
+    const follow = () => {
+      const moving = root.current?.getAnimations({ subtree: true }).some(animation => animation.playState === 'running' && animation.effect?.getComputedTiming().iterations !== Infinity);
+      if (moving && performance.now() - began < 900 || performance.now() - began < 100) { frame = requestAnimationFrame(follow); return; }
+      const container = scrollContainer(root.current);
+      if (container) container.scrollTo({ top: position, behavior: 'instant' });
+      else window.scrollTo({ top: position, behavior: 'instant' });
+    };
+    frame = requestAnimationFrame(follow);
+    const cancel = () => cancelAnimationFrame(frame);
+    const events = ['wheel', 'touchstart', 'pointerdown', 'keydown'];
+    events.forEach(event => window.addEventListener(event, cancel, { passive: true, capture: true }));
+    return () => { cancel(); events.forEach(event => window.removeEventListener(event, cancel, true)); };
+  }, [accepted]);
+  useEffect(() => {
+    if (!commandRef) return;
+    commandRef.current = command => {
+      try {
+        if (command.kind === 'back' || command.kind === 'collapse') {
+          if (!history.length) return false;
+          back(false); return true;
+        }
+        if (command.kind === 'compare') {
+          const ids = command.ids ?? [];
+          if (ids.length < 2 || ids.length > 6 || new Set(ids).size !== ids.length || !ids.every(id => catalog.entities.some(entity => entity.id === id))) return false;
+          accept(comparisonPlan(catalog, ids, snapshotId)); setSpotlightId(null); return true;
+        }
+        if (!command.id || !catalog.entities.some(entity => entity.id === command.id)) return false;
+        if (command.kind === 'spotlight') {
+          if (!interaction.entityIds.includes(command.id)) return false;
+          setSpotlightId(command.id); return true;
+        }
+        if (command.kind !== 'open' && command.kind !== 'expand') return false;
+        accept(detailPlan(catalog, command.id, snapshotId)); setSpotlightId(null); return true;
+      } catch { return false; }
+    };
+    return () => { commandRef.current = null; };
+  });
   async function ask(event: FormEvent) {
     event.preventDefault();
     const query = text.trim();
@@ -293,9 +351,9 @@ function Explorer({ catalog, accent = '#c6af86', snapshotId = catalog.id, plan: 
       {showComposer && <div className="platform-composer-area"><form onSubmit={event => void ask(event)} className="platform-composer"><Icon name="spark" size={20}/><label className="platform-sr-only" htmlFor={`${instanceId}-intent`}>What are you looking for?</label><input ref={composer} id={`${instanceId}-intent`} value={text} maxLength={2000} onChange={event => setText(event.target.value)} placeholder="Tell us what matters to you…" autoComplete="off"/><button className="platform-submit" type="submit" disabled={busy || !text.trim()} aria-label="Explore this request"><Icon name="arrow"/></button></form>
         <div className="platform-prompts"><span>Try a direction</span>{catalog.jobs.slice(0, 3).map(job => <button type="button" key={job.id} disabled={busy} onClick={() => { setText(job.label); composer.current?.focus({ preventScroll: true }); }}>{job.label}<Icon name="arrow" size={12}/></button>)}</div>
       </div>}
-      <div className="platform-view-toolbar"><div><button className="platform-text-button" type="button" disabled={!history.length} onClick={back}><Icon name="back" size={14}/>Back</button><span className="platform-toolbar-divider"/><button className="platform-text-button" type="button" onClick={reset}>All items</button>{!!media?.assets.length && <button className="platform-text-button" type="button" onClick={() => { onInteraction?.(); cancelPending(); accept(planForIntent(catalog, 'show photos', interaction, media)); }}>Photos</button>}</div><span className="platform-view-status" role="status" aria-live="polite">{busy || externalPending ? 'Shaping your view…' : gallery && media ? `${galleryAssetIds(media, gallery).length} photos in this view` : interaction.focusedId ? 'A closer look' : `${interaction.entityIds.length} ${accepted.operation === 'compare' ? 'items side by side' : 'items in this view'}`}</span></div>
+      <div className="platform-view-toolbar"><div><button className="platform-text-button" type="button" disabled={!history.length} onClick={() => back()}><Icon name="back" size={14}/>Back</button><span className="platform-toolbar-divider"/><button className="platform-text-button" type="button" onClick={reset}>All items</button>{!!media?.assets.length && <button className="platform-text-button" type="button" onClick={() => { onInteraction?.(); cancelPending(); accept(planForIntent(catalog, 'show photos', interaction, media)); }}>Photos</button>}</div><span className="platform-view-status" role="status" aria-live="polite">{busy || externalPending ? 'Shaping your view…' : gallery && media ? `${galleryAssetIds(media, gallery).length} photos in this view` : interaction.focusedId ? 'A closer look' : `${interaction.entityIds.length} ${accepted.operation === 'compare' ? 'items side by side' : 'items in this view'}`}</span></div>
       {error && <div className="platform-error" role="alert"><p>{error}</p><button type="button" aria-label="Dismiss message" onClick={() => setError('')}><Icon name="close" size={14}/></button></div>}
-      <PresentationView catalog={catalog} plan={visiblePlan} state={interaction} media={media} resolveAssetUrl={resolveAssetUrl} onPhotoView={onPhotoView} onMediaInteraction={() => { onInteraction?.(); cancelPending(); }} onAction={handleAction} onLinkClick={event => { onInteraction?.(); onOutcome?.(event); }}/>
+      <PresentationView spotlightId={spotlightId} catalog={catalog} plan={visiblePlan} state={interaction} media={media} resolveAssetUrl={resolveAssetUrl} onPhotoView={onPhotoView} onMediaInteraction={() => { onInteraction?.(); cancelPending(); }} onAction={handleAction} onLinkClick={event => { onInteraction?.(); onOutcome?.(event); }}/>
     </InterfaceMotion>
   </div>;
 }

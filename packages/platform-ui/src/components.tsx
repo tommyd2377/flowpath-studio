@@ -10,7 +10,7 @@ import type { CatalogInteractionState } from './interaction.js';
 import { Disclosure, MotionHeight, SemanticSurface, feedbackTransition, motionTiming, revealTransition, sequenceItemVariants, sequenceVariants, surfaceTransition } from './motion.js';
 import { EntityMedia, MediaGallery } from './MediaViews.js';
 
-export type RuntimeContextValue = { catalog: KnowledgeCatalog; state: CatalogInteractionState; plan: PresentationPlan;
+export type RuntimeContextValue = { spotlightId?: string | null; catalog: KnowledgeCatalog; state: CatalogInteractionState; plan: PresentationPlan;
   onLinkClick?: (event: { kind: 'link_click'; entityId?: string; capabilityId: string }) => void;
   onInteraction?: () => void;
 };
@@ -46,7 +46,7 @@ function cardAttributes(catalog: KnowledgeCatalog, entity: KnowledgeCatalog['ent
     // A card already has an authored summary. Repeating a free-form description as a fact
     // makes the dense card layout look like a raw import rather than a composed reading view.
     .filter(attribute => !/^(?:description|summary)$/i.test(attribute.label.trim()));
-  return knownAttributes(entity, ordered).slice(0, 6);
+  return knownAttributes(entity, ordered).slice(0, 3);
 }
 function SectionHeading({ eyebrow, title, children }: { eyebrow?: string; title: string; children?: ReactNode }) {
   return <div className="platform-section-heading"><div>{eyebrow && <span className="platform-eyebrow">{eyebrow}</span>}<h3>{title}</h3></div>{children}</div>;
@@ -73,7 +73,7 @@ const PresentChip = forwardRef<HTMLButtonElement, HTMLMotionProps<'button'>>(fun
 });
 
 function CollectionContent({ entityIds, attributeIds, variant, collectionId }: ComponentProps) {
-  const { catalog, state, onInteraction } = useCatalog();
+  const { catalog, state, onInteraction, spotlightId } = useCatalog();
   const action = useAction();
   const reduced = useReducedMotion();
   const [limit, setLimit] = useState(18);
@@ -98,7 +98,7 @@ function CollectionContent({ entityIds, attributeIds, variant, collectionId }: C
         const selectDisabled = !selected && state.selectedIds.length >= 6;
         const details = cardAttributes(catalog, entity, attributes);
         const layout = variant !== 'list' && index === 0 ? 'feature' : details.length === 0 ? 'narrative' : details.length === 1 ? 'spotlight' : 'details';
-        return <PresentCard key={`item-${entity.id}`} layoutId={`entity-card-${entity.id}`} className="platform-item" data-entity-id={entity.id} data-selected={selected} data-detail-count={details.length} data-layout={layout}>
+        return <PresentCard key={`item-${entity.id}`} layoutId={`entity-card-${entity.id}`} className="platform-item" data-entity-id={entity.id} data-spotlight={spotlightId === entity.id} data-expanded={spotlightId === entity.id} data-selected={selected} data-detail-count={details.length} data-layout={layout}>
           <EntityMedia targetId={entity.id}/>
           <div className="platform-item-kicker"><span>{entity.kind}</span><span>{String(index + 1).padStart(2, '0')}</span></div>
           <button className="platform-item-open" type="button" onClick={() => action('focus', { id: entity.id })}><motion.h4 layoutId={`entity-title-${entity.id}`}>{entity.name}</motion.h4><Icon name="arrow"/></button>
@@ -228,7 +228,7 @@ const CatalogCanvas = defineComponent({ name: 'CatalogCanvas', description: 'A s
     const { plan } = useCatalog();
     const workspace = ['workspace-shift', 'restore', 'focus'].includes(plan.transition.type);
     return <MotionHeight className="platform-canvas-frame" duration={workspace ? motionTiming.workspace : motionTiming.reflow}>
-      <div className="platform-canvas" data-operation={plan.operation} data-has-criteria="false" data-has-collection={plan.components.some(component => component.type === 'collection')}><AnimatePresence initial={false} mode="popLayout">{props.sections.filter(section => (section as ElementNode).typeName !== 'CriteriaControls').map(section => {
+      <div className="platform-canvas" data-operation={plan.operation} data-has-criteria={plan.components.some(component => component.type === 'criteria')} data-has-collection={plan.components.some(component => component.type === 'collection')}><AnimatePresence initial={false} mode="popLayout">{props.sections.map(section => {
       const node = section as ElementNode;
       const name = node.statementId ?? node.typeName;
       const entity = node.typeName === 'EntityDetail' ? String((node.props.entityIds as string[])[0]) : '';

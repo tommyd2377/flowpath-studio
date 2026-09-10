@@ -16,7 +16,8 @@ function visible(element: Element) {
   const style = getComputedStyle(element);
   if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
   const rect = element.getBoundingClientRect();
-  let top = Math.max(rect.top, 0), left = Math.max(rect.left, 0), bottom = Math.min(rect.bottom, innerHeight), right = Math.min(rect.right, innerWidth);
+  const dock = document.querySelector('[data-voice-dock="true"]')?.getBoundingClientRect();
+  let top = Math.max(rect.top, dock && dock.top <= 1 ? dock.bottom : 0), left = Math.max(rect.left, 0), bottom = Math.min(rect.bottom, innerHeight), right = Math.min(rect.right, innerWidth);
   for (let parent = element.parentElement; parent; parent = parent.parentElement) {
     const css = getComputedStyle(parent);
     if (css.display === 'none' || css.visibility === 'hidden' || Number(css.opacity) === 0) return false;
@@ -33,7 +34,7 @@ export function captureVisitorContext(root: HTMLElement | null, base: VisitorCon
   const scope = [...root.querySelectorAll<HTMLElement>('[data-entity-id], [data-source-id], [data-platform-slot], [data-visitor-component]')];
   // Media lightboxes are portalled outside the site, but markers still must be published.
   document.querySelectorAll<HTMLElement>('[role="dialog"] [data-source-id]').forEach(element => scope.push(element));
-  const seen = scope.filter(visible);
+  const seen = scope.filter(visible).sort((a, b) => { const x = a.getBoundingClientRect(), y = b.getBoundingClientRect(); return x.top - y.top || x.left - y.left; });
   const collect = (nodes: HTMLElement[], key: string, allowed: Set<string>) => [...new Set(nodes.map(node => node.getAttribute(key)).filter((id): id is string => !!id && allowed.has(id)))].slice(0, 100);
   const focused = document.activeElement instanceof Element ? document.activeElement : null;
   const focusId = (key: string, allowed: Set<string>) => { const id = focused?.closest(`[${key}]`)?.getAttribute(key); return id && allowed.has(id) ? id : null; };
@@ -42,12 +43,15 @@ export function captureVisitorContext(root: HTMLElement | null, base: VisitorCon
   const surface = scrollSurface(root);
   return { ...base, expandedSourceIds: collect(scope.filter(node => node.dataset.sourceExpanded === 'true' && !node.closest('[inert], [aria-hidden="true"]')), 'data-source-id', sourceIds), screen: {
     viewportWidth: bounded(surface?.clientWidth ?? innerWidth, 20000), viewportHeight: bounded(surface?.clientHeight ?? innerHeight, 20000), scrollY: bounded(surface?.scrollTop ?? scrollY, 10000000), documentHeight: bounded(surface?.scrollHeight ?? document.documentElement.scrollHeight, 10000000),
+    fullyVisibleEntityIds: collect(seen.filter(node => { const rect = node.getBoundingClientRect(); const bounds = surface?.getBoundingClientRect(); return rect.top >= (bounds?.top ?? 0) && rect.bottom <= (bounds?.bottom ?? innerHeight); }), 'data-entity-id', entityIds),
+    expandedEntityIds: collect(seen.filter(node => node.dataset.expanded === 'true' || node.matches('.platform-detail')), 'data-entity-id', entityIds),
+    primaryEntityId: collect([...seen].sort((a, b) => { const coverage = (node: HTMLElement) => { const r = node.getBoundingClientRect(); return Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0)); }; return coverage(b) - coverage(a); }), 'data-entity-id', entityIds)[0] ?? null,
     visibleEntityIds: collect(seen, 'data-entity-id', entityIds), visibleSourceIds: collect(seen, 'data-source-id', sourceIds), visibleComponentTypes, visibleControls,
     focusedEntityId: focusId('data-entity-id', entityIds), focusedSourceId: focusId('data-source-id', sourceIds),
   } };
 }
 
-type NavigationTarget = { kind: 'top' | 'bottom' | 'entity' | 'source'; id?: string };
+type NavigationTarget = { kind: 'top' | 'bottom' | 'entity' | 'source' | 'up' | 'down' | 'next_section' | 'previous_section' | 'current'; id?: string };
 /** Navigation has no focus side effects and yields to any subsequent user input. */
 export async function navigateVisitorView(root: HTMLElement | null, target: NavigationTarget, signal: AbortSignal, interrupt: () => void): Promise<'applied' | 'unavailable'> {
   if (!root || signal.aborted) return 'unavailable';
@@ -55,6 +59,12 @@ export async function navigateVisitorView(root: HTMLElement | null, target: Navi
   if (target.kind === 'entity' || target.kind === 'source') {
     const attribute = target.kind === 'entity' ? 'data-entity-id' : 'data-source-id';
     element = [...root.querySelectorAll<HTMLElement>(`[${attribute}]`)].find(node => node.getAttribute(attribute) === target.id && !node.closest('[inert], [aria-hidden="true"]') && node.getClientRects().length > 0);
+    if (!element) return 'unavailable';
+  }
+  if (target.kind === 'next_section' || target.kind === 'previous_section') {
+    const sections = [...root.querySelectorAll<HTMLElement>('[data-platform-slot], [data-source-id]')].filter(node => !node.closest('[inert], [aria-hidden="true"]'));
+    const edge = (scrollSurface(root)?.getBoundingClientRect().top ?? 0) + 32;
+    element = target.kind === 'next_section' ? sections.find(node => node.getBoundingClientRect().top > edge) : sections.filter(node => node.getBoundingClientRect().top < edge - 32).at(-1);
     if (!element) return 'unavailable';
   }
   const surface = scrollSurface(root);
@@ -77,12 +87,13 @@ export async function navigateVisitorView(root: HTMLElement | null, target: Navi
       const geometry = `${Math.round(position())}:${Math.round(rect?.top ?? 0)}:${Math.round(rect?.height ?? 0)}:${height()}`;
       settled = geometry === previous ? settled + 1 : 0; previous = geometry;
       const elapsed = performance.now() - started;
-      if (!moved && settled >= 4 && elapsed >= 200) {
-        const top = target.kind === 'top' ? 0 : target.kind === 'bottom' ? height() : position() + (rect?.top ?? 0) - (surface ? surface.getBoundingClientRect().top + surface.clientTop : 0) - 16;
-        scroll(top, matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'); moved = true; settled = 0;
+      const moving = root.getAnimations({ subtree: true }).some(animation => animation.playState === 'running' && animation.effect?.getComputedTiming().iterations !== Infinity);
+      if (!moved && settled >= 4 && elapsed >= 200 && !moving) {
+        const top = target.kind === 'top' ? 0 : target.kind === 'bottom' ? height() : target.kind === 'up' ? position() - viewport() * .8 : target.kind === 'down' ? position() + viewport() * .8 : position() + (rect?.top ?? 0) - (surface ? surface.getBoundingClientRect().top + surface.clientTop : 0) - 16 - (root.querySelector('[data-voice-dock="true"]')?.getBoundingClientRect().height ?? 0);
+        if (target.kind !== 'current') scroll(top, matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'); moved = true; settled = 0;
       } else if (moved && settled >= 6 && elapsed >= 400) {
         const maximum = Math.max(0, height() - viewport());
-        const applied = target.kind === 'top' ? position() <= 2 : target.kind === 'bottom' ? Math.abs(position() - maximum) <= 2 : !!element && visible(element);
+        const applied = target.kind === 'top' ? position() <= 2 : target.kind === 'bottom' ? Math.abs(position() - maximum) <= 2 : target.kind === 'up' || target.kind === 'down' || target.kind === 'current' ? true : !!element && visible(element);
         finish(applied ? 'applied' : 'unavailable'); return;
       }
       if (elapsed > 4500) { finish('unavailable'); return; }

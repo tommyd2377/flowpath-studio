@@ -6,6 +6,7 @@ import { presentationSources, validatePresentation } from './site-presentation';
 import { validateCatalogState } from './catalog-presentation';
 import type { SiteContent } from './site-model';
 import { AppError } from './errors';
+import { exploreCommandSchema, exploreResultSchema, exploreSettings } from './explore-model';
 
 export { visitorScreenSchema, visitorContextSchema, visitorHistorySchema } from './visitor-request';
 export type { VisitorContext, VisitorHistory } from './visitor-request';
@@ -19,6 +20,10 @@ export type VisitorControlUpdate = z.infer<typeof visitorControlSchema>;
 export const visitorControlCapabilitySchema = z.object({ id: z.string().uuid(), token: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict();
 export type VisitorControlCapability = z.infer<typeof visitorControlCapabilitySchema>;
 export const visitorNavigationSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('explore'), result: exploreResultSchema.optional(), command: exploreCommandSchema.optional() }).strict().refine(value => Boolean(value.result) !== Boolean(value.command), 'Supply one search view or command.'),
+  z.object({ kind: z.enum(['open', 'expand', 'spotlight']), id: z.string().min(1).max(100) }).strict(),
+  z.object({ kind: z.literal('compare'), ids: z.array(z.string().min(1).max(100)).min(2).max(6) }).strict(),
+  z.object({ kind: z.enum(['back', 'collapse', 'up', 'down', 'next_section', 'previous_section']) }).strict(),
   z.object({ kind: z.literal('top') }).strict(), z.object({ kind: z.literal('bottom') }).strict(),
   z.object({ kind: z.literal('entity'), id: z.string().min(1).max(100) }).strict(),
   z.object({ kind: z.literal('source'), id: z.string().min(1).max(100) }).strict(),
@@ -28,6 +33,12 @@ export const visitorNavigationSchema = z.discriminatedUnion('kind', [
 export function validateVisitorContext(value: unknown, content: SiteContent, catalog?: KnowledgeCatalog, media?: MediaLibrary): VisitorContext {
   try {
     const context = visitorContextSchema.parse(value ?? {});
+    if (context.explore) {
+      const settings = exploreSettings(content);
+      if (!settings.enabled || context.explore.kind === 'images' && !settings.images || context.explore.map && !settings.maps
+        || !settings.images && context.explore.images.length || new Set(context.explore.images.map(image => image.id)).size !== context.explore.images.length
+        || context.explore.selectedImageId && !context.explore.images.some(image => image.id === context.explore!.selectedImageId)) throw new Error();
+    }
     if (!catalog && (context.catalogState || context.catalogPlan)) throw new Error();
     if (catalog && context.catalogState) context.catalogState = validateCatalogState(context.catalogState, catalog);
     if (catalog && context.catalogPlan) context.catalogPlan = validatePlan(context.catalogPlan, catalog, catalog.id, media);
@@ -38,7 +49,9 @@ export function validateVisitorContext(value: unknown, content: SiteContent, cat
     if (!known(context.expandedSourceIds ?? [], sourceIds)) throw new Error();
     if (context.screen) {
       const screen = context.screen;
-      if (!known(screen.visibleEntityIds, entityIds) || !known(screen.visibleSourceIds, sourceIds)
+      if (!known(screen.fullyVisibleEntityIds, entityIds) || !known(screen.expandedEntityIds, entityIds)
+        || screen.primaryEntityId !== null && !entityIds.has(screen.primaryEntityId)
+        || !known(screen.visibleEntityIds, entityIds) || !known(screen.visibleSourceIds, sourceIds)
         || screen.focusedEntityId !== null && !entityIds.has(screen.focusedEntityId)
         || screen.focusedSourceId !== null && !sourceIds.has(screen.focusedSourceId)) throw new Error();
     }

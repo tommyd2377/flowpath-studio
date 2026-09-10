@@ -19,7 +19,7 @@ export function validateVisitorOffer(offer: string) {
 }
 
 type ControlOptions = Parameters<typeof createVisitorRealtimeControl>[0];
-export type VisitorSessionOptions = Pick<ControlOptions, 'content' | 'catalog' | 'media' | 'catalogState' | 'context' | 'history' | 'reserveTurn' | 'assertCurrent' | 'onUsage'> & {
+export type VisitorSessionOptions = Pick<ControlOptions, 'content' | 'catalog' | 'media' | 'catalogState' | 'context' | 'history' | 'reserveTurn' | 'assertCurrent' | 'onUsage' | 'onTiming' | 'reservationChecksPublication' | 'search'> & {
   offer: string;
   availability: VisitorAvailability;
   apiKey: string;
@@ -153,7 +153,8 @@ export function visitorRealtimeSession(options: VisitorSessionOptions) {
         callId, apiKey: options.apiKey, content: options.content, catalog: options.catalog, media: options.media,
         catalogState: options.catalogState, initialAvailability: options.availability,
         context: options.context, history: options.history,
-        reserveTurn: options.reserveTurn, assertCurrent: options.assertCurrent, onUsage: options.onUsage,
+        search: options.search,
+        reservationChecksPublication: options.reservationChecksPublication, reserveTurn: options.reserveTurn, assertCurrent: options.assertCurrent, onUsage: options.onUsage, onTiming: options.onTiming,
         emit, onFatal: message => { void end(message); }, signal: lifecycle.signal,
       });
       await control.ready;

@@ -73,7 +73,7 @@ for (const fixture of ['classes', 'bookstore']) test(`${fixture}: contextual car
 
   await page.emulateMedia({ reducedMotion: 'reduce' }); await page.setViewportSize({ width: 390, height: 844 });
   const open = explorer.getByRole('button', { name: `Open photo: ${fixture} illustrative example`, exact: true });
-  await open.click(); const viewer = page.getByRole('dialog');
+  await open.click(); const viewer = page.locator('.platform-photo-detail');
   await expect(viewer).toBeVisible();
   await expect(viewer.locator('img')).toHaveAttribute('src', new RegExp(ids[2]));
   const displayedPhoto = await viewer.locator('img').evaluate(async (image: HTMLImageElement) => {
@@ -84,6 +84,7 @@ for (const fixture of ['classes', 'bookstore']) test(`${fixture}: contextual car
   expect(displayedPhoto.width).toBeGreaterThan(100);
   expect(displayedPhoto.height).toBeGreaterThan(100);
   await expect(viewer).toContainText('Example photo');
+  await expect.poll(() => viewer.evaluate(element => { const rect = element.getBoundingClientRect(); return rect.top >= -2 && rect.top < 200; })).toBe(true);
   await page.screenshot({ path: info.outputPath(`${fixture}-photo-mobile.png`) });
   await page.keyboard.press('Escape'); await expect(viewer).not.toBeVisible(); await expect(open).toBeFocused();
   // Check during the retained exit, then after it settles. A desktop exit may

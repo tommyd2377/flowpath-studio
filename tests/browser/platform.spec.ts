@@ -316,6 +316,11 @@ test.describe.serial('offline publisher-to-visitor proof', () => {
     await knowledgeAction(page, 'Apply to draft');
     await panel(page, 'Content');
     const opening = page.locator('.opening-settings');
+    await expect(opening.getByRole('combobox', { name: 'Opening copy', exact: true })).toHaveValue('automatic');
+    await expect(opening.getByLabel('Automatic opening preview')).toBeVisible();
+    await opening.getByRole('combobox', { name: 'Opening copy', exact: true }).selectOption('personalized');
+    await opening.getByLabel('Opening headline', { exact: true }).fill('Find your next favorite');
+    await opening.getByRole('textbox', { name: 'Introduction', exact: true }).fill('Browse our carefully selected examples.');
     await opening.getByLabel(/^Highlights/).fill('Start with our two featured examples.\nCompare the published details at your own pace.');
     await opening.getByRole('combobox', { name: 'Tone', exact: true }).selectOption('direct');
     await opening.getByRole('checkbox', { name: 'Draft-only Blanco', exact: true }).check();
@@ -335,11 +340,12 @@ test.describe.serial('offline publisher-to-visitor proof', () => {
     const before = visitorPosts.length;
     await page.goto(`/s/${slug}`);
     await expect(page.locator('.site-opening-highlights')).toContainText('Start with our two featured examples.');
+    await expect(page.locator('.site-opening h1')).toHaveText('Find your next favorite');
+    await expect(page.locator('.site-opening > p')).toHaveText('Browse our carefully selected examples.');
     await expect(page.locator('.platform-item')).toHaveCount(2);
     await expect(page.locator('.platform-explorer').getByRole('link', { name: 'Example information page' })).toHaveAttribute('href', 'https://example.com/offline-catalog');
     await screenshot(page, info.outputPath('configured-opening-and-publisher-link.png'));
-    await page.getByRole('button', { name: 'Explore the site', exact: true }).click();
-    await expect(page.locator('.site-opening-highlights')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Explore the site', exact: true })).toHaveCount(0);
     await expect(page.locator('.platform-explorer')).toBeVisible();
     await page.locator('.platform-view-toolbar').getByRole('button', { name: 'All items', exact: true }).click();
     await expect(page.locator('.platform-item')).toHaveCount(4);

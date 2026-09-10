@@ -310,3 +310,10 @@
   .platform-media-gallery *, .platform-entity-media *, .platform-lightbox * { animation-duration: 0s !important; transition-duration: 0s !important; scroll-behavior: auto !important; }
   .platform-media-card:hover .platform-media-image img { transform: none; filter: none; }
 }
+
+/* Spoken focus preserves the collection and shared card identity. */
+.platform-item[data-spotlight="true"] { grid-column: 1 / -1; border-color: var(--platform-accent); background: color-mix(in srgb, var(--platform-accent) 10%, var(--platform-panel)); }
+.platform-item[data-spotlight="true"] .platform-item-summary { display: block; -webkit-line-clamp: unset; max-width: 760px; font-size: 16px; }
+.platform-item[data-spotlight="true"] h4 { font-size: clamp(28px, 4cqi, 42px); }
+.platform-detail { min-height: min(720px, 72svh); }
+@container (max-width: 600px) { .platform-item[data-spotlight="true"] { min-height: 65svh; } }

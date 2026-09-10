@@ -15,6 +15,7 @@ import { recordPlatformEvent } from '@/lib/platform-events';
 import { validateVisitorOffer, visitorRealtimeSession } from '@/lib/visitor-realtime-session';
 import { validateVisitorContext, visitorContextSchema, visitorHistorySchema } from '@/lib/visitor-realtime-context';
 import { assertNoStripeTestPaidAi } from '@/lib/billing-ai-guard';
+import { authorizedExplore } from '@/lib/explore-service';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -71,11 +72,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
     let currentRequestId = input.requestId;
     const reserve = async (requestId: string) => {
       if (request.signal.aborted) throw new AppError('Voice request cancelled.', 499);
-      await assertCurrent();
+      await assertNoStripeTestPaidAi(preview.siteId);
       const next = await visitorAccess(slug, { requestId, kind: 'voice' });
       matches(next);
       currentRequestId = requestId;
-      await recordPlatformEvent(preview.siteId, { ...observed, type: 'provider_usage', status: 'reserved', count: 1, requestId }).catch(() => undefined);
+      const observation = recordPlatformEvent(preview.siteId, { ...observed, type: 'provider_usage', status: 'reserved', count: 1, requestId }).catch(() => undefined);
+      after(() => observation);
       return next.availability;
     };
     // Connection startup reserves its first turn even if abandoned or silent.
@@ -89,7 +91,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
       content: preview.content, catalog: catalog ?? undefined, media: media ?? undefined, catalogState,
       context, history: input.history,
       mailbox: { slug, siteId: preview.siteId, publicationKey: createHash('sha256').update(snapshot).digest('hex') },
-      availability, reserveTurn: () => reserve(randomUUID()), assertCurrent,
+      availability, reservationChecksPublication: true, reserveTurn: () => reserve(randomUUID()), assertCurrent,
+      search: async (query, kind, signal) => (await authorizedExplore(slug, { query, kind, requestId: randomUUID() }, signal, snapshot)).result,
+      onTiming: (stage, durationMs) => { void recordPlatformEvent(preview.siteId, { ...observed, type: 'provider_usage', status: 'observed', operationId: `latency_${stage}`, durationMs }).catch(() => undefined); },
       onUsage: (usage, source) => { void recordPlatformEvent(preview.siteId, { ...observed, type: 'provider_usage', status: 'observed', ...(source === 'transcription' ? { operationId: 'input_transcription' } : { requestId: currentRequestId }), usage }).catch(() => undefined); },
       onCleanupFailure: () => { gate.blocked = true; }, onClosed: release,
       retainCleanup: work => { after(() => work); },

@@ -128,7 +128,7 @@ test('catalog voice guidance maps a request to open an item to the card detail v
   const h = setup({ catalog }); t.after(() => h.control.close()); await h.ready(); h.user(); await flush();
   const instructions = String(h.socket.requests()[0].instructions);
   assert.match(instructions, /open.*one-item detail view/i);
-  assert.match(instructions, /navigate_view only when the visitor asks to scroll/i);
+  assert.match(instructions, /navigate_view for open, expand, spotlight, compare, back, collapse and scrolling/i);
 });
 
 test('unsupported catalog requests preserve the view and use the bounded speech response', async t => {
@@ -460,4 +460,39 @@ test('mixed audio and view output awaiting publication stays blocked until old p
   h.socket.frame({type:'output_audio_buffer.cleared',response_id:'mixed'}); await flush();
   assert.equal(h.socket.requests().length, 2);
   assert.deepEqual(h.fatal, []);
+});
+
+
+test('direct screen commands validate targets, await the browser and retain one continuation', async t => {
+  const h = setup({ catalog }); t.after(() => h.control.close()); await h.ready();
+  h.user(); await flush(); h.socket.created('direct');
+  h.socket.done('direct', [{ type: 'function_call', name: 'navigate_view', call_id: 'open_item', arguments: JSON.stringify({ kind: 'open', id: catalog.entities[0].id, ids: null }) }]);
+  await flush();
+  assert.equal(h.socket.requests().length, 1);
+  assert.equal(h.events.find(event => event.type === 'navigation')?.target.kind, 'open');
+  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 1, ready: true, context: {}, navigationAck: { id: 'open_item', status: 'applied' } });
+  await flush();
+  assert.equal(h.socket.requests().length, 2);
+  assert.deepEqual(h.socket.requests()[1].tools, []);
+  assert.deepEqual(h.fatal, []);
+});
+
+test('reservation with publication verification avoids a duplicate read and records latency', async t => {
+  const timings: string[] = [];
+  const h = setup({ reservationChecksPublication: true, onTiming: stage => timings.push(stage) });
+  t.after(() => h.control.close()); await h.ready(); h.user(); await flush();
+  h.socket.created('first'); h.socket.frame({ type: 'output_audio_buffer.started', response_id: 'first' }); h.socket.done('first', spoken); await flush(); h.socket.frame({ type: 'output_audio_buffer.stopped', response_id: 'first' }); await flush();
+  const before = h.assertions(); h.user('second'); await flush();
+  assert.equal(h.reservations(), 1); assert.equal(h.assertions(), before);
+  assert.ok(timings.includes('authorization'));
+});
+
+test('direct controls reject foreign items before dispatch or paid continuation', async t => {
+  const h = setup({ catalog }); t.after(() => h.control.close()); await h.ready(); h.user(); await flush();
+  h.socket.created('foreign');
+  h.socket.done('foreign', [{ type: 'function_call', name: 'navigate_view', call_id: 'foreign_item', arguments: JSON.stringify({ kind: 'open', id: 'not-published', ids: null }) }]);
+  await flush();
+  assert.equal(h.events.filter(event => event.type === 'navigation').length, 0);
+  assert.equal(h.socket.requests().length, 1);
+  assert.equal(h.fatal.length, 1);
 });

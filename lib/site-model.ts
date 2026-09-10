@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { WELCOME_MESSAGE_MAX_LENGTH } from './site-greeting';
 import { visitorSettingsSchema } from './visitor-model';
+import { exploreSettingsSchema } from './explore-model';
 
 export const sectionSchema = z.object({
   id: z.string().trim().min(1).max(80),
@@ -19,9 +20,11 @@ export const contentSchema = z.object({
   welcomeMessage: z.string().trim().max(WELCOME_MESSAGE_MAX_LENGTH).optional(),
   visitorSpeaksFirst: z.boolean().optional(),
   visitor: visitorSettingsSchema.optional(),
+  explore: exploreSettingsSchema.optional(),
   knowledgeRevisionId: z.string().uuid().optional(),
   mediaRevisionId: z.string().uuid().optional(),
   opening: z.object({
+    copyMode: z.enum(['automatic', 'personalized']).optional(),
     highlights: z.array(z.string().trim().min(1).max(180)).max(3),
     featuredEntityIds: z.array(z.string().min(1).max(80)).max(6),
     capabilityIds: z.array(z.string().min(1).max(80)).max(3),
@@ -58,9 +61,10 @@ export function summarize(site: Site): SiteSummary {
 export function describeChanges(before: SiteContent, after: SiteContent): Change[] {
   const labels: Record<Exclude<keyof SiteContent, 'sections'>, string> = { name: 'Site name', headline: 'Headline', description: 'Introduction',
     hours: 'Opening hours', contact: 'Contact', accent: 'Brand color', logoAssetId: 'Logo',
-    welcomeMessage: 'Welcome message', visitorSpeaksFirst: 'Conversation opening', visitor: 'Visitor conversations', knowledgeRevisionId: 'Knowledge revision', mediaRevisionId: 'Photos and albums', opening: 'Opening experience' };
+    welcomeMessage: 'Welcome message', visitorSpeaksFirst: 'Conversation opening', visitor: 'Visitor conversations', explore: 'Search and explore', knowledgeRevisionId: 'Knowledge revision', mediaRevisionId: 'Photos and albums', opening: 'Opening experience' };
   const display = (content: SiteContent, key: keyof typeof labels) => key === 'visitor'
     ? content.visitor?.enabled ? `${content.visitor.mode} · ${content.visitor.voiceTier} voice · ${content.visitor.chatDailyLimit} chat messages / ${content.visitor.voiceDailyLimit} voice replies per day` : 'Off'
+    : key === 'explore' ? content.explore?.enabled ? `On · ${content.explore.dailyLimit} searches/day · ${content.explore.images ? 'images on' : 'images off'} · ${content.explore.maps ? 'maps on' : 'maps off'} · ${content.explore.allowedDomains.join(', ') || 'wider web'}` : 'Off'
     : key === 'welcomeMessage' ? content.welcomeMessage?.trim() || 'Default greeting'
     : key === 'visitorSpeaksFirst' ? content.visitorSpeaksFirst ? 'Visitor speaks first' : 'Assistant welcomes the visitor' : String(content[key] ?? 'None');
   const changes = (Object.keys(labels) as (keyof typeof labels)[]).filter(key => JSON.stringify(before[key]) !== JSON.stringify(after[key]))

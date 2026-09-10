@@ -8,6 +8,7 @@ export const ledgerSchema = z.object({
   day: z.iso.date(), totals: counts,
   sites: z.record(z.string(), counts),
   requests: z.record(z.string(), z.literal(true)),
+  search: z.object({ total: counter, sites: z.record(z.string(), counter) }).optional(),
 });
 export type VisitorLedger = z.infer<typeof ledgerSchema>;
 export class VisitorAttemptError extends AppError {

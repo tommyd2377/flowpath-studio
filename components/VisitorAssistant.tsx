@@ -1,11 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type PropsWithChildren, type MutableRefObject } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode, type FormEvent, type PropsWithChildren, type MutableRefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, LayoutGroup, MotionConfig, motion, useIsPresent, useReducedMotion, type HTMLMotionProps } from 'motion/react';
 import { ArrowUp, ArrowUpRight, AudioLines, Clock3, CornerDownLeft, MessageCircle, Square } from 'lucide-react';
 import Waveform from './Waveform';
+import VisitorVoiceStage from './VisitorVoiceStage';
 import SitePresentation from './SitePresentation';
+import SearchExplore, { type SearchExploreHandle } from './SearchExplore';
+import { exploreSettings, exploreKindForText, localExploreCommand } from '@/lib/explore-model';
 import type { SiteContent } from '@/lib/site-model';
 import { getWelcomeMessage } from '@/lib/site-greeting';
 import { demoVisitorReply, visitorSettings, type VisitorAvailability, type VisitorMessage, type VisitorReply } from '@/lib/visitor-model';
@@ -15,7 +18,7 @@ import { useVisitorSession } from '@/lib/use-visitor-session';
 import { captureVisitorContext, navigateVisitorView } from '@/lib/visitor-view-context';
 import type { VisitorContext } from '@/lib/visitor-request';
 import styles from './VisitorAssistant.module.css';
-import { CatalogExplorer, motionTiming, revealTransition, surfaceTransition } from '@thevoice/platform-ui';
+import { CatalogExplorer, EntityMedia, revealTransition, surfaceTransition } from '@thevoice/platform-ui';
 import { validatePlan, type KnowledgeCatalog, type PresentationPlan } from '@thevoice/platform-ui/contracts';
 import { initialInteraction, planForIntent, type CatalogInteractionState } from '@thevoice/platform-ui/interaction';
 import { openingPresentation } from '@/lib/site-opening';
@@ -30,13 +33,16 @@ function ModeSurface(props: PropsWithChildren<HTMLMotionProps<'div'>>) {
   return <motion.div {...props} inert={!present} aria-hidden={!present}/>;
 }
 
-export default function VisitorAssistant({ content, slug, entered, onExplore, onViewChange, catalog, media, resolveAssetUrl, interactionRef, onPhotoView, onCatalogEvent }: {
+export default function VisitorAssistant({ content, slug, entered, onExplore, onViewChange, catalog, media, resolveAssetUrl, interactionRef, onPhotoView, onCatalogEvent, identity, opening }: {
+  identity?: ReactNode; opening?: ReactNode;
   content: SiteContent; slug?: string; entered: boolean; onExplore: () => void; onViewChange: (active: boolean) => void; catalog?: KnowledgeCatalog | null;
   interactionRef?: MutableRefObject<(() => void) | null>; onPhotoView?: (assetId: string) => void;
   media?: MediaLibrary | null; resolveAssetUrl?: AssetUrlResolver;
   onCatalogEvent?: (event: Pick<PlatformEventInput, 'type' | 'kind' | 'operation' | 'entityId' | 'capabilityId'>) => void;
 }) {
   const settings = visitorSettings(content);
+  const searchSettings = exploreSettings(content);
+  const searchView = useRef<SearchExploreHandle>(null);
   const [state, setState] = useState<VisitorAvailability | null>(slug ? null : {
     enabled: true, mode: settings.mode, live: false, chatRemaining: settings.chatDailyLimit,
     voiceRemaining: settings.voiceDailyLimit, resetsAt: '',
@@ -47,6 +53,7 @@ export default function VisitorAssistant({ content, slug, entered, onExplore, on
   const [presentation, setPresentation] = useState<Presentation | null>(null);
   const [catalogPlan, setCatalogPlan] = useState<PresentationPlan | undefined>(() => catalog ? openingPresentation(content, catalog) : undefined);
   const acceptedCatalogPlan = useRef(catalogPlan);
+  const catalogCommand = useRef<((command: { kind: string; id?: string; ids?: string[] }) => boolean) | null>(null);
   const acceptedPresentation = useRef<Presentation | null>(null);
   const siteRoot = useRef<HTMLElement | null>(null);
   const assistantRoot = useRef<HTMLElement>(null);
@@ -55,6 +62,7 @@ export default function VisitorAssistant({ content, slug, entered, onExplore, on
   const catalogState = useRef<CatalogInteractionState | undefined>(catalog ? initialInteraction(catalog) : undefined);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
+  const [searchActivity, setSearchActivity] = useState('');
   const [preparingView, setPreparingView] = useState(false);
   const [error, setError] = useState('');
   const [greeted, setGreeted] = useState(false);
@@ -62,7 +70,7 @@ export default function VisitorAssistant({ content, slug, entered, onExplore, on
   const inFlight = useRef(false);
   const input = useRef<HTMLTextAreaElement>(null);
   const waveControl = useRef<HTMLButtonElement>(null);
-  const focusReturn = useRef<{ mode: 'chat' | 'voice'; preventScroll: boolean } | null>(null);
+  const focusReturn = useRef<{ mode: 'chat' | 'voice'; preventScroll: boolean; origin: Element | null } | null>(null);
   const focusReturnTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const focusReturnFrame = useRef(0);
   const layoutId = useId();
@@ -81,11 +89,13 @@ export default function VisitorAssistant({ content, slug, entered, onExplore, on
   const manualInterrupt = liveVoice.manualInterrupt;
   const updateContext = liveVoice.updateContext;
   const getContext = useCallback((): VisitorContext => captureVisitorContext(siteRoot.current, {
+    ...(searchView.current?.context() ? { explore: searchView.current.context() } : {}),
     ...(catalogState.current ? { catalogState: catalogState.current } : {}),
     ...(acceptedCatalogPlan.current ? { catalogPlan: acceptedCatalogPlan.current } : {}),
     ...(acceptedPresentation.current ? { presentation: acceptedPresentation.current } : {}),
   }, entityIds, sourceIds), [entityIds, sourceIds]);
-  const manualInteraction = useCallback(() => { pending.current?.abort(); cancelDemo(); manualInterrupt(); }, [cancelDemo, manualInterrupt]);
+  const manualInteraction = useCallback(() => { pending.current?.abort(); searchView.current?.cancel(); cancelDemo(); manualInterrupt(); }, [cancelDemo, manualInterrupt]);
+  const searchContextChanged = useCallback(() => { updateContext(getContext()); }, [updateContext, getContext]);
   useEffect(() => {
     siteRoot.current = assistantRoot.current?.closest<HTMLElement>('[data-visitor-site]') ?? assistantRoot.current;
     if (!interactionRef) return;
@@ -110,22 +120,23 @@ export default function VisitorAssistant({ content, slug, entered, onExplore, on
   const activeMode = voiceExhausted && !voiceBusy ? 'chat' : mode;
   const disabled = !state?.enabled;
   const demo = !slug || !!state?.enabled && !state.live;
-  const reveal = { initial: { opacity: 0, y: reduce ? 0 : 10 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: reduce ? 0 : -6 }, transition: { duration: reduce ? 0 : 0.56, ease } };
+  const reveal = { initial: { opacity: 0, y: reduce ? 0 : 10 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: reduce ? 0 : -6 }, transition: { duration: reduce ? 0 : 0.28, ease } };
 
   useEffect(() => () => { clearTimeout(focusReturnTimer.current); cancelAnimationFrame(focusReturnFrame.current); }, []);
   function restoreControlFocus() {
     const request = focusReturn.current;
     if (!request) return;
+    if (document.activeElement !== request.origin && document.activeElement !== document.body && !document.activeElement?.closest('[inert], [aria-hidden="true"]')) { focusReturn.current = null; return; }
     const control = request.mode === 'chat' ? input.current : waveControl.current;
-    if (!control || control.disabled || control.closest('[inert], [aria-hidden="true"]')) return;
+    if (!control || control.disabled || control.closest('[inert], [aria-hidden="true"]')) { focusReturnFrame.current = requestAnimationFrame(restoreControlFocus); return; }
     focusReturn.current = null; clearTimeout(focusReturnTimer.current);
     control.focus({ preventScroll: request.preventScroll });
   }
   function requestControlFocus(preventScroll = false, target?: 'chat' | 'voice') {
     // Ending the last reserved reply switches to chat after the voice surface exits.
-    focusReturn.current = { mode: target ?? (voiceExhausted ? 'chat' : activeMode), preventScroll };
+    focusReturn.current = { mode: target ?? (voiceExhausted ? 'chat' : activeMode), preventScroll, origin: document.activeElement };
     clearTimeout(focusReturnTimer.current); cancelAnimationFrame(focusReturnFrame.current);
-    focusReturnTimer.current = setTimeout(() => { focusReturn.current = null; }, 1000);
+    focusReturnTimer.current = setTimeout(() => { focusReturn.current = null; }, 2000);
     focusReturnFrame.current = requestAnimationFrame(restoreControlFocus);
   }
 
@@ -192,9 +203,16 @@ export default function VisitorAssistant({ content, slug, entered, onExplore, on
     event.preventDefault();
     if (!text.trim() || inFlight.current || disabled || !state?.chatRemaining) return;
     const outgoing = text.trim();
+    const localSearch = searchSettings.enabled ? localExploreCommand(outgoing, searchView.current?.context()) : null;
+    if (localSearch && searchView.current?.command(localSearch)) { manualInteraction(); setText(''); onExplore(); return; }
+    const searchKind = searchSettings.enabled ? exploreKindForText(outgoing) : null;
+    searchView.current?.cancel();
     inFlight.current = true; voice.cancel(); setBusy(true); setError(''); setText(''); onExplore();
     const controller = new AbortController(); pending.current = controller;
-    try { await requestTurn('chat', outgoing, controller.signal); }
+    try {
+      if (searchKind && searchView.current) await searchView.current.search(outgoing, searchKind, controller.signal);
+      else await requestTurn('chat', outgoing, controller.signal);
+    }
     catch (error) {
       setText(outgoing);
       if (!controller.signal.aborted) setError(error instanceof Error ? error.message : 'The view could not be prepared.');
@@ -207,7 +225,11 @@ export default function VisitorAssistant({ content, slug, entered, onExplore, on
   function startVoice() {
     if (voiceBusy) { voice.cancel(); return; }
     if (disabled || !state?.voiceRemaining) return;
+    searchView.current?.cancel(); pending.current?.abort();
     setError(''); onExplore();
+    let surface = assistantRoot.current?.parentElement;
+    while (surface && !/(auto|scroll)/.test(getComputedStyle(surface).overflowY)) surface = surface.parentElement;
+    if (surface) surface.scrollTo({ top: 0, behavior: 'instant' }); else window.scrollTo({ top: 0, behavior: 'instant' });
     if (state.live && slug) {
       demoVoice.cancel();
       const earlierHistory = historyRef.current.slice(-8);
@@ -217,7 +239,32 @@ export default function VisitorAssistant({ content, slug, entered, onExplore, on
           transcripts.set(event.id, event);
           historyRef.current = [...earlierHistory, ...[...transcripts.values()].sort((a, b) => a.revision - b.revision || (a.role === b.role ? 0 : a.role === 'user' ? -1 : 1)).map(({ role, text }) => ({ role, text }))].slice(-8);
         },
-        onNavigate: (event, signal) => navigateVisitorView(siteRoot.current, event.target, signal, manualInteraction), onPlan: event => {
+        onNavigate: async (event, signal) => {
+          const target = event.target;
+          if (target.kind === 'explore') {
+            if (signal.aborted || !searchView.current || !searchSettings.enabled) return 'unavailable';
+            if (target.result) searchView.current.show(target.result);
+            else if (!target.command || !searchView.current.command(target.command)) return 'unavailable';
+            onExplore();
+            await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+            return signal.aborted ? 'unavailable' : 'applied';
+          }
+          if (['open', 'expand', 'spotlight', 'compare', 'back', 'collapse'].includes(target.kind)) {
+            if (!catalog) {
+              if (target.kind === 'back' || target.kind === 'collapse') { acceptedPresentation.current = null; setPresentation(null); return 'applied'; }
+              if (!('id' in target) || !presentationSources(content, media).some(source => source.id === target.id)) return 'unavailable';
+              const next = validatePresentation({ layout: 'detail', sources: [target.id], status: 'ready' }, content, media);
+              acceptedPresentation.current = next; setPresentation(next);
+            } else if (!catalogCommand.current?.(target)) return 'unavailable';
+            onExplore();
+            await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+            if (signal.aborted) return 'unavailable';
+            if ('id' in target) return navigateVisitorView(siteRoot.current, { kind: catalog ? 'entity' : 'source', id: target.id }, signal, manualInteraction);
+            if (target.kind === 'compare') return navigateVisitorView(siteRoot.current, { kind: 'entity', id: target.ids[0] }, signal, manualInteraction);
+            return navigateVisitorView(siteRoot.current, { kind: 'current' }, signal, manualInteraction);
+          }
+          return navigateVisitorView(siteRoot.current, target as Parameters<typeof navigateVisitorView>[1], signal, manualInteraction);
+        }, onPlan: event => {
         if (catalog) {
           try { setCatalogPlan(validatePlan(event.catalogPlan, catalog, catalog.id, media ?? undefined)); }
           catch { onCatalogEvent?.({ type: 'presentation_rejected', kind: 'display' }); throw new Error('The site could not prepare that view. Your current view is still available.'); }
@@ -234,7 +281,7 @@ export default function VisitorAssistant({ content, slug, entered, onExplore, on
     }
   }
   function switchMode(next: 'chat' | 'voice') {
-    voice.cancel(); pending.current?.abort(); setMode(next); setError(''); onExplore();
+    voice.cancel(); pending.current?.abort(); searchView.current?.cancel(); setMode(next); setError(''); onExplore();
   }
   function resetView() {
     requestControlFocus(activeMode === 'chat', activeMode);
@@ -251,25 +298,27 @@ export default function VisitorAssistant({ content, slug, entered, onExplore, on
     : activeMode === 'chat' && state.chatRemaining === 0 ? 'Chat has reached its daily limit. Please return after the daily reset.'
     : voiceExhausted && !voiceBusy && settings.mode !== 'chat' ? 'Voice has reached its daily limit. Continue by typing below.' : '');
 
-  return <MotionConfig reducedMotion="user" transition={{ ...revealTransition, duration: 0.36, layout: surfaceTransition }}><LayoutGroup id={layoutId}>
-    <motion.section ref={assistantRoot} layout={!reduce} className={styles.assistant} aria-label="Site assistant">
-      {(settings.mode === 'both' || settings.mode === 'voice' && (activeMode === 'chat' || voiceExhausted && !voiceBusy)) && <motion.div layout="position" className={styles.modes} role="group" aria-label="Conversation mode" {...reveal}>
+  const modeControls = (settings.mode === 'both' || settings.mode === 'voice' && (activeMode === 'chat' || voiceExhausted && !voiceBusy)) && <motion.div layout="position" className={styles.modes} role="group" aria-label="Conversation mode" {...reveal}>
         {(['voice', 'chat'] as const).map(option => <motion.button type="button" key={option} aria-pressed={activeMode === option} disabled={option === 'voice' && voiceExhausted}
           title={option === 'voice' && voiceExhausted ? 'Daily voice limit reached' : undefined} onClick={() => switchMode(option)} whileTap={reduce ? undefined : { scale: 0.96 }}>
           {activeMode === option && <motion.span layoutId="selected-mode" className={styles.modeSelection} style={{ borderRadius: 30 }} transition={spring}/>}
           <span className={styles.modeLabel}>{option === 'voice' ? <AudioLines size={14}/> : <MessageCircle size={14}/>} {option === 'voice' ? 'Voice' : 'Chat'}</span>
         </motion.button>)}
-      </motion.div>}
+      </motion.div>;
+
+  return <MotionConfig reducedMotion="user" transition={{ ...revealTransition, duration: 0.36, layout: surfaceTransition }}><LayoutGroup id={layoutId}>
+    <motion.section ref={assistantRoot} className={styles.assistant} aria-label="Site assistant">
+      {activeMode === 'chat' && <>{!entered && identity}{modeControls}</>}
       <AnimatePresence mode="wait" initial={false}>
-        {activeMode === 'voice' ? <ModeSurface key="voice" {...reveal} onAnimationComplete={restoreControlFocus}>
+        {activeMode === 'voice' ? <VisitorVoiceStage key="voice" error={Boolean(error || voice.error)} entered={entered} identity={identity} status={status || searchActivity || liveVoice.activity || (liveVoice.updating ? 'Updating view · microphone paused…' : voice.phase === 'connecting' ? 'Connecting…' : voice.phase === 'thinking' ? 'Thinking…' : '')} hint={demo ? 'Preview voice · no microphone or AI calls' : 'Tap the wave whenever you’re ready'}>
           <motion.button ref={waveControl} type="button" className="site-wave" aria-label={voiceLabel} aria-pressed={voiceBusy} disabled={disabled && !voiceBusy}
             onClick={event => { if (voiceBusy && event.currentTarget.matches(':focus-visible')) requestControlFocus(); startVoice(); }}
             onKeyDown={event => { if (event.key === 'Escape' && voiceBusy) { event.preventDefault(); event.stopPropagation(); requestControlFocus(); voice.cancel(); } }}
-            animate={{ height: entered ? 80 : 140 }} transition={{ ...surfaceTransition, duration: reduce ? 0 : motionTiming.reflow }}>
+            >
             <Waveform phase={voice.phase} inputAnalyser={voice.inputAnalyser} outputAnalyser={voice.outputAnalyser}/>
           </motion.button>
-          <p className={styles.voiceNote} role="status">{liveVoice.updating ? 'Updating view · microphone paused…' : voice.phase === 'listening' ? 'Listening · speak naturally · tap to end' : voice.phase === 'thinking' ? 'Thinking…' : voice.phase === 'speaking' ? 'Speaking · you can interrupt · tap to end' : voice.phase === 'connecting' ? 'Connecting…' : demo ? 'Preview voice · no microphone or AI calls' : 'Tap the wave whenever you’re ready'}</p>
-        </ModeSurface> : <ModeSurface key="chat" className={styles.card} {...reveal} onAnimationComplete={restoreControlFocus}>
+          <span className={styles.srOnly}>{voice.phase === 'listening' ? 'Listening · speak naturally · tap to end' : voice.phase === 'speaking' ? 'Speaking · you can interrupt · tap to end' : ''}</span>
+        </VisitorVoiceStage> : <ModeSurface key="chat" className={styles.card} {...reveal} onAnimationComplete={restoreControlFocus}>
           <motion.div layout="position" className={styles.intro}>
             <span className={styles.eyebrow}>{presentation ? 'KEEP EXPLORING' : 'THE SITE, AT YOUR DIRECTION'}</span>
             {!presentation && <h2>What would you like to see?</h2>}
@@ -289,11 +338,23 @@ export default function VisitorAssistant({ content, slug, entered, onExplore, on
           <div className={styles.composerMeta}><span><span className={styles.statusDot}/>{demo ? 'Preview · no AI calls' : 'AI guide · information from this site'}</span><span className={styles.keyboardHint}>Enter to explore <CornerDownLeft size={10}/></span>{text.length > 1600 && <span>{text.length}/2000</span>}</div>
         </ModeSurface>}
       </AnimatePresence>
-      <AnimatePresence initial={false}>{status && <motion.p key={status} className={styles.status} role={error || voice.error ? 'alert' : 'status'} initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} transition={{ duration: reduce ? 0 : 0.4 }}>{status}</motion.p>}</AnimatePresence>
+      {activeMode === 'voice' && modeControls}
+      <AnimatePresence initial={false}>{status && activeMode !== 'voice' && <motion.p key={status} className={styles.status} role={error || voice.error ? 'alert' : 'status'} initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} transition={{ duration: reduce ? 0 : 0.4 }}>{status}</motion.p>}</AnimatePresence>
       {activeMode === 'voice' && !voiceBusy && !!(voice.error || liveVoice.message || error) && !!state?.chatRemaining && state.enabled && <button type="button" className={styles.fallback} onClick={() => { requestControlFocus(false, 'chat'); switchMode('chat'); }}>Continue by typing</button>}
-      {activeMode === 'voice' && <p className={styles.voiceMeta}>{demo ? 'Preview · no AI calls' : 'AI voice · information from this site'}</p>}
-      {catalog ? <CatalogExplorer key={catalog.id} catalog={catalog} media={media} resolveAssetUrl={resolveAssetUrl} onPhotoView={onPhotoView} accent={content.accent} plan={catalogPlan} pending={preparingView || liveVoice.active && liveVoice.phase === 'thinking'} showComposer={false} onStateChange={next => { catalogState.current = next; updateContext(getContext()); }} onInteraction={() => { manualInteraction(); onExplore(); }} onOutcome={event => onCatalogEvent?.({ ...event, type: 'outcome' })} onPresentation={plan => { acceptedCatalogPlan.current = plan; onCatalogEvent?.({ type: 'presentation_accepted', kind: 'display', operation: plan.operation }); updateContext(getContext()); }}/>
+      <motion.div className={styles.results} initial={false} animate={{ opacity: entered || activeMode === 'chat' ? 1 : .55 }} transition={{ duration: reduce ? 0 : .8 }}>
+      {opening}
+      {searchSettings.enabled && <SearchExplore handleRef={searchView} content={content} slug={slug} onInteraction={manualInteraction} onContext={searchContextChanged} onActivity={setSearchActivity}/>}
+      {catalog ? <CatalogExplorer commandRef={catalogCommand} key={catalog.id} catalog={catalog} media={media} resolveAssetUrl={resolveAssetUrl} onPhotoView={onPhotoView} accent={content.accent} plan={catalogPlan} pending={preparingView || liveVoice.active && liveVoice.phase === 'thinking'} showComposer={false} onStateChange={next => { catalogState.current = next; updateContext(getContext()); }} onInteraction={() => { manualInteraction(); onExplore(); }} onOutcome={event => onCatalogEvent?.({ ...event, type: 'outcome' })} onPresentation={plan => { acceptedCatalogPlan.current = plan; onCatalogEvent?.({ type: 'presentation_accepted', kind: 'display', operation: plan.operation }); updateContext(getContext()); }}/>
         : <SitePresentation content={content} media={media} presentation={presentation} busy={preparingView || liveVoice.active && liveVoice.phase === 'thinking'} onReset={resetView} onInteraction={manualInteraction}/>}
+      {!catalog && !presentation && <div className="site-cards" data-visitor-component="collection">
+        {presentationSources(content, media).filter(source => ['section', 'hours', 'contact'].includes(source.kind)).map(source => <motion.button key={source.id} type="button" className="site-card" data-source-id={source.id} aria-label={`Explore ${source.title}`}
+          onClick={() => { manualInteraction(); onExplore(); const next: Presentation = { layout: 'detail', sources: [source.id], status: 'ready' }; acceptedPresentation.current = next; setPresentation(next); }}
+          layout={reduce ? false : 'position'} initial={reduce ? false : { opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={revealTransition}>
+          <h2>{source.title}</h2>{source.kind === 'section' && <EntityMedia targetType="section" targetId={source.id.slice(8)} interactive={false}/>}
+          <p className="clamp-copy">{source.body}</p><span className="site-card-action">Take a closer look</span>
+        </motion.button>)}
+      </div>}
+      </motion.div>
     </motion.section>
     {liveVoice.active && typeof document !== 'undefined' && createPortal(<button type="button" className={styles.endVoice} aria-label="End voice conversation" style={{ borderColor: content.accent }}
       onClick={event => {
