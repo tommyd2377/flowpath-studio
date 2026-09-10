@@ -13,8 +13,9 @@ import { detailPlan, comparisonPlan, initialInteraction } from '../../packages/p
 
 const fixture = (name: string) => validateCatalog(JSON.parse(readFileSync(new URL(`../../fixtures/catalogs/${name}.json`, import.meta.url), 'utf8')));
 
-test('all eight registered semantic components retain independent schema identities', () => {
-  assert.equal(Object.keys(platformLibrary.components).length, 9);
+test('all seven registered semantic components retain independent schema identities', () => {
+  assert.equal(Object.keys(platformLibrary.components).length, 8);
+  assert.ok(!('CriteriaControls' in platformLibrary.components));
   for (const name of ['tequila', 'bookstore', 'classes']) {
     const catalog = fixture(name);
     const plan = defaultPresentation(catalog);

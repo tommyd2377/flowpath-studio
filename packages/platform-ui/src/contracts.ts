@@ -222,5 +222,7 @@ export function validatePlan(input: unknown, catalog: KnowledgeCatalog, snapshot
     } else if (component.capabilityIds?.length) invalid('Capability references belong to actions components.');
   }
   if (plan.transition.targetComponentId && !plan.components.some(component => component.id === plan.transition.targetComponentId)) invalid('Transition target is absent from the plan.');
-  return plan;
+  // Older saved plans may contain the retired filter panel. Constraints remain in stateUpdate.
+  return { ...plan, components: plan.components.filter(component => component.type !== 'criteria'),
+    transition: plan.transition.targetComponentId === 'criteria' ? { type: 'none' as const } : plan.transition };
 }

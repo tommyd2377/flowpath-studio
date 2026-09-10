@@ -95,10 +95,10 @@ test.describe('published validated destinations', () => {
     return composer;
   }
 
-  for (const target of ['collection', 'criteria', 'relationships'] as const) {
+  for (const target of ['collection', 'relationships'] as const) {
     test(`${target} is revealed after settling without stealing composer focus`, async ({ page }) => {
       await page.setViewportSize({ width: 1000, height: 650 });
-      if (target === 'criteria') await page.emulateMedia({ reducedMotion: 'reduce' });
+      if (target === 'collection') await page.emulateMedia({ reducedMotion: 'reduce' });
       await open(page, targetPlan(catalog, target));
       const composer = await ask(page);
       const slot = page.locator(`[data-platform-slot="${target}"]:not([inert])`);
@@ -109,7 +109,7 @@ test.describe('published validated destinations', () => {
       await settled(page);
       await expect(composer).toBeFocused();
       expect(await page.evaluate(() => scrollY)).toBeGreaterThan(100);
-      if (target === 'criteria') expect(await slot.evaluate(element => element.getAnimations({ subtree: true }).filter(animation => animation.playState === 'running'))).toHaveLength(0);
+      if (target === 'collection') expect(await slot.evaluate(element => element.getAnimations({ subtree: true }).filter(animation => animation.playState === 'running'))).toHaveLength(0);
     });
   }
 
@@ -134,7 +134,7 @@ test.describe('published validated destinations', () => {
   test('the opening is not a Back step and equivalent responses do not duplicate history', async ({ page }) => {
     await open(page, targetPlan(catalog, 'relationships'));
     const back = page.locator('.platform-view-toolbar').getByRole('button', { name: 'Back', exact: true });
-    await expect(back).toBeDisabled();
+    await expect(back).toHaveCount(0);
     for (let turn = 0; turn < 2; turn++) {
       const response = page.waitForResponse(response => response.url().endsWith(`/api/visitor/${site.slug}`) && response.request().method() === 'POST');
       await ask(page); await response;
@@ -143,7 +143,7 @@ test.describe('published validated destinations', () => {
     }
     await back.click();
     await expect(page.locator('[data-platform-slot="relationships"]')).toHaveCount(0);
-    await expect(back).toBeDisabled();
+    await expect(back).toHaveCount(0);
   });
 
   test('model filter replacements and reset apply with the view; Back and old plans preserve filters', async ({ page }) => {
@@ -152,58 +152,35 @@ test.describe('published validated destinations', () => {
     ] };
     let responsePlan: PresentationPlan = { ...filteredView, stateUpdate: { filters: [{ attributeId: 'price', operator: 'gte', value: 85 }] } };
     await open(page, () => responsePlan);
-    const price = page.locator('.platform-explorer').getByRole('spinbutton', { name: /^Price/ });
-    await price.fill('40');
-    await expect(page.locator('.platform-item')).toHaveCount(1);
+    await expect(page.getByRole('region', { name: 'Refine the collection' })).toHaveCount(0);
     await ask(page);
-    await expect(price).toHaveValue('85');
-    await expect(page.getByRole('list', { name: 'Active filters' })).toContainText('At least $85.00');
     await expect(page.locator('.platform-item')).toHaveCount(1);
     await expect(page.locator('.platform-item')).toContainText('Wheel Skills');
     responsePlan = { ...filteredView, stateUpdate: { filters: [] } };
     await ask(page);
-    await expect(price).toHaveValue('');
     await expect(page.locator('.platform-item')).toHaveCount(5);
     await page.locator('.platform-view-toolbar').getByRole('button', { name: 'Back', exact: true }).click();
-    await expect(price).toHaveValue('85');
     await expect(page.locator('.platform-item')).toHaveCount(1);
     responsePlan = filteredView;
     await ask(page);
-    await expect(price).toHaveValue('85');
     await expect(page.locator('.platform-item')).toHaveCount(1);
     responsePlan = { ...filteredView, stateUpdate: { filters: [{ attributeId: 'fabricated-price', operator: 'lte', value: 1 }] } };
     await ask(page);
     await expect(page.getByRole('region', { name: 'Site assistant' }).getByRole('alert')).toContainText('current view is still available');
-    await expect(price).toHaveValue('85');
     await expect(page.locator('.platform-item')).toHaveCount(1);
   });
 
-  test('a late model filter update cannot overwrite a newer manual filter', async ({ page }) => {
+  test('manual All items cancels a pending model filter update', async ({ page }) => {
     let release!: () => void;
     const delayed = new Promise<void>(resolve => { release = resolve; });
     await open(page, { ...targetPlan(catalog, 'collection'), stateUpdate: { filters: [{ attributeId: 'price', operator: 'gte', value: 85 }] } }, () => delayed);
     await ask(page);
     await expect(page.locator('.platform-view-status')).toHaveText('Shaping your view…');
-    const price = page.locator('.platform-explorer').getByRole('spinbutton', { name: /^Price/ });
-    await price.fill('40'); release();
+    await page.locator('.platform-view-toolbar').getByRole('button', { name: 'All items', exact: true }).click(); release();
     await expect(page.locator('.platform-view-status')).not.toHaveText('Shaping your view…');
-    await expect(price).toHaveValue('40');
-    await expect(page.locator('.platform-item')).toHaveCount(1);
-    await expect(page.locator('.platform-item')).toContainText('Drawing from Observation');
+    await expect(page.locator('.platform-item')).toHaveCount(5);
   });
 
-  test('manual filter disclosure cancels pending model work before expanding', async ({ page }) => {
-    let release!: () => void;
-    const delayed = new Promise<void>(resolve => { release = resolve; });
-    await open(page, targetPlan(catalog, 'relationships'), () => delayed);
-    await ask(page);
-    await expect(page.locator('.platform-view-status')).toHaveText('Shaping your view…');
-    await page.getByRole('button', { name: 'All 6 filters', exact: true }).click();
-    release();
-    await expect(page.getByRole('button', { name: 'Fewer filters', exact: true })).toBeVisible();
-    await expect(page.locator('.platform-view-status')).not.toHaveText('Shaping your view…');
-    await expect(page.locator('[data-platform-slot="relationships"]')).toHaveCount(0);
-  });
 });
 
 test('a delayed detail focus cannot steal a newer keyboard choice of Back', async ({ page }) => {
@@ -241,26 +218,19 @@ test('a delayed detail focus cannot steal a newer keyboard choice of Back', asyn
 
 test('demo requests replace an old budget and show all resets it with reversible history', async ({ page }) => {
   await page.goto('/lab'); await settled(page);
-  const price = page.getByRole('spinbutton', { name: /^Price/ });
   const composer = page.getByRole('textbox', { name: 'What are you looking for?', exact: true });
   const back = page.locator('.platform-view-toolbar').getByRole('button', { name: 'Back', exact: true });
-  await price.fill('40');
+  await composer.fill('up to $40'); await composer.press('Enter');
   await expect(page.locator('.platform-item')).toHaveCount(1);
   await composer.fill('up to $72'); await composer.press('Enter');
-  await expect(price).toHaveValue('72');
   await expect(page.locator('.platform-item')).toHaveCount(3);
   await back.click();
-  await expect(price).toHaveValue('40');
   await expect(page.locator('.platform-item')).toHaveCount(1);
   await composer.fill('show all'); await composer.press('Enter');
-  await expect(price).toHaveValue('');
   await expect(page.locator('.platform-item')).toHaveCount(4);
   await back.click();
-  await expect(price).toHaveValue('40');
   await expect(page.locator('.platform-item')).toHaveCount(1);
   await composer.fill('under $48'); await composer.press('Enter');
-  await expect(price).toHaveValue('48');
-  await expect(page.getByRole('list', { name: 'Active filters' })).toContainText('Under $48.00');
   await expect(page.locator('.platform-item')).toHaveCount(1);
 });
 

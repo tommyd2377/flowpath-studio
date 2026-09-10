@@ -313,3 +313,41 @@ test('voice spotlight, reading view, comparison and back reuse the catalog witho
   expect(await page.evaluate(() => window.__visitorQuality.calls)).toBe(1);
   await page.getByRole('button', { name: 'End voice conversation', exact: true }).click();
 });
+
+for (const width of [390, 1600]) for (const reducedMotion of ['reduce', 'no-preference'] as const) test(`chat dock expands and submits at ${width}px with ${reducedMotion}`, async ({ page }, info) => {
+  await page.setViewportSize({ width, height: 900 });
+  await page.emulateMedia({ reducedMotion });
+  await prepare(page, 'chat');
+  const dock = page.locator('.platform-conversation-dock');
+  const input = page.getByRole('textbox', { name: 'What would you like to see?', exact: true });
+  const original = await input.elementHandle();
+  const suggestions = page.getByLabel('Ideas to explore');
+  await expect(dock).toHaveAttribute('data-expanded', 'false');
+  await expect(suggestions).toHaveCount(0);
+  await expect(page.getByText('THE SITE, AT YOUR DIRECTION', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('AI guide · information from this site', { exact: true })).toHaveCount(0);
+  await input.click();
+  await expect(dock).toHaveAttribute('data-expanded', 'true');
+  await expect(suggestions).toBeVisible();
+  await expect.poll(() => page.locator('.platform-conversation-surface').evaluate(element => getComputedStyle(element).getPropertyValue('--composer-progress').trim())).toBe('1');
+  await expect.poll(async () => (await input.boundingBox())!.y).toBeGreaterThan(180);
+  await page.screenshot({ path: info.outputPath('chat-expanded.png') });
+  await suggestions.getByRole('button').first().click();
+  await expect(dock).toHaveAttribute('data-expanded', 'false');
+  await expect(suggestions).toHaveCount(0);
+  await expect.poll(async () => (await input.boundingBox())!.y).toBeLessThan(100);
+  expect(await original!.evaluate(element => element.isConnected)).toBe(true);
+  await expect(input).not.toHaveAttribute('readonly');
+  await input.click(); await input.fill('Show me more'); await input.press('Enter');
+  await expect(dock).toHaveAttribute('data-expanded', 'false');
+  await expect(suggestions).toHaveCount(0);
+  await expect(input).not.toHaveAttribute('readonly');
+  await input.click(); await input.press('Escape');
+  await expect(dock).toHaveAttribute('data-expanded', 'false');
+  await page.mouse.wheel(0, 1400);
+  // Wait for compositor scroll delivery before asserting the dock and capturing it.
+  await page.waitForTimeout(350);
+  await expect.poll(async () => Math.abs((await dock.boundingBox())!.y)).toBeLessThan(2);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath('chat-docked.png') });
+});

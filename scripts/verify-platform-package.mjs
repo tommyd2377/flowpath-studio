@@ -32,8 +32,8 @@ const html = renderToStaticMarkup(createElement(CatalogExplorer, {catalog, showC
 assert.match(html, /The Imaginary Harbor/);
 assert.match(html, /Explore the collection/);
 const criteriaPlan = defaultPresentation(catalog);
-assert.ok(criteriaPlan.components.some(component => component.type === 'criteria'));
-assert.match(renderToStaticMarkup(createElement(CatalogExplorer, {catalog, plan:criteriaPlan, showComposer:false})), /Find your fit/);
+assert.ok(!criteriaPlan.components.some(component => component.type === 'criteria'));
+assert.doesNotMatch(renderToStaticMarkup(createElement(CatalogExplorer, {catalog, plan:criteriaPlan, showComposer:false})), /Find your fit/);
 const media = validateMediaLibrary({schemaVersion:1,id:'media-1',assets:[{id:'photo-1',width:1200,height:800,caption:'Publisher photo',alt:'A publisher-provided photo'}],albums:[],associations:[]});
 const photoPlan = planForIntent(catalog, 'show photos', undefined, media);
 assert.ok(preflightPresentation(compilePresentation(catalog, photoPlan, catalog.id, media)).root);

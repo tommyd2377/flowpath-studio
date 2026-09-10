@@ -146,68 +146,10 @@ function expectMeasuredReflow(trace: MotionTrace, name: string, expectedMs: numb
   expect(span).toBeLessThan(expectedMs * 1.4);
 }
 
-test('criteria disclose over 450 ms while retaining the first four controls and keyboard focus', async ({ page }, info) => {
+test('the retired criteria panel is absent from the shared library', async ({ page }) => {
   await openGallery(page, 'Classes & experiences');
-  const criteria = page.getByRole('region', { name: 'Refine the collection' });
-  const controls = criteria.locator('input, select');
-  await expect(controls).toHaveCount(4);
-  const original = await controls.elementHandles();
-  const price = criteria.getByRole('spinbutton', { name: /^Price/ });
-  await price.fill('100');
-  await settled(page);
-  const toggle = criteria.getByRole('button', { name: 'All 6 filters', exact: true });
-  const toggleNode = await toggle.elementHandle();
-  await toggle.focus();
-  await recordMotion(page, { criteria: '.platform-criteria', extra: '[data-platform-disclosure="criteria"]' });
-  await page.keyboard.press('Enter');
-  const expanded = await finishMotion(page, info, 'criteria-expand');
-  await expect(controls).toHaveCount(6);
-  await expect(criteria.getByRole('button', { name: 'Fewer filters', exact: true })).toBeFocused();
-  expect(await toggleNode!.evaluate(element => element === document.activeElement)).toBeTruthy();
-  expectIntermediateGeometry(expanded, 'criteria', 'height');
-  expectOpacityTransition(expanded, 'extra');
-  expectMeasuredReflow(expanded, 'criteria', 450);
-  for (let index = 0; index < original.length; index++) expect(await original[index].evaluate((element, index) => element === document.querySelectorAll('.platform-criteria input, .platform-criteria select')[index], index)).toBeTruthy();
-  await expect(price).toHaveValue('100');
-
-  await recordMotion(page, { criteria: '.platform-criteria', extra: '[data-platform-disclosure="criteria"]' });
-  await page.keyboard.press('Enter');
-  const collapsed = await finishMotion(page, info, 'criteria-collapse');
-  expectIntermediateGeometry(collapsed, 'criteria', 'height');
-  expectOpacityTransition(collapsed, 'extra');
-  expect(collapsed.frames.some(frame => frame.elements.extra.some(element => element.inert && element.hidden && element.height > 1))).toBeTruthy();
-  await expect(controls).toHaveCount(4);
-  await expect(criteria.getByRole('button', { name: 'All 6 filters', exact: true })).toBeFocused();
-  for (let index = 0; index < original.length; index++) expect(await original[index].evaluate((element, index) => element === document.querySelectorAll('.platform-criteria input, .platform-criteria select')[index], index)).toBeTruthy();
-  await expect(price).toHaveValue('100');
-});
-
-test('filter reflow passes through intermediate heights and zero-result exits remain inert', async ({ page }, info) => {
-  await openGallery(page);
-  const collection = await page.locator('.platform-collection').elementHandle();
-  const price = page.getByRole('region', { name: 'Refine the collection' }).getByRole('spinbutton', { name: /^Price/ });
-  await recordMotion(page, { items: '.platform-collection [data-platform-height]', collection: '.platform-collection', leaving: '.platform-item[data-entity-id="agave-anejo"]' });
-  await price.fill('50');
-  const narrowed = await finishMotion(page, info, 'filter-reflow');
-  await expect(page.locator('.platform-item')).toHaveCount(2);
-  expectIntermediateGeometry(narrowed, 'items', 'height');
-  expectMeasuredReflow(narrowed, 'items', 480);
-  expect(narrowed.frames.some(frame => frame.elements.leaving.some(element => element.inert && element.hidden && element.opacity > 0 && element.opacity < 1))).toBeTruthy();
-  await expect(price).toBeFocused();
-
-  await recordMotion(page, { items: '.platform-items', leaving: '.platform-item', empty: '.platform-empty' });
-  await price.fill('1');
-  const empty = await finishMotion(page, info, 'filter-to-zero');
-  expectOpacityTransition(empty, 'leaving');
-  expect(empty.frames.some(frame => frame.elements.leaving.length > 0 && frame.elements.leaving.every(element => element.inert && element.hidden))).toBeTruthy();
-  await expect(page.locator('.platform-item')).toHaveCount(0);
-  await expect(page.getByRole('heading', { name: 'A little too specific.', exact: true })).toBeVisible();
-  expect(await collection!.evaluate(element => element === document.querySelector('.platform-collection'))).toBeTruthy();
-  await expect(price).toBeFocused();
-  await page.locator('.platform-empty').getByRole('button', { name: 'Clear filters', exact: true }).click();
-  await settled(page);
-  await expect(page.locator('.platform-item')).toHaveCount(4);
-  await expect(page.locator('.platform-explorer [inert]')).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Refine the collection' })).toHaveCount(0);
+  await expect(page.locator('.platform-slot-criteria')).toHaveCount(0);
 });
 
 test('selection reveals over 450 ms and comparison shifts workspace over 520 ms', async ({ page }, info) => {
@@ -287,14 +229,7 @@ test('reduced motion has no residual transforms or invisible keyboard targets af
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openGallery(page, 'Classes & experiences');
-  const criteria = page.getByRole('region', { name: 'Refine the collection' });
-  await criteria.getByRole('button', { name: 'All 6 filters', exact: true }).click();
-  await expect(criteria.getByRole('combobox', { name: 'Materials included', exact: true })).toBeVisible();
-  await criteria.getByRole('button', { name: 'Fewer filters', exact: true }).click();
-  await expect(criteria.locator('input, select')).toHaveCount(4);
-  await criteria.getByRole('spinbutton', { name: /^Price/ }).fill('1');
-  await expect(page.locator('.platform-item')).toHaveCount(0);
-  await page.locator('.platform-empty').getByRole('button', { name: 'Clear filters', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Refine the collection' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Introduction to Handbuilding', exact: true }).click();
   await page.locator('.platform-view-toolbar').getByRole('button', { name: 'Back', exact: true }).click();
   await settled(page);

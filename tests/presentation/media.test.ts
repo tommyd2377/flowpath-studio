@@ -91,8 +91,9 @@ test('runtime shortlist can join a seven-section gallery composition without exc
   validatePlan(plan, catalogWithAction, catalog.id, library);
   plan.components.push({ id: 'selection', type: 'selection', variant: 'compact', entityIds: [], attributeIds: [] });
   const parsed = preflightPresentation(compilePresentation(catalogWithAction, plan, catalog.id, library));
-  assert.equal((parsed.root!.props.sections as unknown[]).length, 8);
-  assert.equal(parsed.meta.statementCount, 9);
+  assert.equal((parsed.root!.props.sections as unknown[]).length, 7);
+  assert.doesNotMatch(compilePresentation(catalogWithAction, plan, catalog.id, library), /CriteriaControls/);
+  assert.equal(parsed.meta.statementCount, 8);
   assert.throws(() => validatePlan({ ...plan, components: [...plan.components, plan.components[0]] }, catalogWithAction, catalog.id, library));
 });
 

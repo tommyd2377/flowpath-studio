@@ -9,13 +9,13 @@ import { defaultPresentation } from '../../packages/platform-ui/src/catalog.js';
 
 const catalog = validateCatalog(JSON.parse(readFileSync(new URL('../../fixtures/catalogs/tequila.json', import.meta.url), 'utf8')));
 
-test('mount plans apply voice constraints before rendering with editable manual filters', () => {
+test('mount plans apply voice constraints before rendering without filter controls', () => {
   const plan: PresentationPlan = { ...defaultPresentation(catalog), stateUpdate: { filters: [{ attributeId: 'price', operator: 'gt', value: 48 }] } };
   const html = renderToStaticMarkup(createElement(CatalogExplorer, { catalog, plan, showComposer: false }));
   assert.match(html, /Example Añejo/);
   assert.doesNotMatch(html, /Example Blanco|Example Reposado/);
   assert.match(html, /REFINED FOR YOU/);
-  assert.match(html, /Refine the collection/);
+  assert.doesNotMatch(html, /Refine the collection|Find your fit/);
 });
 
 test('invalid mount updates retain an unfiltered useful view and an error', () => {

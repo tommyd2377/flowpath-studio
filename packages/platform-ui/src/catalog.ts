@@ -57,6 +57,5 @@ export function defaultPresentation(catalog: KnowledgeCatalog, snapshotId = cata
   const attributes = usefulAttributes(catalog);
   return validatePlan({ schemaVersion: 1, snapshotId, operation: 'discover', components: [
     { id: 'collection', type: 'collection', variant: 'grid', entityIds: [], attributeIds: attributes.slice(0, 6).map(attribute => attribute.id) },
-    ...(attributes.length ? [{ id: 'criteria' as const, type: 'criteria' as const, variant: 'compact', entityIds: [], attributeIds: attributes.map(attribute => attribute.id) }] : []),
   ], transition: { type: 'none' } }, catalog, snapshotId);
 }

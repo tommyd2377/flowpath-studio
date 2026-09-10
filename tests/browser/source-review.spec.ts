@@ -140,9 +140,6 @@ test('source excerpts and explicit replacement preserve corrections, resolve upd
   const card = explorer.locator(`.platform-item[data-entity-id="${alphaId}"]`);
   await expect(card.locator('img')).toHaveAttribute('src', new RegExp(photoId));
   await card.locator('img').evaluate(async (image: HTMLImageElement) => { await image.decode(); });
-  await explorer.getByRole('spinbutton', { name: /Price/ }).fill('14'); await expect(explorer.locator('.platform-item')).toHaveCount(0);
-  await explorer.getByRole('spinbutton', { name: /Price/ }).fill('16'); await expect(explorer.locator('.platform-item')).toHaveCount(1);
-  await explorer.getByRole('spinbutton', { name: /Price/ }).fill('25'); await expect(explorer.locator('.platform-item')).toHaveCount(2);
   for (const name of ['Alpha Workshop', 'Beta Workshop']) await explorer.getByRole('button', { name: `Select ${name} for comparison`, exact: true }).click();
   await explorer.getByRole('button', { name: 'Compare selections', exact: true }).click();
   await expect(explorer.getByRole('region', { name: 'Compare published attributes' })).toBeVisible();

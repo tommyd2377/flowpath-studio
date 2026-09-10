@@ -16,6 +16,11 @@ async function createSite(page: Page, enabled = true, mode: 'chat' | 'voice' = '
   } })).site;
   return (await post(`/api/sites/${site.id}`, { action: 'publish', revision: site.revision })).site as Site;
 }
+async function ask(page: Page, query: string) {
+  const input = page.getByRole('textbox', { name: 'What would you like to see?', exact: true });
+  await expect(input).not.toHaveAttribute('readonly');
+  await input.fill(query); await input.press('Enter');
+}
 test.beforeEach(async ({ page }) => {
   await page.route(/^https?:\/\//, route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort('blockedbyclient'));
   await page.addInitScript(() => { if (navigator.mediaDevices) navigator.mediaDevices.getUserMedia = async () => { throw new Error('No real microphone in offline tests'); }; });
@@ -27,10 +32,10 @@ test('published images, keyboard viewer, typed follow-up, maps and history work 
   const site = await createSite(page);
   let requests = 0; page.on('request', request => { if (request.method() === 'POST' && request.url().endsWith('/explore')) requests++; });
   await page.goto(`/s/${site.slug}`);
-  const search = page.getByRole('region', { name: 'Search and explore', exact: true });
-  await search.getByRole('button', { name: 'Images', exact: true }).click();
-  await search.getByRole('textbox').fill('Park images');
-  await search.getByRole('button', { name: 'Search', exact: true }).click();
+  const search = page.getByRole('region', { name: 'Search results', exact: true });
+  await expect(search).toHaveCount(0);
+  await expect(page.getByRole('textbox', { name: 'Search the web, images or maps' })).toHaveCount(0);
+  await ask(page, 'Find park images online');
   const image = search.getByRole('button', { name: /Open image 2:/ });
   await expect(image).toBeVisible(); await image.click();
   const viewer = page.getByRole('dialog', { name: 'Web image viewer' });
@@ -40,8 +45,7 @@ test('published images, keyboard viewer, typed follow-up, maps and history work 
   await composer.fill('Open the second photo'); await composer.press('Enter');
   await expect(viewer).toBeVisible(); expect(requests).toBe(1);
   await page.keyboard.press('Escape');
-  await search.getByRole('button', { name: 'Map', exact: true }).click();
-  await search.getByRole('textbox').fill('Show me a map of the U.S.'); await search.getByRole('button', { name: 'Search', exact: true }).click();
+  await ask(page, 'Show me a map of the U.S.');
   await expect(search.getByRole('heading', { name: 'United States overview' })).toBeVisible();
   await search.getByRole('button', { name: 'Zoom in', exact: true }).click();
   await expect(search.getByText('Overview zoom 4', { exact: true })).toBeVisible(); expect(requests).toBe(2);
@@ -51,12 +55,14 @@ test('published images, keyboard viewer, typed follow-up, maps and history work 
   await expect(image).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: info.outputPath('search-images-mobile.png'), fullPage: true });
+  await search.getByRole('button', { name: 'Back', exact: true }).click();
+  await expect(search).toHaveCount(0);
   expect(external).toEqual([]); expect(errors).toEqual([]);
 });
 
 test('disabled capability stays hidden until saved and published through Studio', async ({ page }) => {
   const site = await createSite(page, false);
-  await page.goto(`/s/${site.slug}`); await expect(page.getByRole('region', { name: 'Search and explore', exact: true })).toHaveCount(0);
+  await page.goto(`/s/${site.slug}`); await expect(page.getByRole('region', { name: 'Search results', exact: true })).toHaveCount(0);
   await page.goto('/');
   await page.getByRole('combobox', { name: 'Current site', exact: true }).selectOption(site.id);
   await page.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name: 'Content', exact: true }).click();
@@ -72,35 +78,36 @@ test('disabled capability stays hidden until saved and published through Studio'
   await page.getByRole('button', { name: 'Publish locally', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Publish locally', exact: true })).toHaveCount(0);
   await page.goto(`/s/${site.slug}`);
-  await expect(page.getByRole('region', { name: 'Search and explore', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Search results', exact: true })).toHaveCount(0);
+  await ask(page, 'Search the web for parks');
+  await expect(page.getByRole('region', { name: 'Search results', exact: true })).toBeVisible();
 });
 
 test('cancelled and failed searches retain the accepted view; map embeds use a fixed host', async ({ page }, info) => {
   const site = await createSite(page);
   await page.goto(`/s/${site.slug}`);
-  const search = page.getByRole('region', { name: 'Search and explore', exact: true });
-  await search.getByRole('textbox').fill('First search'); await search.getByRole('button', { name: 'Search', exact: true }).click();
-  await expect(search.getByRole('heading', { name: 'First search' })).toBeVisible();
+  const search = page.getByRole('region', { name: 'Search results', exact: true });
+  await ask(page, 'Search the web: First search');
+  await expect(search.getByRole('heading', { name: 'Search the web: First search' })).toBeVisible();
   await page.route(`**/api/visitor/${site.slug}/explore`, route => route.fulfill({ status: 502, json: { error: 'Synthetic provider failure' } }));
-  await search.getByRole('textbox').fill('Failed search'); await search.getByRole('button', { name: 'Search', exact: true }).click();
-  await expect(search.getByRole('alert')).toHaveText('Synthetic provider failure');
-  await expect(search.getByRole('heading', { name: 'First search' })).toBeVisible();
+  await ask(page, 'Search the web: Failed search');
+  await expect(page.getByRole('alert').filter({ hasText: 'Synthetic provider failure' })).toHaveText('Synthetic provider failure');
+  await expect(search.getByRole('heading', { name: 'Search the web: First search' })).toBeVisible();
   await page.unroute(`**/api/visitor/${site.slug}/explore`);
   let release!: () => void;
   await page.route(`**/api/visitor/${site.slug}/explore`, async route => {
     await new Promise<void>(resolve => { release = resolve; });
     await route.fulfill({ json: { result: demoExploreResult('Late search', 'web') } }).catch(() => undefined);
   });
-  await search.getByRole('textbox').fill('Late search'); await search.getByRole('button', { name: 'Search', exact: true }).click();
-  await expect(search.getByRole('button', { name: 'Stop search', exact: true })).toBeVisible();
-  await search.getByRole('button', { name: 'Images', exact: true }).click(); release();
-  await expect(search.getByRole('heading', { name: 'First search' })).toBeVisible();
+  await ask(page, 'Search the web: Late search');
+  await expect(page.getByRole('button', { name: 'Stop request', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Stop request', exact: true }).click(); release();
+  await expect(search.getByRole('heading', { name: 'Search the web: First search' })).toBeVisible();
   await page.unroute(`**/api/visitor/${site.slug}/explore`);
   const result = { ...demoExploreResult('United States map', 'map'), demo: false };
   await page.route(`**/api/visitor/${site.slug}/explore`, route => route.fulfill({ json: { result } }));
   await page.route('https://www.openstreetmap.org/export/embed.html?**', route => route.fulfill({ contentType: 'text/html', body: '<html><body style="background:#dce6e1;font-family:sans-serif"><p>Mocked interactive map transport</p></body></html>' }));
-  await search.getByRole('button', { name: 'Map', exact: true }).click();
-  await search.getByRole('textbox').fill('United States map'); await search.getByRole('button', { name: 'Search', exact: true }).click();
+  await ask(page, 'United States map');
   const frame = search.getByTitle('Interactive map: United States overview'); await expect(frame).toBeVisible();
   expect(new URL(await frame.getAttribute('src') ?? '').hostname).toBe('www.openstreetmap.org');
   await expect(search.getByRole('link', { name: '© OpenStreetMap contributors' })).toBeVisible();

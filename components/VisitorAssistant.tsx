@@ -1,9 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode, type FormEvent, type PropsWithChildren, type MutableRefObject } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode, type FormEvent, type MutableRefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { AnimatePresence, LayoutGroup, MotionConfig, motion, useIsPresent, useReducedMotion, type HTMLMotionProps } from 'motion/react';
-import { ArrowUp, ArrowUpRight, AudioLines, Clock3, CornerDownLeft, MessageCircle, Square } from 'lucide-react';
+import { AnimatePresence, LayoutGroup, MotionConfig, motion, useReducedMotion } from 'motion/react';
+import { ArrowUp, ArrowUpRight, AudioLines, Clock3, MessageCircle, Square } from 'lucide-react';
 import Waveform from './Waveform';
 import VisitorVoiceStage from './VisitorVoiceStage';
 import SitePresentation from './SitePresentation';
@@ -18,7 +18,7 @@ import { useVisitorSession } from '@/lib/use-visitor-session';
 import { captureVisitorContext, navigateVisitorView } from '@/lib/visitor-view-context';
 import type { VisitorContext } from '@/lib/visitor-request';
 import styles from './VisitorAssistant.module.css';
-import { CatalogExplorer, EntityMedia, revealTransition, surfaceTransition } from '@thevoice/platform-ui';
+import { CatalogExplorer, ConversationDock, EntityMedia, revealTransition, surfaceTransition } from '@thevoice/platform-ui';
 import { validatePlan, type KnowledgeCatalog, type PresentationPlan } from '@thevoice/platform-ui/contracts';
 import { initialInteraction, planForIntent, type CatalogInteractionState } from '@thevoice/platform-ui/interaction';
 import { openingPresentation } from '@/lib/site-opening';
@@ -27,11 +27,6 @@ import type { PlatformEventInput } from '@/lib/platform-events';
 
 const ease = [0.22, 1, 0.36, 1] as const;
 const spring = { type: 'spring', stiffness: 330, damping: 34, mass: 0.8 } as const;
-
-function ModeSurface(props: PropsWithChildren<HTMLMotionProps<'div'>>) {
-  const present = useIsPresent();
-  return <motion.div {...props} inert={!present} aria-hidden={!present}/>;
-}
 
 export default function VisitorAssistant({ content, slug, entered, onExplore, onViewChange, catalog, media, resolveAssetUrl, interactionRef, onPhotoView, onCatalogEvent, identity, opening }: {
   identity?: ReactNode; opening?: ReactNode;
@@ -61,6 +56,7 @@ export default function VisitorAssistant({ content, slug, entered, onExplore, on
   const sourceIds = useMemo(() => new Set(presentationSources(content, media).map(source => source.id)), [content, media]);
   const catalogState = useRef<CatalogInteractionState | undefined>(catalog ? initialInteraction(catalog) : undefined);
   const [text, setText] = useState('');
+  const [chatExpanded, setChatExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [searchActivity, setSearchActivity] = useState('');
   const [preparingView, setPreparingView] = useState(false);
@@ -199,10 +195,11 @@ export default function VisitorAssistant({ content, slug, entered, onExplore, on
       return result;
     } finally { if (kind !== 'greeting') setPreparingView(false); }
   }
-  async function sendChat(event: FormEvent) {
-    event.preventDefault();
-    if (!text.trim() || inFlight.current || disabled || !state?.chatRemaining) return;
-    const outgoing = text.trim();
+  async function sendChat(event?: FormEvent, question = text) {
+    event?.preventDefault();
+    if (!question.trim() || inFlight.current || disabled || !state?.chatRemaining) return;
+    const outgoing = question.trim();
+    setChatExpanded(false);
     const localSearch = searchSettings.enabled ? localExploreCommand(outgoing, searchView.current?.context()) : null;
     if (localSearch && searchView.current?.command(localSearch)) { manualInteraction(); setText(''); onExplore(); return; }
     const searchKind = searchSettings.enabled ? exploreKindForText(outgoing) : null;
@@ -281,7 +278,7 @@ export default function VisitorAssistant({ content, slug, entered, onExplore, on
     }
   }
   function switchMode(next: 'chat' | 'voice') {
-    voice.cancel(); pending.current?.abort(); searchView.current?.cancel(); setMode(next); setError(''); onExplore();
+    voice.cancel(); pending.current?.abort(); searchView.current?.cancel(); setChatExpanded(false); setMode(next); setError(''); onExplore();
   }
   function resetView() {
     requestControlFocus(activeMode === 'chat', activeMode);
@@ -308,8 +305,7 @@ export default function VisitorAssistant({ content, slug, entered, onExplore, on
 
   return <MotionConfig reducedMotion="user" transition={{ ...revealTransition, duration: 0.36, layout: surfaceTransition }}><LayoutGroup id={layoutId}>
     <motion.section ref={assistantRoot} className={styles.assistant} aria-label="Site assistant">
-      {activeMode === 'chat' && <>{!entered && identity}{modeControls}</>}
-      <AnimatePresence mode="wait" initial={false}>
+      <AnimatePresence initial={false}>
         {activeMode === 'voice' ? <VisitorVoiceStage key="voice" error={Boolean(error || voice.error)} entered={entered} identity={identity} status={status || searchActivity || liveVoice.activity || (liveVoice.updating ? 'Updating view · microphone paused…' : voice.phase === 'connecting' ? 'Connecting…' : voice.phase === 'thinking' ? 'Thinking…' : '')} hint={demo ? 'Preview voice · no microphone or AI calls' : 'Tap the wave whenever you’re ready'}>
           <motion.button ref={waveControl} type="button" className="site-wave" aria-label={voiceLabel} aria-pressed={voiceBusy} disabled={disabled && !voiceBusy}
             onClick={event => { if (voiceBusy && event.currentTarget.matches(':focus-visible')) requestControlFocus(); startVoice(); }}
@@ -318,27 +314,24 @@ export default function VisitorAssistant({ content, slug, entered, onExplore, on
             <Waveform phase={voice.phase} inputAnalyser={voice.inputAnalyser} outputAnalyser={voice.outputAnalyser}/>
           </motion.button>
           <span className={styles.srOnly}>{voice.phase === 'listening' ? 'Listening · speak naturally · tap to end' : voice.phase === 'speaking' ? 'Speaking · you can interrupt · tap to end' : ''}</span>
-        </VisitorVoiceStage> : <ModeSurface key="chat" className={styles.card} {...reveal} onAnimationComplete={restoreControlFocus}>
-          <motion.div layout="position" className={styles.intro}>
-            <span className={styles.eyebrow}>{presentation ? 'KEEP EXPLORING' : 'THE SITE, AT YOUR DIRECTION'}</span>
-            {!presentation && <h2>What would you like to see?</h2>}
-          </motion.div>
+        </VisitorVoiceStage> : <ConversationDock key="chat" expanded={chatExpanded} onDismiss={() => setChatExpanded(false)} suggestions={
+          <div className={styles.suggestions} aria-label="Ideas to explore">
+            {suggestions.map(suggestion => <motion.button key={suggestion.label} type="button" disabled={busy || disabled || !state?.chatRemaining}
+              onClick={() => { input.current?.focus({ preventScroll: true }); void sendChat(undefined, suggestion.question.slice(0, 2000)); }}
+              whileHover={reduce ? undefined : { y: -2 }} whileTap={reduce ? undefined : { scale: .97 }}><suggestion.icon size={13}/><span>{suggestion.label}</span></motion.button>)}
+          </div>}>
           <form className={styles.composer} onSubmit={event => void sendChat(event)}>
             <textarea ref={input} aria-label="What would you like to see?" placeholder={presentation ? 'Go deeper, compare, or explore something else…' : 'Show me what you have in mind…'} rows={1} maxLength={2000} value={text} readOnly={busy} disabled={disabled || !state?.chatRemaining && !busy}
-              onChange={event => setText(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }}/>
+              onFocus={() => { if (!busy) setChatExpanded(true); }} onPointerDown={() => { if (!busy) setChatExpanded(true); }}
+              onChange={event => { setText(event.target.value); if (!busy) setChatExpanded(true); }} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }}/>
             <motion.button className={styles.send} type={busy ? 'button' : 'submit'} aria-label={busy ? 'Stop request' : 'Show me'} title={busy ? 'Stop request' : 'Show me'} disabled={!busy && (disabled || !state?.chatRemaining || !text.trim())}
               onClick={event => { if (busy) { event.preventDefault(); pending.current?.abort(); } }} whileHover={reduce || !text.trim() && !busy ? undefined : { scale: 1.04 }} whileTap={reduce ? undefined : { scale: 0.93 }}>
               <AnimatePresence mode="wait" initial={false}><motion.span key={busy ? 'stop' : 'send'} initial={{ opacity: 0, y: reduce ? 0 : 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: reduce ? 0 : -5 }} transition={{ duration: reduce ? 0 : 0.24 }}>{busy ? <Square size={14} fill="currentColor"/> : <ArrowUp size={18}/>}</motion.span></AnimatePresence>
             </motion.button>
           </form>
-          <AnimatePresence initial={false}>{!presentation && <motion.div className={styles.suggestions} aria-label="Ideas to explore" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, height: 0 }}>
-            {suggestions.map((suggestion, index) => <motion.button key={suggestion.label} type="button" disabled={busy || disabled || !state?.chatRemaining} onClick={() => { setText(suggestion.question.slice(0, 2000)); input.current?.focus({ preventScroll: true }); }}
-              initial={{ opacity: 0, y: reduce ? 0 : 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reduce ? 0 : 0.7, delay: reduce ? 0 : 0.1 * index, ease }} whileHover={reduce ? undefined : { y: -2 }} whileTap={reduce ? undefined : { scale: 0.97 }}><suggestion.icon size={13}/><span>{suggestion.label}</span></motion.button>)}
-          </motion.div>}</AnimatePresence>
-          <div className={styles.composerMeta}><span><span className={styles.statusDot}/>{demo ? 'Preview · no AI calls' : 'AI guide · information from this site'}</span><span className={styles.keyboardHint}>Enter to explore <CornerDownLeft size={10}/></span>{text.length > 1600 && <span>{text.length}/2000</span>}</div>
-        </ModeSurface>}
+        </ConversationDock>}
       </AnimatePresence>
-      {activeMode === 'voice' && modeControls}
+      {modeControls}
       <AnimatePresence initial={false}>{status && activeMode !== 'voice' && <motion.p key={status} className={styles.status} role={error || voice.error ? 'alert' : 'status'} initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} transition={{ duration: reduce ? 0 : 0.4 }}>{status}</motion.p>}</AnimatePresence>
       {activeMode === 'voice' && !voiceBusy && !!(voice.error || liveVoice.message || error) && !!state?.chatRemaining && state.enabled && <button type="button" className={styles.fallback} onClick={() => { requestControlFocus(false, 'chat'); switchMode('chat'); }}>Continue by typing</button>}
       <motion.div className={styles.results} initial={false} animate={{ opacity: entered || activeMode === 'chat' ? 1 : .55 }} transition={{ duration: reduce ? 0 : .8 }}>

@@ -1,10 +1,10 @@
 'use client';
 
-import { createContext, forwardRef, useContext, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { createContext, forwardRef, useContext, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { AnimatePresence, motion, useIsPresent, useReducedMotion, useScroll, useSpring, type HTMLMotionProps } from 'motion/react';
 import { z } from 'zod';
 import { createLibrary, defineComponent, useTriggerAction, type ElementNode } from './openui.js';
-import { formatAttribute, filterEntities, filterOperatorLabel, knownAttributes, usefulAttributes } from './catalog.js';
+import { formatAttribute, filterEntities, knownAttributes } from './catalog.js';
 import type { AttributeDefinition, KnowledgeCatalog, PresentationPlan } from './contracts.js';
 import type { CatalogInteractionState } from './interaction.js';
 import { Disclosure, MotionHeight, SemanticSurface, feedbackTransition, motionTiming, revealTransition, sequenceItemVariants, sequenceVariants, surfaceTransition } from './motion.js';
@@ -92,7 +92,7 @@ function CollectionContent({ entityIds, attributeIds, variant, collectionId }: C
     </div>}
     <MotionHeight><motion.div layout={reduced ? false : 'position'} variants={reduced ? undefined : sequenceVariants} initial={reduced ? false : 'hidden'} animate="visible" className="platform-items" data-variant={variant} transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }}>
       <AnimatePresence initial={false} mode="popLayout">
-      {!entities.length && <PresentCard key="empty" className="platform-empty"><Icon name="filter" size={26}/><h4>A little too specific.</h4><p>No published items match these filters. Change a criterion to open up the possibilities.</p><button className="platform-button" type="button" onClick={() => action('clear-filters')}>Clear filters</button></PresentCard>}
+      {!entities.length && <PresentCard key="empty" className="platform-empty"><Icon name="filter" size={26}/><h4>A little too specific.</h4><p>No published items match these filters. Ask the assistant to adjust your request.</p><button className="platform-button" type="button" onClick={() => action('clear-filters')}>Clear filters</button></PresentCard>}
       {entities.slice(0, limit).map((entity, index) => {
         const selected = state.selectedIds.includes(entity.id);
         const selectDisabled = !selected && state.selectedIds.length >= 6;
@@ -113,42 +113,6 @@ function CollectionContent({ entityIds, attributeIds, variant, collectionId }: C
   </section>;
 }
 
-function Criterion({ attribute }: { attribute: AttributeDefinition }) {
-  const { catalog, state } = useCatalog();
-  const action = useAction();
-  const filter = state.filters.find(item => item.attributeId === attribute.id);
-  const id = useId();
-  if (attribute.type === 'money' || attribute.type === 'number') return <div className="platform-criterion">
-    <label htmlFor={id}>{attribute.label}<span>{attribute.currency || attribute.unit || 'Maximum'}</span></label>
-    <div className="platform-number"><span>{filterOperatorLabel(filter?.operator ?? 'lte', attribute.type)}</span><input id={id} type="number" step="any" inputMode="decimal" placeholder="Any amount" value={typeof filter?.value === 'number' ? filter.value : ''}
-      onChange={event => action('filter', { attributeId: attribute.id, operator: filter?.operator ?? 'lte', value: event.target.value === '' ? null : Number(event.target.value) })}/></div>
-  </div>;
-  if (attribute.type === 'date') return <div className="platform-criterion"><label htmlFor={id}>{attribute.label}<span>{filterOperatorLabel(filter?.operator ?? 'gte', attribute.type)}</span></label><input className="platform-date" id={id} type="date" value={typeof filter?.value === 'string' ? filter.value : ''} onChange={event => action('filter', { attributeId: attribute.id, operator: filter?.operator ?? 'gte', value: event.target.value || null })}/></div>;
-  if (attribute.type === 'boolean') return <div className="platform-criterion"><label htmlFor={id}>{attribute.label}</label><select id={id} value={filter ? String(filter.value) : ''} onChange={event => action('filter', { attributeId: attribute.id, operator: 'eq', value: event.target.value === '' ? null : event.target.value === 'true' })}><option value="">Any</option><option value="true">Yes</option><option value="false">No</option></select></div>;
-  const values = [...new Set(catalog.entities.flatMap(entity => typeof entity.attributes[attribute.id] === 'string' ? [entity.attributes[attribute.id] as string] : []))];
-  if (filter?.operator === 'contains') return <div className="platform-criterion"><label htmlFor={id}>{attribute.label}<span>Contains</span></label><input className="platform-date" id={id} type="text" value={typeof filter.value === 'string' ? filter.value : ''} onChange={event => action('filter', { attributeId: attribute.id, operator: 'contains', value: event.target.value || null })}/></div>;
-  return <div className="platform-criterion"><label htmlFor={id}>{attribute.label}</label><select id={id} value={typeof filter?.value === 'string' ? filter.value : ''} onChange={event => action('filter', { attributeId: attribute.id, operator: 'eq', value: event.target.value || null })}><option value="">Any {attribute.label.toLocaleLowerCase()}</option>{values.map(value => <option key={value} value={value}>{value}</option>)}</select></div>;
-}
-
-function CriteriaContent({ attributeIds, variant }: ComponentProps) {
-  const { catalog, state, onInteraction } = useCatalog();
-  const action = useAction();
-  const reduced = useReducedMotion();
-  const [expanded, setExpanded] = useState(variant === 'expanded');
-  const [previousVariant, setPreviousVariant] = useState(variant);
-  if (previousVariant !== variant) { setPreviousVariant(variant); setExpanded(variant === 'expanded'); }
-  const attributes = usefulAttributes(catalog, definitions(catalog, attributeIds));
-  return <motion.section layout={!reduced} style={{ borderRadius: 12 }} transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }} className="platform-criteria" aria-label="Refine the collection"><motion.div layout={reduced ? false : 'position'} transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }}>
-    <SectionHeading eyebrow="WHAT MATTERS TO YOU" title="Find your fit"><Icon name="filter"/></SectionHeading>
-    {!!state.filters.length && <ul className="platform-active-filters" aria-label="Active filters">{state.filters.map((filter, index) => {
-      const attribute = catalog.attributes.find(item => item.id === filter.attributeId)!;
-      return <li key={index}>{attribute.label}: {filter.value === null ? 'Not provided' : `${filterOperatorLabel(filter.operator, attribute.type)} ${formatAttribute(filter.value, attribute)}`}</li>;
-    })}</ul>}
-    <div className="platform-criteria-fields">{attributes.slice(0, 4).map(attribute => <Criterion key={attribute.id} attribute={attribute}/>)}</div>
-    <AnimatePresence initial={false}>{expanded && attributes.length > 4 && <Disclosure key="extra-criteria" name="criteria"><div className="platform-criteria-fields platform-extra-criteria">{attributes.slice(4).map(attribute => <Criterion key={attribute.id} attribute={attribute}/>)}</div></Disclosure>}</AnimatePresence>
-    <div className="platform-criteria-bottom">{attributes.length > 4 && <button className="platform-text-button" type="button" aria-expanded={expanded} onClick={() => { onInteraction?.(); setExpanded(value => !value); }}>{expanded ? 'Fewer filters' : `All ${attributes.length} filters`}</button>}{state.filters.length > 0 && <button className="platform-text-button" type="button" onClick={() => action('clear-filters')}>Clear filters <Icon name="close" size={12}/></button>}</div>
-  </motion.div></motion.section>;
-}
 
 function DetailProgress({ target }: { target: RefObject<HTMLElement | null> }) {
   const reduced = useReducedMotion();
@@ -215,7 +179,6 @@ function ActionsContent({ capabilityIds, entityIds }: ComponentProps) {
 }
 
 const CollectionView = defineComponent({ name: 'CollectionView', description: 'Explore a bounded published collection with stable item identity.', props: componentProps(), component: ({ props }) => <CollectionContent {...props}/> });
-const CriteriaControls = defineComponent({ name: 'CriteriaControls', description: 'Exact typed filters; changes update visitor state without a model request.', props: componentProps(), component: ({ props }) => <CriteriaContent {...props}/> });
 const EntityDetail = defineComponent({ name: 'EntityDetail', description: 'A published entity and its known attributes.', props: componentProps(), component: ({ props }) => <DetailContent {...props}/> });
 const AttributeComparison = defineComponent({ name: 'AttributeComparison', description: 'Compare identical attribute definitions across published entities.', props: componentProps(), component: ({ props }) => <ComparisonContent {...props}/> });
 const SelectionTray = defineComponent({ name: 'SelectionTray', description: 'Runtime-owned comparison selections.', props: componentProps(), component: () => <SelectionContent/> });
@@ -223,12 +186,12 @@ const RelatedEntities = defineComponent({ name: 'RelatedEntities', description: 
 const ActionGroup = defineComponent({ name: 'ActionGroup', description: 'Explicit publisher-registered destinations only.', props: componentProps(), component: ({ props }) => <ActionsContent {...props}/> });
 const PhotoGallery = defineComponent({ name: 'PhotoGallery', description: 'Published photos in publisher order, filtered only by approved references.', props: componentProps(), component: ({ props }) => <MediaGallery assetIds={props.assetIds.length ? props.assetIds : undefined} albumId={props.albumId || undefined} entityIds={props.entityIds.length ? props.entityIds : undefined} variant={props.variant === 'list' ? 'list' : 'grid'} showAlbums={!props.assetIds.length && !props.entityIds.length}/> });
 const CatalogCanvas = defineComponent({ name: 'CatalogCanvas', description: 'A stable semantic composition with shared platform motion.',
-  props: z.object({ sections: z.array(z.union([CollectionView.ref, CriteriaControls.ref, EntityDetail.ref, AttributeComparison.ref, SelectionTray.ref, RelatedEntities.ref, ActionGroup.ref, PhotoGallery.ref])) }),
+  props: z.object({ sections: z.array(z.union([CollectionView.ref, EntityDetail.ref, AttributeComparison.ref, SelectionTray.ref, RelatedEntities.ref, ActionGroup.ref, PhotoGallery.ref])) }),
   component: function Canvas({ props, renderNode }) {
     const { plan } = useCatalog();
     const workspace = ['workspace-shift', 'restore', 'focus'].includes(plan.transition.type);
     return <MotionHeight className="platform-canvas-frame" duration={workspace ? motionTiming.workspace : motionTiming.reflow}>
-      <div className="platform-canvas" data-operation={plan.operation} data-has-criteria={plan.components.some(component => component.type === 'criteria')} data-has-collection={plan.components.some(component => component.type === 'collection')}><AnimatePresence initial={false} mode="popLayout">{props.sections.map(section => {
+      <div className="platform-canvas" data-operation={plan.operation} data-has-criteria={false} data-has-collection={plan.components.some(component => component.type === 'collection')}><AnimatePresence initial={false} mode="popLayout">{props.sections.map(section => {
       const node = section as ElementNode;
       const name = node.statementId ?? node.typeName;
       const entity = node.typeName === 'EntityDetail' ? String((node.props.entityIds as string[])[0]) : '';
@@ -238,4 +201,4 @@ const CatalogCanvas = defineComponent({ name: 'CatalogCanvas', description: 'A s
   },
 });
 
-export const platformLibrary = createLibrary({ id: 'platform-ui-v1', root: 'CatalogCanvas', components: [CatalogCanvas, CollectionView, CriteriaControls, EntityDetail, AttributeComparison, SelectionTray, RelatedEntities, ActionGroup, PhotoGallery] });
+export const platformLibrary = createLibrary({ id: 'platform-ui-v1', root: 'CatalogCanvas', components: [CatalogCanvas, CollectionView, EntityDetail, AttributeComparison, SelectionTray, RelatedEntities, ActionGroup, PhotoGallery] });

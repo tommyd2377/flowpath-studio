@@ -52,3 +52,6 @@
 .results { width: 100%; padding: 0 28px; }
 .srOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 @container (max-width: 600px) { .results { padding: 0 18px; } }
+
+/* The shared dock owns position and motion; the host owns input behavior. */
+.assistant :global(.platform-conversation-dock) .composer { width: 100%; padding: 8px 12px 8px 18px; }

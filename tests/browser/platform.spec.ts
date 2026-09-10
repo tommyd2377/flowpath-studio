@@ -81,8 +81,9 @@ async function publicCatalog(page: Page): Promise<KnowledgeCatalog> {
 async function manualProof(page: Page, firstName: string, secondName: string) {
   const explorer = page.locator('.platform-explorer');
   const before = visitorPosts.length;
-  await explorer.getByRole('spinbutton', { name: /Price/ }).fill('50');
-  await expect(explorer.locator('.platform-item')).toHaveCount(2);
+  await expect(explorer.getByRole('button', { name: 'Back', exact: true })).toHaveCount(0);
+  await expect(explorer.getByRole('region', { name: 'Refine the collection' })).toHaveCount(0);
+  await expect(explorer.locator('.platform-item')).toHaveCount(4);
   await explorer.getByRole('button', { name: `Select ${firstName} for comparison`, exact: true }).click();
   await explorer.getByRole('button', { name: `Select ${secondName} for comparison`, exact: true }).click();
   await explorer.getByRole('button', { name: 'Compare selections', exact: true }).click();
@@ -93,8 +94,10 @@ async function manualProof(page: Page, firstName: string, secondName: string) {
   await explorer.getByRole('button', { name: 'Back', exact: true }).click();
   await expect(explorer.getByRole('region', { name: 'Compare published attributes' })).toBeVisible();
   await explorer.getByRole('button', { name: 'Back', exact: true }).click();
-  await expect(explorer.locator('.platform-item')).toHaveCount(2);
+  await expect(explorer.locator('.platform-item')).toHaveCount(4);
   await expect(explorer.getByRole('region', { name: 'Selected for comparison' })).toContainText('2/6');
+  await explorer.getByRole('button', { name: 'All items', exact: true }).first().click();
+  await expect(explorer.getByRole('button', { name: 'Back', exact: true })).toHaveCount(0);
   expect(visitorPosts.length).toBe(before);
 }
 
@@ -229,12 +232,11 @@ test.describe.serial('offline publisher-to-visitor proof', () => {
     await page.goto(`/s/${slug}`);
     const explorer = page.locator('.platform-explorer');
     await expect(explorer.locator('.platform-item')).toHaveCount(4);
-    await explorer.getByRole('spinbutton', { name: /Price/ }).fill('50');
-    await expect(explorer.locator('.platform-item')).toHaveCount(2);
+    await expect(explorer.getByRole('region', { name: 'Refine the collection' })).toHaveCount(0);
     await explorer.locator('.platform-item-open').first().click();
     await expect(explorer.locator('.platform-detail')).toBeVisible();
     await explorer.getByRole('button', { name: 'Back', exact: true }).click();
-    await expect(explorer.locator('.platform-item')).toHaveCount(2);
+    await expect(explorer.locator('.platform-item')).toHaveCount(4);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBeTruthy();
     expect(visitorPosts.length).toBe(before);
     await screenshot(page, info.outputPath('mobile-reduced-motion.png'));
@@ -259,7 +261,8 @@ test.describe.serial('offline publisher-to-visitor proof', () => {
     await screenshot(page, info.outputPath('gallery-bookstore-relationships.png'));
     await page.getByRole('button', { name: 'Classes & experiences', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Example Learning Studio', exact: true })).toBeVisible();
-    await page.getByLabel('Experience level', { exact: true }).selectOption('beginner');
+    const request = page.getByRole('textbox', { name: 'What are you looking for?', exact: true });
+    await request.fill('beginner'); await request.press('Enter');
     await expect(page.locator('.platform-item')).toHaveCount(2);
     await screenshot(page, info.outputPath('gallery-classes-narrowing.png'));
     expect(visitorPosts.length).toBe(before);

@@ -109,7 +109,7 @@ export function planForIntent(catalog: KnowledgeCatalog, text: string, state = i
   if (!collection && !changedFilters && words.length) {
     const relevant = candidates.filter(entity => words.some(word => `${entity.name} ${entity.summary} ${Object.values(entity.attributes).join(' ')}`.toLocaleLowerCase().includes(word)));
     if (relevant.length) candidates = relevant;
-    else throw new Error('I could not match that request to the published catalog. Try an item name or use the filters.');
+    else throw new Error('I could not match that request to the published catalog. Try an item name or describe what matters to you.');
   }
   if (!candidates.length) throw new Error('No published items match those criteria. Your previous view is still available.');
   const plan = defaultPresentation(catalog, snapshotId);

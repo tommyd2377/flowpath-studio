@@ -45,7 +45,7 @@ Local interpretation supports CSV and labeled TXT structures, plus PDF text extr
 | Studio | Multiple sites, chat proposals, branding/content editing, draft and published previews, approval, publication and Undo |
 | Knowledge | Source ingestion, private row/line/page excerpts, semantic catalogs, direct/conversational corrections and explicit reimport choices that preserve publisher overrides |
 | Media | PNG/JPEG/WebP upload, folder albums, optional group context, captions/alt/credit, actual/example connections, covers and lead images |
-| Visitor interface | Controlled cards, criteria, details, comparisons, selections, relationships, explicit links and galleries; typed requests and bounded continuous voice that preserves manual browsing |
+| Visitor interface | Controlled cards, conversational filtering, details, comparisons, selections, relationships, explicit links and galleries; typed requests and bounded continuous voice that preserves manual browsing |
 | Reliability | Schema/reference validation, local OpenUI parsing, stale-response protection, manual-interaction cancellation, fallbacks and reduced motion |
 | Optional search | Published opt-in for cited web results, attributed web images and interactive map overviews; separate daily caps, offline previews and bounded voice controls. Live provider quality remains unverified. |
 | Storage | Local demo files; optional Firebase owner authentication, Firestore state and private object storage; immutable published knowledge/media revisions |
