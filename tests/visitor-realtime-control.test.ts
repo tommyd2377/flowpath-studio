@@ -124,6 +124,13 @@ test('catalog plans validate published references and carry the visible order in
   assert.deepEqual(h.fatal, []);
 });
 
+test('catalog voice guidance maps a request to open an item to the card detail view', async t => {
+  const h = setup({ catalog }); t.after(() => h.control.close()); await h.ready(); h.user(); await flush();
+  const instructions = String(h.socket.requests()[0].instructions);
+  assert.match(instructions, /open.*one-item detail view/i);
+  assert.match(instructions, /navigate_view only when the visitor asks to scroll/i);
+});
+
 test('unsupported catalog requests preserve the view and use the bounded speech response', async t => {
   const h = setup({ catalog }); t.after(() => h.control.close()); await h.ready(); h.user(); await flush();
   h.socket.created('plan_1'); h.socket.done('plan_1', [call({ status: 'unavailable', plan: null })]); await flush();

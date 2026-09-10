@@ -56,6 +56,7 @@ test('visitor context preserves shortlist and focused items outside filters whil
   const instructions = catalogPresentationInstructions(value, { history: [], catalogState: state });
   assert.ok(instructions.includes('untrusted reference data'));
   assert.ok(instructions.includes('Empty collection entityIds'));
+  assert.ok(instructions.includes('visual equivalent of opening its card'));
 });
 
 test('Responses envelope rejects incomplete, refusal, extra tools and oversized split text', () => {
