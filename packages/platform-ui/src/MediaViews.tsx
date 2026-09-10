@@ -2,9 +2,9 @@
 /* eslint-disable @next/next/no-img-element -- This framework-neutral package uses host-processed image variants. */
 
 import { createContext, forwardRef, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AnimatePresence, motion, useIsPresent, useReducedMotion, type HTMLMotionProps } from 'motion/react';
+import { AnimatePresence, LayoutGroup, motion, useIsPresent, useReducedMotion, type HTMLMotionProps } from 'motion/react';
 import { galleryAssetIds, mediaForTarget, validateMediaLibrary, type AssetUrlResolver, type MediaLibrary, type MediaTarget } from './media.js';
-import { MotionHeight, motionTiming, revealTransition, sequenceItemVariants, sequenceVariants, surfaceTransition } from './motion.js';
+import { galleryItemVariants, MotionHeight, motionTiming, revealTransition, sequenceVariants, surfaceTransition } from './motion.js';
 
 type Viewer = { assetIds: string[]; index: number; examples: string[] };
 type MediaContextValue = { library: MediaLibrary; resolveAssetUrl: AssetUrlResolver; open: (ids: string[], initialId: string, examples?: string[]) => void; onInteraction?: () => void };
@@ -61,7 +61,7 @@ function MediaProviderContent({ library, resolveAssetUrl, children, onInteractio
     onInteraction?.(); setViewer({ ...viewer, index });
   };
   const close = () => { if (viewer) { onInteraction?.(); setViewer(null); } };
-  return <MediaContext.Provider value={context}>{children}
+  return <LayoutGroup id={`gallery-${labelId}`}><MediaContext.Provider value={context}>{children}
     <dialog ref={dialog} className="platform-lightbox" aria-labelledby={labelId} onCancel={event => { event.preventDefault(); close(); }}
       onClick={event => { if (event.target === event.currentTarget) close(); }}
       onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); move(event.key === 'ArrowLeft' ? -1 : 1); } }}>
@@ -75,7 +75,7 @@ function MediaProviderContent({ library, resolveAssetUrl, children, onInteractio
         {viewer.assetIds.length > 1 && <nav className="platform-lightbox-navigation" aria-label="Photo navigation"><button type="button" disabled={viewer.index === 0} onClick={() => move(-1)}>← Previous</button><button type="button" disabled={viewer.index === viewer.assetIds.length - 1} onClick={() => move(1)}>Next →</button></nav>}
       </div>}
     </dialog>
-  </MediaContext.Provider>;
+  </MediaContext.Provider></LayoutGroup>;
 }
 
 export type MediaImageProps = { assetId: string; size?: 'thumb' | 'display'; className?: string; fit?: 'cover' | 'contain'; aspectRatio?: string; interactive?: boolean; onOpen?: () => void; layoutId?: string };
@@ -108,7 +108,7 @@ const MediaFigure = forwardRef<HTMLElement, MediaFigureProps>(function MediaFigu
   const reduced = useReducedMotion();
   const present = useIsPresent();
   return <motion.figure {...props} ref={ref} layout={reduced ? false : 'position'} whileHover={reduced ? undefined : { y: -5 }} whileTap={reduced ? undefined : { scale: 0.995 }} inert={!present} aria-hidden={!present || undefined}
-    variants={reduced ? undefined : sequenceItemVariants} initial={reduced ? false : 'hidden'} animate="visible" exit="exit"
+    variants={reduced ? undefined : galleryItemVariants} initial={reduced ? false : 'hidden'} exit="exit"
     transition={{ ...revealTransition, duration: reduced ? 0 : motionTiming.reveal, layout: reduced ? { duration: 0 } : surfaceTransition }}/>;
 });
 

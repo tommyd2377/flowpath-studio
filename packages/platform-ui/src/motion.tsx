@@ -20,6 +20,12 @@ export const sequenceItemVariants: Variants = {
   visible: { opacity: 1, y: 0, transition: revealTransition },
   exit: { opacity: 0, y: -7, transition: { ...revealTransition, duration: motionTiming.exit } },
 };
+/** Photo reveals use a light mask rather than treating images as interface cards. */
+export const galleryItemVariants: Variants = {
+  hidden: { opacity: 0, y: 16, clipPath: 'inset(7% 0 0 round 12px)' },
+  visible: { opacity: 1, y: 0, clipPath: 'inset(0% 0 0 round 12px)', transition: revealTransition },
+  exit: { opacity: 0, y: -7, transition: { ...revealTransition, duration: motionTiming.exit } },
+};
 
 export function InterfaceMotion({ children, id }: { children: ReactNode; id: string }) {
   const reduced = useReducedMotion();
