@@ -3,7 +3,7 @@
 import { forwardRef, useEffect, useRef, useState, type PropsWithChildren } from 'react';
 import { AnimatePresence, motion, useIsPresent, useReducedMotion, type HTMLMotionProps } from 'motion/react';
 import { ArrowDown, ArrowUpRight, Clock3, Layers2, Mail, RotateCcw } from 'lucide-react';
-import { MotionHeight, MediaGallery, EntityMedia, motionTiming, revealTransition, surfaceTransition } from '@thevoice/platform-ui';
+import { MotionHeight, MediaGallery, EntityMedia, motionTiming, revealTransition, sequenceItemVariants, sequenceVariants, surfaceTransition } from '@thevoice/platform-ui';
 import type { MediaLibrary } from '@thevoice/platform-ui/media';
 import type { SiteContent } from '@/lib/site-model';
 import { presentationSources, type PresentationSource, type SitePresentation as Presentation } from '@/lib/site-presentation';
@@ -16,7 +16,7 @@ const ViewSurface = forwardRef<HTMLElement, PropsWithChildren<HTMLMotionProps<'s
   return <motion.section {...props} ref={ref} inert={!present} aria-hidden={!present}/>;
 });
 
-const SourceCard = forwardRef<HTMLElement, { source: PresentationSource; detail: boolean; index: number; onInteraction?: () => void }>(function SourceCard({ source, detail, index, onInteraction }, ref) {
+const SourceCard = forwardRef<HTMLElement, { source: PresentationSource; detail: boolean; onInteraction?: () => void }>(function SourceCard({ source, detail, onInteraction }, ref) {
   const [expanded, setExpanded] = useState(false);
   const reduce = useReducedMotion();
   const present = useIsPresent();
@@ -24,8 +24,9 @@ const SourceCard = forwardRef<HTMLElement, { source: PresentationSource; detail:
   const long = source.body.length > 500;
   const collapse = long && !detail && !expanded;
   return <motion.article ref={ref} layout={!reduce} className={styles.card} data-kind={source.kind} data-source-id={source.id} data-source-expanded={detail || expanded} inert={!present} aria-hidden={!present || undefined} style={{ borderRadius: 18 }}
-    initial={{ opacity: 0, y: reduce ? 0 : 18 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-    transition={{ ...revealTransition, duration: reduce ? 0 : motionTiming.reveal, delay: reduce ? 0 : Math.min(index * 0.025, 0.1), layout: reduce ? { duration: 0 } : surfaceTransition }}>
+    variants={reduce ? undefined : sequenceItemVariants} initial={reduce ? false : 'hidden'} animate="visible" exit="exit"
+    whileHover={reduce ? undefined : { y: -3 }} whileTap={reduce ? undefined : { scale: 0.995 }}
+    transition={{ ...revealTransition, duration: reduce ? 0 : motionTiming.reveal, layout: reduce ? { duration: 0 } : surfaceTransition }}>
     <motion.div layout={reduce ? false : 'position'} className={styles.cardContent}>
     <div className={styles.cardTop}><span>{source.kind === 'section' ? 'Explore' : source.kind === 'overview' ? 'The introduction' : source.kind === 'hours' ? 'Plan your visit' : 'Start a conversation'}</span><Icon size={18} strokeWidth={1.3} aria-hidden="true"/></div>
     <h3>{source.title}</h3>
@@ -93,8 +94,8 @@ export default function SitePresentation({ content, presentation, busy, onReset,
           <motion.button type="button" className={styles.reset} onClick={onReset} disabled={busy} whileHover={reduce ? undefined : { y: -2 }} whileTap={reduce ? undefined : { scale: 0.96 }}><RotateCcw size={13}/><span>All of the site</span></motion.button>
         </div>
         {presentation.status === 'unavailable' && <p className={styles.missing}>That information hasn’t been published here. {content.contact ? 'The owner can help with the details.' : 'You can keep exploring the information below.'}</p>}
-        {presentation.layout === 'gallery' ? <MediaGallery assetIds={galleryIds} title={sources.length === 1 ? sources[0].title : 'Photos for you'} showAlbums={sources.some(source => source.kind === 'photos')}/> : <motion.div layout={reduce ? false : 'position'} className={styles.grid} data-layout={presentation.layout} data-count={sources.length}>
-          <AnimatePresence initial={false} mode="popLayout">{sources.map((source, index) => <SourceCard key={source.id} source={source} index={index} detail={presentation.layout === 'detail'} onInteraction={onInteraction}/>)}</AnimatePresence>
+        {presentation.layout === 'gallery' ? <MediaGallery assetIds={galleryIds} title={sources.length === 1 ? sources[0].title : 'Photos for you'} showAlbums={sources.some(source => source.kind === 'photos')}/> : <motion.div layout={reduce ? false : 'position'} variants={reduce ? undefined : sequenceVariants} initial={reduce ? false : 'hidden'} animate="visible" className={styles.grid} data-layout={presentation.layout} data-count={sources.length}>
+          <AnimatePresence initial={false} mode="popLayout">{sources.map(source => <SourceCard key={source.id} source={source} detail={presentation.layout === 'detail'} onInteraction={onInteraction}/>)}</AnimatePresence>
         </motion.div>}
       </ViewSurface>}
     </AnimatePresence>

@@ -6,7 +6,7 @@ import { useId, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { ArrowDown, ArrowUpRight, Clock3, Mail, X } from 'lucide-react';
 import Waveform from './Waveform';
-import { CatalogExplorer, MediaProvider, MediaGallery, EntityMedia } from '@thevoice/platform-ui';
+import { CatalogExplorer, MediaProvider, MediaGallery, EntityMedia, sequenceItemVariants, sequenceVariants, surfaceTransition } from '@thevoice/platform-ui';
 import type { MediaLibrary } from '@thevoice/platform-ui/media';
 import type { KnowledgeCatalog } from '@thevoice/platform-ui/contracts';
 import VisitorAssistant from './VisitorAssistant';
@@ -64,15 +64,15 @@ export default function SiteExperience({ content, siteId, publishedSlug, catalog
       {!assistantEnabled && catalog && <CatalogExplorer key={catalog.id} catalog={catalog} media={media} resolveAssetUrl={resolveAssetUrl} accent={content.accent} plan={openingPlan} onPhotoView={photoEvent} showComposer={false} onOutcome={event => catalogEvent({ ...event, type: 'outcome' })} onPresentation={plan => catalogEvent({ type: 'presentation_accepted', kind: 'display', operation: plan.operation })}/>}
       <AnimatePresence initial={false}>{!showingView && (content.sections.length > 0 || content.hours || content.contact) && <motion.div key="browse" initial={{ opacity: 0, y: reduce ? 0 : 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, height: 0 }} transition={{ duration: reduce ? 0 : 0.3 }}>
       <div className="site-section-label"><span>{entered ? content.headline : 'A little more about us'}</span><span>{String(content.sections.length).padStart(2, '0')}</span></div>
-      <div className="site-cards" data-visitor-component="collection">
-        {content.sections.map((section, index) => <motion.button key={section.id} type="button" layout={!reduce} data-source-id={`section:${section.id}`} data-source-expanded={focused === section.id} className={`site-card ${focused === section.id ? 'focused' : ''}`} aria-label={`${focused === section.id ? 'Close' : 'Explore'} ${section.title}`} aria-expanded={focused === section.id} aria-controls={`${sectionPrefix}-${index}`} onClick={() => { cancelVisitor.current?.(); setEntered(true); setFocused(focused === section.id ? null : section.id); }}>
+      <motion.div layout={reduce ? false : 'position'} variants={reduce ? undefined : sequenceVariants} initial={reduce ? false : 'hidden'} animate="visible" className="site-cards" data-visitor-component="collection" transition={{ layout: reduce ? { duration: 0 } : surfaceTransition }}>
+        {content.sections.map((section, index) => <motion.button key={section.id} type="button" layout={reduce ? false : 'position'} variants={reduce ? undefined : sequenceItemVariants} whileHover={reduce ? undefined : { y: -4 }} whileTap={reduce ? undefined : { scale: 0.99 }} whileFocus={reduce ? undefined : { y: -2 }} data-source-id={`section:${section.id}`} data-source-expanded={focused === section.id} className={`site-card ${focused === section.id ? 'focused' : ''}`} aria-label={`${focused === section.id ? 'Close' : 'Explore'} ${section.title}`} aria-expanded={focused === section.id} aria-controls={`${sectionPrefix}-${index}`} onClick={() => { cancelVisitor.current?.(); setEntered(true); setFocused(focused === section.id ? null : section.id); }} transition={{ layout: reduce ? { duration: 0 } : surfaceTransition }}>
           <div className="site-card-kicker"><span>{String(index + 1).padStart(2, '0')}</span>{focused === section.id ? <X size={16} aria-hidden="true"/> : <ArrowUpRight size={16} aria-hidden="true"/>}</div>
           <EntityMedia targetType="section" targetId={section.id} variant="card" interactive={false}/>
           <h2>{section.title}</h2>
           <p id={`${sectionPrefix}-${index}`} className={focused === section.id ? '' : 'clamp-copy'}>{section.body}</p>
           <span className="site-card-action">{focused === section.id ? 'Close details' : 'Explore'}</span>
         </motion.button>)}
-      </div>
+      </motion.div>
       <div className="site-details">
         {content.hours && <div data-source-id="hours"><Clock3 size={15} aria-hidden="true"/><span>{content.hours}</span></div>}
         {content.contact && <div data-source-id="contact"><Mail size={15} aria-hidden="true"/><span>{content.contact}</span></div>}

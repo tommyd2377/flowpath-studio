@@ -4,7 +4,7 @@
 import { createContext, forwardRef, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion, useIsPresent, useReducedMotion, type HTMLMotionProps } from 'motion/react';
 import { galleryAssetIds, mediaForTarget, validateMediaLibrary, type AssetUrlResolver, type MediaLibrary, type MediaTarget } from './media.js';
-import { MotionHeight, motionTiming, revealTransition, surfaceTransition } from './motion.js';
+import { MotionHeight, motionTiming, revealTransition, sequenceItemVariants, sequenceVariants, surfaceTransition } from './motion.js';
 
 type Viewer = { assetIds: string[]; index: number; examples: string[] };
 type MediaContextValue = { library: MediaLibrary; resolveAssetUrl: AssetUrlResolver; open: (ids: string[], initialId: string, examples?: string[]) => void; onInteraction?: () => void };
@@ -78,18 +78,18 @@ function MediaProviderContent({ library, resolveAssetUrl, children, onInteractio
   </MediaContext.Provider>;
 }
 
-export type MediaImageProps = { assetId: string; size?: 'thumb' | 'display'; className?: string; fit?: 'cover' | 'contain'; aspectRatio?: string; interactive?: boolean; onOpen?: () => void };
-export function MediaImage({ assetId, size = 'thumb', className = '', fit = 'cover', aspectRatio, interactive = true, onOpen }: MediaImageProps) {
+export type MediaImageProps = { assetId: string; size?: 'thumb' | 'display'; className?: string; fit?: 'cover' | 'contain'; aspectRatio?: string; interactive?: boolean; onOpen?: () => void; layoutId?: string };
+export function MediaImage({ assetId, size = 'thumb', className = '', fit = 'cover', aspectRatio, interactive = true, onOpen, layoutId }: MediaImageProps) {
   const context = useContext(MediaContext);
   const [failedSource, setFailedSource] = useState<string | undefined>();
   const asset = context?.library.assets.find(item => item.id === assetId);
   if (!asset || !context) return null;
   let src: string | undefined;
   try { src = safeSource(context.resolveAssetUrl(asset.id, size)); } catch { /* A missing host image keeps its reserved space. */ }
-  const image = <span className={`platform-media-image ${className}`} data-source-id={`photo:${asset.id}`} data-fit={fit} style={{ aspectRatio: aspectRatio ?? (fit === 'contain' ? `${asset.width} / ${asset.height}` : '4 / 3') }}>
+  const image = <motion.span layout={layoutId ? 'position' : false} layoutId={layoutId} className={`platform-media-image ${className}`} data-source-id={`photo:${asset.id}`} data-fit={fit} style={{ aspectRatio: aspectRatio ?? (fit === 'contain' ? `${asset.width} / ${asset.height}` : '4 / 3') }}>
     {src && failedSource !== src ? <img src={src} width={asset.width} height={asset.height} alt={asset.alt || asset.caption || 'Photo'} loading={size === 'thumb' ? 'lazy' : 'eager'} decoding="async" onError={() => setFailedSource(src)}/>
       : <span className="platform-media-unavailable" role="img" aria-label={asset.alt || asset.caption || 'Photo unavailable'}>Photo unavailable</span>}
-  </span>;
+  </motion.span>;
   return interactive ? <button type="button" className="platform-photo-open" aria-label={`Open photo: ${asset.caption || asset.alt || 'Photo'}`} onClick={onOpen ?? (() => context.open([asset.id], asset.id))}>{image}</button> : image;
 }
 
@@ -106,10 +106,9 @@ type MediaFigureProps = HTMLMotionProps<'figure'> & { 'data-order'?: number };
 const MediaFigure = forwardRef<HTMLElement, MediaFigureProps>(function MediaFigure(props, ref) {
   const reduced = useReducedMotion();
   const present = useIsPresent();
-  const order = Math.min(8, Math.max(0, Number(props['data-order']) || 0));
-  return <motion.figure {...props} ref={ref} layout={reduced ? false : 'position'} whileHover={reduced ? undefined : { y: -5 }} inert={!present} aria-hidden={!present || undefined}
-    initial={reduced ? false : { opacity: 0, y: 18, clipPath: 'inset(8% 0 0 round 12px)' }} animate={{ opacity: 1, y: 0, clipPath: 'inset(0% 0 0 round 12px)' }} exit={{ opacity: 0, y: -8, transition: { duration: reduced ? 0 : motionTiming.exit } }}
-    transition={{ ...revealTransition, delay: reduced ? 0 : order * 0.055, duration: reduced ? 0 : motionTiming.reveal, layout: reduced ? { duration: 0 } : surfaceTransition }}/>;
+  return <motion.figure {...props} ref={ref} layout={reduced ? false : 'position'} whileHover={reduced ? undefined : { y: -5 }} whileTap={reduced ? undefined : { scale: 0.995 }} inert={!present} aria-hidden={!present || undefined}
+    variants={reduced ? undefined : sequenceItemVariants} initial={reduced ? false : 'hidden'} animate="visible" exit="exit"
+    transition={{ ...revealTransition, duration: reduced ? 0 : motionTiming.reveal, layout: reduced ? { duration: 0 } : surfaceTransition }}/>;
 });
 
 function visibleCaption(value: string | undefined) {
@@ -136,7 +135,7 @@ function GalleryContent({ assetIds, albumId, entityIds, variant = 'grid', title 
     <div className="platform-media-heading"><div>{title && <h3>{title}</h3>}{album?.description && <p>{album.description}</p>}</div><span>{assets.length} {assets.length === 1 ? 'photo' : 'photos'}</span></div>
     {showAlbums && !albumId && library.albums.length > 0 && <div className="platform-media-albums" aria-label="Photo albums"><button type="button" aria-pressed={!selectedAlbumId} onClick={() => chooseAlbum('')}>All photos</button>{library.albums.map(item => <button type="button" key={item.id} aria-pressed={selectedAlbumId === item.id} onClick={() => chooseAlbum(item.id)}>
       {(item.coverAssetId || item.assetIds[0]) && <MediaImage assetId={item.coverAssetId || item.assetIds[0]} interactive={false}/>}<span>{item.title}</span></button>)}</div>}
-    <MotionHeight><motion.div layout={reduced ? false : 'position'} className="platform-media-grid" data-variant={variant} data-layout={variant === 'grid' ? 'editorial' : 'list'} transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }}>
+    <MotionHeight><motion.div layout={reduced ? false : 'position'} variants={reduced ? undefined : sequenceVariants} initial={reduced ? false : 'hidden'} animate="visible" className="platform-media-grid" data-variant={variant} data-layout={variant === 'grid' ? 'editorial' : 'list'} transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }}>
       <AnimatePresence initial={false} mode="popLayout">{assets.map((asset, index) => { const caption = visibleCaption(asset.caption); const orientation = asset.width / asset.height > 1.25 ? 'landscape' : asset.height / asset.width > 1.25 ? 'portrait' : 'square'; return <MediaFigure key={asset.id} className="platform-media-card" data-order={index} data-orientation={orientation}>
         <MediaImage assetId={asset.id} aspectRatio={`${asset.width} / ${asset.height}`} onOpen={() => context.open(ids, asset.id, examples)}/>
         {(caption || asset.credit || examples.includes(asset.id)) && <figcaption>{examples.includes(asset.id) && <span className="platform-media-example">Example photo</span>}{caption && <p>{caption}</p>}{asset.credit && <small>{asset.credit}</small>}</figcaption>}
@@ -156,7 +155,7 @@ export function EntityMedia({ targetType = 'entity', targetId, variant = 'card',
   const examples = matches.filter(item => item.association.role === 'example').map(item => item.asset.id);
   const visible = variant === 'detail' ? matches.slice(0, 4) : matches.slice(0, 1);
   return <div className="platform-entity-media" data-variant={variant}>{visible.map(({ asset, association }, index) => <figure key={asset.id}>
-    <MediaImage assetId={asset.id} interactive={interactive} onOpen={() => context.open(ids, asset.id, examples)}/>
+    <MediaImage assetId={asset.id} layoutId={targetId && index === 0 ? `entity-media-${targetType}-${targetId}` : undefined} interactive={interactive} onOpen={() => context.open(ids, asset.id, examples)}/>
     {association.role === 'example' && <span className="platform-media-example">Example photo</span>}
     {index === 0 && ids.length > visible.length && <span className="platform-photo-count">{ids.length} photos</span>}
     {variant === 'detail' && asset.caption && <figcaption>{asset.caption}</figcaption>}

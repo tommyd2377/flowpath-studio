@@ -1,13 +1,13 @@
 'use client';
 
-import { createContext, forwardRef, useContext, useId, useState, type ReactNode } from 'react';
-import { AnimatePresence, motion, useIsPresent, useReducedMotion, type HTMLMotionProps } from 'motion/react';
+import { createContext, forwardRef, useContext, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { AnimatePresence, motion, useIsPresent, useReducedMotion, useScroll, useSpring, type HTMLMotionProps } from 'motion/react';
 import { z } from 'zod';
 import { createLibrary, defineComponent, useTriggerAction, type ElementNode } from './openui.js';
 import { formatAttribute, filterEntities, filterOperatorLabel, knownAttributes, usefulAttributes } from './catalog.js';
 import type { AttributeDefinition, KnowledgeCatalog, PresentationPlan } from './contracts.js';
 import type { CatalogInteractionState } from './interaction.js';
-import { Disclosure, MotionHeight, SemanticSurface, motionTiming, revealTransition, surfaceTransition } from './motion.js';
+import { Disclosure, MotionHeight, SemanticSurface, feedbackTransition, motionTiming, revealTransition, sequenceItemVariants, sequenceVariants, surfaceTransition } from './motion.js';
 import { EntityMedia, MediaGallery } from './MediaViews.js';
 
 export type RuntimeContextValue = { catalog: KnowledgeCatalog; state: CatalogInteractionState; plan: PresentationPlan;
@@ -55,9 +55,8 @@ function SectionHeading({ eyebrow, title, children }: { eyebrow?: string; title:
 const PresentCard = forwardRef<HTMLElement, HTMLMotionProps<'article'>>(function PresentCard(props, ref) {
   const present = useIsPresent();
   const reduced = useReducedMotion();
-  return <motion.article {...props} ref={ref} layout={!reduced} whileHover={reduced ? undefined : { y: -3 }} whileTap={reduced ? undefined : { scale: 0.995 }} style={{ ...props.style, borderRadius: 13 }} inert={!present} aria-hidden={!present || undefined}
-    initial={reduced ? false : { opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
-    exit={{ opacity: 0, transition: { ...revealTransition, duration: reduced ? 0 : motionTiming.exit } }}
+  return <motion.article {...props} ref={ref} layout={reduced ? false : 'position'} whileHover={reduced ? undefined : { y: -4 }} whileTap={reduced ? undefined : { scale: 0.992 }} whileFocus={reduced ? undefined : { y: -2 }} style={{ ...props.style, borderRadius: 13 }} inert={!present} aria-hidden={!present || undefined}
+    variants={reduced ? undefined : sequenceItemVariants} initial={reduced ? false : 'hidden'} animate="visible" exit="exit"
     transition={{ ...revealTransition, duration: reduced ? 0 : motionTiming.reveal, layout: reduced ? { duration: 0 } : surfaceTransition }}>
     <motion.div layout={reduced ? false : 'position'} className="platform-item-content" transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }}>{props.children}</motion.div>
   </motion.article>;
@@ -69,12 +68,14 @@ const PresentChip = forwardRef<HTMLButtonElement, HTMLMotionProps<'button'>>(fun
   return <motion.button {...props} ref={ref} layout={reduced ? false : 'position'} inert={!present} aria-hidden={!present || undefined}
     initial={reduced ? false : { opacity: 0 }} animate={{ opacity: 1 }}
     exit={{ opacity: 0, transition: { ...revealTransition, duration: reduced ? 0 : motionTiming.exit } }}
-    transition={{ ...revealTransition, duration: reduced ? 0 : motionTiming.reveal, layout: reduced ? { duration: 0 } : surfaceTransition }}/>;
+    whileHover={reduced ? undefined : { y: -1 }} whileTap={reduced ? undefined : { scale: 0.98 }} whileFocus={reduced ? undefined : { scale: 1.02 }}
+    transition={{ ...feedbackTransition, duration: reduced ? 0 : motionTiming.feedback, layout: reduced ? { duration: 0 } : surfaceTransition }}/>;
 });
 
 function CollectionContent({ entityIds, attributeIds, variant, collectionId }: ComponentProps) {
   const { catalog, state, onInteraction } = useCatalog();
   const action = useAction();
+  const reduced = useReducedMotion();
   const [limit, setLimit] = useState(12);
   const collection = catalog.collections.find(item => item.id === collectionId);
   const collectionTabs = catalog.collections.filter(item => item.name.toLocaleLowerCase() !== 'all items' || item.entityIds.length !== catalog.entities.length);
@@ -89,7 +90,7 @@ function CollectionContent({ entityIds, attributeIds, variant, collectionId }: C
       <button type="button" aria-pressed={!collectionId} onClick={() => { setLimit(12); action('collection', { id: '' }); }}>All items</button>
       {collectionTabs.map(item => <button type="button" key={item.id} aria-pressed={item.id === collectionId} onClick={() => { setLimit(12); action('collection', { id: item.id }); }}>{item.name}</button>)}
     </div>}
-    <MotionHeight><div className="platform-items" data-variant={variant}>
+    <MotionHeight><motion.div layout={reduced ? false : 'position'} variants={reduced ? undefined : sequenceVariants} initial={reduced ? false : 'hidden'} animate="visible" className="platform-items" data-variant={variant} transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }}>
       <AnimatePresence initial={false} mode="popLayout">
       {!entities.length && <PresentCard key="empty" className="platform-empty"><Icon name="filter" size={26}/><h4>A little too specific.</h4><p>No published items match these filters. Change a criterion to open up the possibilities.</p><button className="platform-button" type="button" onClick={() => action('clear-filters')}>Clear filters</button></PresentCard>}
       {entities.slice(0, limit).map((entity, index) => {
@@ -97,17 +98,17 @@ function CollectionContent({ entityIds, attributeIds, variant, collectionId }: C
         const selectDisabled = !selected && state.selectedIds.length >= 6;
         const details = cardAttributes(catalog, entity, attributes);
         const layout = variant !== 'list' && index === 0 ? 'feature' : details.length === 0 ? 'narrative' : details.length === 1 ? 'spotlight' : 'details';
-        return <PresentCard key={`item-${entity.id}`} className="platform-item" data-entity-id={entity.id} data-selected={selected} data-detail-count={details.length} data-layout={layout}>
+        return <PresentCard key={`item-${entity.id}`} layoutId={`entity-card-${entity.id}`} className="platform-item" data-entity-id={entity.id} data-selected={selected} data-detail-count={details.length} data-layout={layout}>
           <EntityMedia targetId={entity.id}/>
           <div className="platform-item-kicker"><span>{entity.kind}</span><span>{String(index + 1).padStart(2, '0')}</span></div>
-          <button className="platform-item-open" type="button" onClick={() => action('focus', { id: entity.id })}><h4>{entity.name}</h4><Icon name="arrow"/></button>
+          <button className="platform-item-open" type="button" onClick={() => action('focus', { id: entity.id })}><motion.h4 layoutId={`entity-title-${entity.id}`}>{entity.name}</motion.h4><Icon name="arrow"/></button>
           <p className="platform-item-summary">{entity.summary}</p>
           {!!details.length && <dl className="platform-item-attributes">{details.map(attribute => <div key={attribute.id}><dt>{attribute.label}</dt><dd>{formatAttribute(entity.attributes[attribute.id], attribute)}</dd></div>)}</dl>}
           <div className="platform-item-bottom"><button className="platform-text-button" type="button" onClick={() => action('focus', { id: entity.id })}>Take a closer look <Icon name="arrow" size={13}/></button>
             <button className="platform-select" type="button" aria-pressed={selected} disabled={selectDisabled} aria-label={`${selected ? 'Remove' : 'Select'} ${entity.name} ${selected ? 'from' : 'for'} comparison`} onClick={() => action('select', { id: entity.id })}><Icon name={selected ? 'check' : 'plus'} size={15}/><span>{selected ? 'Selected' : 'Compare'}</span></button></div>
         </PresentCard>;
       })}</AnimatePresence>
-    </div></MotionHeight>
+    </motion.div></MotionHeight>
     {entities.length > limit && <button className="platform-button platform-load-more" type="button" onClick={() => { onInteraction?.(); setLimit(value => value + 12); }}>Show more <span>{entities.length - limit} remaining</span></button>}
   </section>;
 }
@@ -149,18 +150,26 @@ function CriteriaContent({ attributeIds, variant }: ComponentProps) {
   </motion.div></motion.section>;
 }
 
+function DetailProgress({ target }: { target: RefObject<HTMLElement | null> }) {
+  const reduced = useReducedMotion();
+  const { scrollYProgress } = useScroll({ target, offset: ['start end', 'end start'] });
+  const scaleX = useSpring(scrollYProgress, reduced ? { stiffness: 1000, damping: 100 } : { stiffness: 170, damping: 30, mass: 0.22 });
+  return <div className="platform-reading-progress" aria-hidden="true"><motion.span style={{ scaleX }}/><motion.svg viewBox="0 0 48 10" focusable="false"><motion.path d="M1 5h8l3-3 4 6 5-7 5 8 4-5 5 1h12" fill="none" pathLength={1} initial={reduced ? false : { pathLength: 0, opacity: 0 }} animate={{ pathLength: 1, opacity: 1 }} transition={{ ...revealTransition, duration: reduced ? 0 : motionTiming.reveal }}/></motion.svg></div>;
+}
+
 function DetailContent({ entityIds, attributeIds }: ComponentProps) {
   const { catalog, state } = useCatalog();
   const action = useAction();
+  const detail = useRef<HTMLElement>(null);
   const entity = catalog.entities.find(item => item.id === entityIds[0])!;
   const selected = state.selectedIds.includes(entity.id);
   const details = knownAttributes(entity, definitions(catalog, attributeIds));
-  return <section className="platform-detail" data-entity-id={entity.id} aria-label={`Details of ${entity.name}`}>
-    <span className="platform-eyebrow">{entity.kind} · A CLOSER LOOK</span><h3 tabIndex={-1} data-platform-focus>{entity.name}</h3><p className="platform-detail-summary">{entity.summary}</p>
+  return <motion.section ref={detail} layoutId={`entity-card-${entity.id}`} layout="position" className="platform-detail" data-entity-id={entity.id} aria-label={`Details of ${entity.name}`} transition={{ layout: surfaceTransition }}>
+    <DetailProgress target={detail}/><span className="platform-eyebrow">{entity.kind} · A CLOSER LOOK</span><motion.h3 layoutId={`entity-title-${entity.id}`} tabIndex={-1} data-platform-focus>{entity.name}</motion.h3><p className="platform-detail-summary">{entity.summary}</p>
     <EntityMedia targetId={entity.id} variant="detail" includeExamples/>
     {!!details.length && <dl className="platform-detail-attributes">{details.map(attribute => <div key={attribute.id}><dt>{attribute.label}</dt><dd>{formatAttribute(entity.attributes[attribute.id], attribute)}</dd></div>)}</dl>}
     <button className="platform-button" type="button" aria-pressed={selected} disabled={!selected && state.selectedIds.length >= 6} onClick={() => action('select', { id: entity.id })}><Icon name={selected ? 'check' : 'plus'}/>{selected ? 'Selected for comparison' : 'Add to comparison'}</button>
-  </section>;
+  </motion.section>;
 }
 
 function ComparisonContent({ entityIds, attributeIds }: ComponentProps) {

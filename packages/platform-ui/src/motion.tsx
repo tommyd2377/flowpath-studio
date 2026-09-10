@@ -1,12 +1,25 @@
 'use client';
 
 import { forwardRef, useLayoutEffect, useRef, type ReactNode } from 'react';
-import { animate, LayoutGroup, MotionConfig, motion, useIsPresent, useMotionValue, useReducedMotion } from 'motion/react';
+import { animate, LayoutGroup, MotionConfig, motion, stagger, useIsPresent, useMotionValue, useReducedMotion, type Variants } from 'motion/react';
 import type { SemanticTransition } from './contracts.js';
 
-export const motionTiming = { reveal: 0.48, disclosure: 0.48, reflow: 0.56, workspace: 0.62, exit: 0.4 } as const;
-export const surfaceTransition = { type: 'tween', duration: motionTiming.reflow, ease: [0.4, 0, 0.2, 1] } as const;
-export const revealTransition = { duration: motionTiming.reveal, ease: [0.22, 0.61, 0.36, 1] } as const;
+/** The only motion roles available to a published presentation. */
+export const motionTiming = { reveal: 0.48, disclosure: 0.48, reflow: 0.56, workspace: 0.62, exit: 0.4, feedback: 0.22 } as const;
+export const surfaceTransition = { type: 'spring', visualDuration: 0.46, bounce: 0.08 } as const;
+export const revealTransition = { type: 'tween', duration: motionTiming.reveal, ease: [0.22, 0.61, 0.36, 1] } as const;
+export const feedbackTransition = { type: 'spring', visualDuration: motionTiming.feedback, bounce: 0.12 } as const;
+
+/** Coordinated page rhythm: one restrained entrance per new collection or reading view. */
+export const sequenceVariants: Variants = {
+  hidden: { opacity: 0 },
+  visible: { opacity: 1, transition: { when: 'beforeChildren', delayChildren: stagger(0.055, { startDelay: 0.02 }) } },
+};
+export const sequenceItemVariants: Variants = {
+  hidden: { opacity: 0, y: 14 },
+  visible: { opacity: 1, y: 0, transition: revealTransition },
+  exit: { opacity: 0, y: -7, transition: { ...revealTransition, duration: motionTiming.exit } },
+};
 
 export function InterfaceMotion({ children, id }: { children: ReactNode; id: string }) {
   const reduced = useReducedMotion();
@@ -56,7 +69,7 @@ export function Disclosure({ children, name }: { children: ReactNode; name: stri
   const reduced = useReducedMotion();
   return <motion.div data-platform-disclosure={name} inert={!present} aria-hidden={!present || undefined} style={{ overflow: 'clip' }}
     initial={reduced ? false : { height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
-    transition={{ ...revealTransition, duration: reduced ? 0 : motionTiming.disclosure }}>{children}</motion.div>;
+    transition={{ ...revealTransition, duration: reduced ? 0 : motionTiming.disclosure, opacity: { duration: reduced ? 0 : motionTiming.feedback } }}>{children}</motion.div>;
 }
 
 export const SemanticSurface = forwardRef<HTMLDivElement, { children: ReactNode; name: string; intent?: SemanticTransition['type'] }>(function SemanticSurface({ children, name, intent = 'none' }, ref) {
@@ -70,7 +83,7 @@ export const SemanticSurface = forwardRef<HTMLDivElement, { children: ReactNode;
     inert={!present} aria-hidden={!present || undefined}
     initial={still ? false : { opacity: 0, x: movement * 14, y: rise }}
     animate={{ opacity: 1, x: 0, y: 0 }} exit={{ opacity: 0, x: still ? 0 : movement * -10, y: 0, transition: { ...revealTransition, duration: reduced ? 0 : motionTiming.exit } }}
-    transition={{ ...revealTransition, duration: reduced ? 0 : duration, layout: reduced ? { duration: 0 } : surfaceTransition }}>
+    transition={{ ...revealTransition, duration: reduced ? 0 : duration, opacity: { duration: reduced ? 0 : motionTiming.feedback }, layout: reduced ? { duration: 0 } : surfaceTransition }}>
     {children}
   </motion.div>;
 });
