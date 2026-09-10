@@ -46,7 +46,7 @@ function cardAttributes(catalog: KnowledgeCatalog, entity: KnowledgeCatalog['ent
     // A card already has an authored summary. Repeating a free-form description as a fact
     // makes the dense card layout look like a raw import rather than a composed reading view.
     .filter(attribute => !/^(?:description|summary)$/i.test(attribute.label.trim()));
-  return knownAttributes(entity, ordered).slice(0, 3);
+  return knownAttributes(entity, ordered).slice(0, 6);
 }
 function SectionHeading({ eyebrow, title, children }: { eyebrow?: string; title: string; children?: ReactNode }) {
   return <div className="platform-section-heading"><div>{eyebrow && <span className="platform-eyebrow">{eyebrow}</span>}<h3>{title}</h3></div>{children}</div>;
@@ -76,7 +76,7 @@ function CollectionContent({ entityIds, attributeIds, variant, collectionId }: C
   const { catalog, state, onInteraction } = useCatalog();
   const action = useAction();
   const reduced = useReducedMotion();
-  const [limit, setLimit] = useState(12);
+  const [limit, setLimit] = useState(18);
   const collection = catalog.collections.find(item => item.id === collectionId);
   const collectionTabs = catalog.collections.filter(item => item.name.toLocaleLowerCase() !== 'all items' || item.entityIds.length !== catalog.entities.length);
   const allowed = new Set(entityIds.length ? entityIds : collection?.entityIds ?? catalog.entities.map(entity => entity.id));
@@ -87,8 +87,8 @@ function CollectionContent({ entityIds, attributeIds, variant, collectionId }: C
       <span className="platform-count">{entities.length} {entities.length === 1 ? 'item' : 'items'}</span>
     </SectionHeading>
     {collectionTabs.length > 0 && <div className="platform-collection-tabs" aria-label="Collections">
-      <button type="button" aria-pressed={!collectionId} onClick={() => { setLimit(12); action('collection', { id: '' }); }}>All items</button>
-      {collectionTabs.map(item => <button type="button" key={item.id} aria-pressed={item.id === collectionId} onClick={() => { setLimit(12); action('collection', { id: item.id }); }}>{item.name}</button>)}
+      <button type="button" aria-pressed={!collectionId} onClick={() => { setLimit(18); action('collection', { id: '' }); }}>All items</button>
+      {collectionTabs.map(item => <button type="button" key={item.id} aria-pressed={item.id === collectionId} onClick={() => { setLimit(18); action('collection', { id: item.id }); }}>{item.name}</button>)}
     </div>}
     <MotionHeight><motion.div layout={reduced ? false : 'position'} variants={reduced ? undefined : sequenceVariants} initial={reduced ? false : 'hidden'} animate="visible" className="platform-items" data-variant={variant} transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }}>
       <AnimatePresence initial={false} mode="popLayout">
@@ -228,7 +228,7 @@ const CatalogCanvas = defineComponent({ name: 'CatalogCanvas', description: 'A s
     const { plan } = useCatalog();
     const workspace = ['workspace-shift', 'restore', 'focus'].includes(plan.transition.type);
     return <MotionHeight className="platform-canvas-frame" duration={workspace ? motionTiming.workspace : motionTiming.reflow}>
-      <div className="platform-canvas" data-operation={plan.operation} data-has-criteria={plan.components.some(component => component.type === 'criteria')} data-has-collection={plan.components.some(component => component.type === 'collection')}><AnimatePresence initial={false} mode="popLayout">{props.sections.map(section => {
+      <div className="platform-canvas" data-operation={plan.operation} data-has-criteria="false" data-has-collection={plan.components.some(component => component.type === 'collection')}><AnimatePresence initial={false} mode="popLayout">{props.sections.filter(section => (section as ElementNode).typeName !== 'CriteriaControls').map(section => {
       const node = section as ElementNode;
       const name = node.statementId ?? node.typeName;
       const entity = node.typeName === 'EntityDetail' ? String((node.props.entityIds as string[])[0]) : '';

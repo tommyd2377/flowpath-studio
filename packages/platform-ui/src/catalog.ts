@@ -56,7 +56,6 @@ export function filterEntities(catalog: KnowledgeCatalog, input: CatalogFilter[]
 export function defaultPresentation(catalog: KnowledgeCatalog, snapshotId = catalog.id): PresentationPlan {
   const attributes = usefulAttributes(catalog);
   return validatePlan({ schemaVersion: 1, snapshotId, operation: 'discover', components: [
-    { id: 'collection', type: 'collection', variant: 'grid', entityIds: [], attributeIds: attributes.slice(0, 3).map(attribute => attribute.id) },
-    ...(attributes.length ? [{ id: 'criteria', type: 'criteria', variant: 'compact', entityIds: [], attributeIds: attributes.map(attribute => attribute.id) }] : []),
+    { id: 'collection', type: 'collection', variant: 'grid', entityIds: [], attributeIds: attributes.slice(0, 6).map(attribute => attribute.id) },
   ], transition: { type: 'none' } }, catalog, snapshotId);
 }

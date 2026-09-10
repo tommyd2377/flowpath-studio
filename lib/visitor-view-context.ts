@@ -38,10 +38,11 @@ export function captureVisitorContext(root: HTMLElement | null, base: VisitorCon
   const focused = document.activeElement instanceof Element ? document.activeElement : null;
   const focusId = (key: string, allowed: Set<string>) => { const id = focused?.closest(`[${key}]`)?.getAttribute(key); return id && allowed.has(id) ? id : null; };
   const visibleComponentTypes = [...new Set(seen.map(node => node.getAttribute('data-platform-slot') || node.getAttribute('data-visitor-component')).filter((kind): kind is Screen['visibleComponentTypes'][number] => components.has(kind as Screen['visibleComponentTypes'][number])))].slice(0, 8);
+  const visibleControls = [...new Set([...root.querySelectorAll<HTMLElement>('button, a[href]')].filter(visible).map(node => (node.getAttribute('aria-label') || node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim()).filter(label => label.length > 0 && label.length <= 160))].slice(0, 60);
   const surface = scrollSurface(root);
   return { ...base, expandedSourceIds: collect(scope.filter(node => node.dataset.sourceExpanded === 'true' && !node.closest('[inert], [aria-hidden="true"]')), 'data-source-id', sourceIds), screen: {
     viewportWidth: bounded(surface?.clientWidth ?? innerWidth, 20000), viewportHeight: bounded(surface?.clientHeight ?? innerHeight, 20000), scrollY: bounded(surface?.scrollTop ?? scrollY, 10000000), documentHeight: bounded(surface?.scrollHeight ?? document.documentElement.scrollHeight, 10000000),
-    visibleEntityIds: collect(seen, 'data-entity-id', entityIds), visibleSourceIds: collect(seen, 'data-source-id', sourceIds), visibleComponentTypes,
+    visibleEntityIds: collect(seen, 'data-entity-id', entityIds), visibleSourceIds: collect(seen, 'data-source-id', sourceIds), visibleComponentTypes, visibleControls,
     focusedEntityId: focusId('data-entity-id', entityIds), focusedSourceId: focusId('data-source-id', sourceIds),
   } };
 }

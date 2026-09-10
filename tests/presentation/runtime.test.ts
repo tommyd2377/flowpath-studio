@@ -51,7 +51,7 @@ test('inserted sections keep existing OpenUI statement identities', () => {
   const after = preflightPresentation(compilePresentation(catalog, composed));
   const identities = (value: typeof before) => (value.root!.props.sections as { statementId: string; typeName: string }[]).map(section => `${section.typeName}:${section.statementId}`);
   assert.ok(identities(before).every(identity => identities(after).includes(identity)));
-  assert.equal(identities(after).length, 4);
+  assert.equal(identities(after).length, 3);
 });
 
 test('hostile publisher strings remain escaped React data, never OpenUI instructions or HTML', () => {

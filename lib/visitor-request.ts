@@ -13,6 +13,7 @@ export const visitorScreenSchema = z.object({
   scrollY: z.number().int().min(0).max(10000000), documentHeight: z.number().int().min(0).max(10000000),
   visibleEntityIds: ids, visibleSourceIds: ids,
   visibleComponentTypes: z.array(z.enum(['collection', 'criteria', 'detail', 'comparison', 'selection', 'relationships', 'actions', 'gallery'])).max(8),
+  visibleControls: z.array(z.string().trim().min(1).max(160)).max(60).default([]),
   focusedEntityId: z.string().min(1).max(100).nullable(), focusedSourceId: z.string().min(1).max(100).nullable(),
 }).strict();
 export const visitorContextSchema = z.object({

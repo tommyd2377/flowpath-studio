@@ -64,8 +64,8 @@ export function planForIntent(catalog: KnowledgeCatalog, text: string, state = i
   const job = catalog.jobs.find(item => item.label.toLocaleLowerCase() === query);
   if (job && !/\bcompare\b/.test(query)) {
     const next = defaultPresentation(catalog, snapshotId);
-    next.components = next.components.map(component => component.type === 'criteria' ? { ...component, variant: 'expanded', attributeIds: job.attributeIds.length ? job.attributeIds : component.attributeIds } : component);
-    next.transition = { type: 'focus', ...(next.components.some(component => component.type === 'criteria') ? { targetComponentId: 'criteria' as const } : {}) };
+    next.components = next.components.map(component => component.type === 'collection' ? { ...component, attributeIds: job.attributeIds.length ? job.attributeIds : component.attributeIds } : component);
+    next.transition = { type: 'focus', targetComponentId: 'collection' };
     return validatePlan(next, catalog, snapshotId);
   }
   let constraints: CatalogFilter[] = [...state.filters];

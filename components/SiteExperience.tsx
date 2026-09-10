@@ -58,7 +58,7 @@ export default function SiteExperience({ content, siteId, publishedSlug, catalog
     </motion.div>
     <div className="site-content">
       {!assistantEnabled && catalog && <CatalogExplorer key={catalog.id} catalog={catalog} media={media} resolveAssetUrl={resolveAssetUrl} accent={content.accent} plan={openingPlan} onPhotoView={photoEvent} showComposer={false} onOutcome={event => catalogEvent({ ...event, type: 'outcome' })} onPresentation={plan => catalogEvent({ type: 'presentation_accepted', kind: 'display', operation: plan.operation })}/>}
-      {!!media?.assets.length && <MediaGallery title="Photos & albums"/>}
+      {!!media?.assets.length && !catalog && <MediaGallery title="Photos & albums"/>}
       <div className="site-signature"><span>{content.name}</span><span>A website with a voice.</span></div>
     </div>
   </div></MediaProvider>;
