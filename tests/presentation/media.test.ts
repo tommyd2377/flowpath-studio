@@ -125,7 +125,8 @@ test('real parser and shared SSR render galleries without injecting publisher ca
   assert.doesNotMatch(html, /<script>/);
   assert.match(html, /width="1600" height="900"/);
   assert.match(html, /loading="lazy"/);
-  assert.match(html, /<dialog/);
+  assert.doesNotMatch(html, /<dialog/);
+  assert.match(html, /photo-1\?size=display/);
 });
 
 test('standalone gallery and host entity images share resolution and explicit example labels', () => {

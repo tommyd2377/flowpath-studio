@@ -235,7 +235,7 @@
 .platform-media-albums > button { display: inline-flex; align-items: center; gap: 9px; max-width: 100%; background: #ffffff05; border: 1px solid var(--platform-line, #ffffff20); border-radius: 10px; padding: 7px 11px; font-size: 12px; text-align: left; }
 .platform-media-albums > button[aria-pressed="true"] { border-color: var(--platform-accent, #c6af86); background: #c6af8614; }
 .platform-media-albums > button > .platform-media-image { width: 38px; flex: none; border-radius: 5px; }
-.platform-media-grid { position: relative; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 320px)); justify-content: start; gap: clamp(14px, 1.8cqi, 24px); align-items: start; }
+.platform-media-grid { position: relative; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); max-width: 1280px; gap: clamp(14px, 1.8cqi, 24px); align-items: start; }
 .platform-media-grid[data-layout="editorial"] { grid-auto-flow: dense; }
 .platform-media-card, .platform-entity-media figure { min-width: 0; margin: 0; position: relative; }
 .platform-photo-open { display: block; width: 100%; border: 0; padding: 0; background: transparent; border-radius: 10px; overflow: hidden; line-height: 0; text-align: left; }
@@ -260,31 +260,33 @@
 .platform-entity-media[data-variant="comparison"] { max-width: 240px; margin-bottom: 14px; }
 .platform-entity-media .platform-media-example { margin-top: 7px; }
 .platform-photo-count { position: absolute; top: 10px; right: 10px; pointer-events: none; color: #fff; background: #121413c9; border: 1px solid #ffffff24; border-radius: 15px; padding: 4px 9px; font-size: 10px; line-height: 1.5; }
-.platform-lightbox { width: min(1100px, calc(100vw - 32px)); max-width: none; max-height: calc(100svh - 32px); margin: auto; padding: 0; border: 1px solid #ffffff28; border-radius: 18px; background: #141615; box-shadow: 0 28px 100px #0009; overflow: auto; }
-.platform-lightbox::backdrop { background: #090b0bea; }
-.platform-lightbox-content { padding: clamp(16px, 3vw, 28px); }
-.platform-lightbox-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
-.platform-lightbox-toolbar p { margin: 0; font-size: 12px; color: #b6bcb2; }
-.platform-lightbox button { background: #ffffff08; border: 1px solid #ffffff22; border-radius: 9px; min-height: 42px; padding: 8px 14px; font-size: 12px; }
+.platform-lightbox-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 16px; background: #090b0bea; }
+.platform-lightbox { width: 100%; height: 100%; padding: 0; background: transparent; overflow: hidden; }
+.platform-lightbox-content { position: relative; width: 100%; height: 100%; }
+.platform-lightbox-toolbar { position: absolute; z-index: 1; top: 22px; left: 22px; right: 22px; display: flex; align-items: center; justify-content: space-between; gap: 18px; pointer-events: none; }
+.platform-lightbox-toolbar p { margin: 0; font-size: 12px; color: #fff; text-shadow: 0 1px 10px #000; }
+.platform-lightbox button { pointer-events: auto; background: #1012119c; border: 1px solid #ffffff2a; border-radius: 999px; min-height: 38px; padding: 7px 12px; font-size: 12px; backdrop-filter: blur(10px); }
 .platform-lightbox button:disabled { opacity: .35; cursor: default; }
 .platform-lightbox-toolbar button span { font-size: 22px; vertical-align: -1px; margin-left: 14px; }
-.platform-lightbox-stage { height: min(64svh, 740px); display: grid; place-items: center; }
+.platform-lightbox-stage { width: 100%; height: 100%; display: grid; place-items: center; }
 .platform-lightbox-frame { width: 100%; height: 100%; min-height: 0; display: flex; flex-direction: column; }
-.platform-lightbox-image { flex: 1; min-height: 0; }
+.platform-lightbox-image { flex: 1; min-height: 0; display: grid; place-items: center; }
 .platform-lightbox .platform-media-image { height: 100%; width: 100%; background: transparent; }
-.platform-lightbox-caption { margin: 18px auto 0; max-width: 800px; font-size: 13px; text-align: center; }
+.platform-lightbox-caption { position: absolute; z-index: 1; bottom: 24px; left: 50%; max-width: min(80vw, 800px); padding: 7px 12px; border-radius: 999px; transform: translateX(-50%); background: #1012119c; font-size: 12px; text-align: center; backdrop-filter: blur(10px); }
 .platform-lightbox-caption p { margin: 0; }
-.platform-lightbox-navigation { display: flex; justify-content: space-between; gap: 18px; margin-top: 20px; }
+.platform-lightbox-navigation { position: absolute; z-index: 1; inset: 50% 22px auto; display: flex; justify-content: space-between; gap: 18px; transform: translateY(-50%); pointer-events: none; }
+.platform-lightbox-navigation button { pointer-events: auto; }
 @media (max-width: 600px) {
-  .platform-media-grid { gap: 18px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 320px)); }
+  .platform-media-grid { gap: 18px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); }
   .platform-media-grid[data-variant="list"] .platform-media-card { grid-template-columns: 110px minmax(0, 1fr); gap: 14px; }
   .platform-entity-media[data-variant="detail"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .platform-lightbox { width: calc(100vw - 16px); max-height: calc(100svh - 16px); border-radius: 13px; }
-  .platform-lightbox-stage { height: 55svh; }
+  .platform-lightbox-backdrop { padding: 0; }
+  .platform-lightbox-toolbar { top: 14px; left: 14px; right: 14px; }
+  .platform-lightbox-navigation { inset-inline: 14px; }
   .platform-media-albums { gap: 7px; }
 }
 @container platform-explorer (max-width: 600px) {
-  .platform-media-grid { gap: 18px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 320px)); }
+  .platform-media-grid { gap: 18px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); }
   .platform-media-grid[data-variant="list"] .platform-media-card { grid-template-columns: 110px minmax(0, 1fr); gap: 14px; }
   .platform-entity-media[data-variant="detail"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .platform-media-albums { gap: 7px; }

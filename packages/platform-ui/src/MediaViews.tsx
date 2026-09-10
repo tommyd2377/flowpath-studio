@@ -24,7 +24,6 @@ export function MediaProvider({ library, ...props }: MediaProviderProps) {
 
 function MediaProviderContent({ library, resolveAssetUrl, children, onInteraction, onPhotoView }: Omit<MediaProviderProps, 'library'> & { library: MediaLibrary }) {
   const [viewer, setViewer] = useState<Viewer | null>(null);
-  const dialog = useRef<HTMLDialogElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
   const opener = useRef<HTMLElement | null>(null);
   const photoCallback = useRef(onPhotoView);
@@ -40,12 +39,12 @@ function MediaProviderContent({ library, resolveAssetUrl, children, onInteractio
   }, [library, onInteraction]);
   const active = viewer !== null;
   useEffect(() => {
-    const element = dialog.current;
-    if (!active || !element) return;
-    element.showModal();
+    if (!active) return;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
     closeButton.current?.focus({ preventScroll: true });
     return () => {
-      element.close();
+      document.body.style.overflow = overflow;
       if (opener.current?.isConnected && !opener.current.closest('[inert], [aria-hidden="true"]')) opener.current.focus({ preventScroll: true });
     };
   }, [active]);
@@ -62,19 +61,20 @@ function MediaProviderContent({ library, resolveAssetUrl, children, onInteractio
   };
   const close = () => { if (viewer) { onInteraction?.(); setViewer(null); } };
   return <LayoutGroup id={`gallery-${labelId}`}><MediaContext.Provider value={context}>{children}
-    <dialog ref={dialog} className="platform-lightbox" aria-labelledby={labelId} onCancel={event => { event.preventDefault(); close(); }}
-      onClick={event => { if (event.target === event.currentTarget) close(); }}
-      onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); move(event.key === 'ArrowLeft' ? -1 : 1); } }}>
-      {asset && viewer && <div className="platform-lightbox-content">
+    <AnimatePresence>{asset && viewer && <motion.div className="platform-lightbox-backdrop" key="lightbox" role="presentation" initial={reduced ? false : { opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ ...revealTransition, duration: reduced ? 0 : motionTiming.feedback }}
+      onMouseDown={event => { if (event.target === event.currentTarget) close(); }}>
+      <motion.div className="platform-lightbox" role="dialog" aria-modal="true" aria-labelledby={labelId} initial={reduced ? false : { y: 18, scale: 0.985 }} animate={{ y: 0, scale: 1 }} exit={{ y: 12, scale: 0.99 }} transition={{ type: 'spring', visualDuration: reduced ? 0 : motionTiming.reveal, bounce: 0.08 }}
+        onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); close(); } if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); move(event.key === 'ArrowLeft' ? -1 : 1); } }}>
+      <div className="platform-lightbox-content">
         <div className="platform-lightbox-toolbar"><p id={labelId}>Photo {viewer.index + 1} of {viewer.assetIds.length}</p><button ref={closeButton} type="button" aria-label="Close photo" onClick={close}>Close <span aria-hidden="true">×</span></button></div>
         <div className="platform-lightbox-stage"><AnimatePresence initial={false} mode="wait"><motion.div key={asset.id} className="platform-lightbox-frame"
           initial={reduced ? false : { opacity: 0, scale: 0.985 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.985 }} transition={{ ...revealTransition, duration: reduced ? 0 : motionTiming.disclosure / 2 }}>
           <div className="platform-lightbox-image"><MediaImage assetId={asset.id} size="display" fit="contain" interactive={false} layoutId={`gallery-photo-${asset.id}`}/></div>
-          <div className="platform-lightbox-caption" aria-live="polite">{viewer.examples.includes(asset.id) && <span className="platform-media-example">Example photo</span>}<p>{asset.caption || asset.alt || 'Photo'}</p>{asset.credit && <small>{asset.credit}</small>}</div>
+          {(viewer.examples.includes(asset.id) || visibleCaption(asset.caption) || asset.credit) && <div className="platform-lightbox-caption" aria-live="polite">{viewer.examples.includes(asset.id) && <span className="platform-media-example">Example photo</span>}{visibleCaption(asset.caption) && <p>{visibleCaption(asset.caption)}</p>}{asset.credit && <small>{asset.credit}</small>}</div>}
         </motion.div></AnimatePresence></div>
         {viewer.assetIds.length > 1 && <nav className="platform-lightbox-navigation" aria-label="Photo navigation"><button type="button" disabled={viewer.index === 0} onClick={() => move(-1)}>← Previous</button><button type="button" disabled={viewer.index === viewer.assetIds.length - 1} onClick={() => move(1)}>Next →</button></nav>}
-      </div>}
-    </dialog>
+      </div></motion.div>
+    </motion.div>}</AnimatePresence>
   </MediaContext.Provider></LayoutGroup>;
 }
 
