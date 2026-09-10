@@ -7,7 +7,7 @@ import { editWithChat } from '@/lib/chat-editor';
 import { readKnowledgeArtifact, stagePublicKnowledge } from '@/lib/knowledge-store';
 import { validateOpening } from '@/lib/site-opening';
 import { recordPlatformEvent } from '@/lib/platform-events';
-import { readMediaLibrary, stagePublicMedia } from '@/lib/media-store';
+import { readMediaLibrary, reconcileSectionAssociations, stagePublicMedia } from '@/lib/media-store';
 import { validateMediaLibrary } from '@thevoice/platform-ui/media';
 import { assertLaunchPublication } from '@/lib/launch-billing';
 
@@ -26,8 +26,12 @@ export async function POST(request: Request, { params }: Context) {
     const user = await requireWorkspaceUser(request);
     const { siteId } = await params;
     const command = commandSchema.parse(await readJson(request));
+    let effectiveCommand = command;
     if (command.action === 'publish') {
-      const current = await getSite(user, siteId);
+      let current = await getSite(user, siteId);
+      const repair = await reconcileSectionAssociations(user, siteId, current.revision, current.draft.sections.map(section => section.id));
+      current = repair.site;
+      effectiveCommand = { ...command, revision: current.revision };
       await assertLaunchPublication(user, siteId);
       const catalog = current.draft.knowledgeRevisionId ? (await readKnowledgeArtifact(user, siteId, current.draft.knowledgeRevisionId)).catalog : null;
       validateOpening(current.draft, catalog);
@@ -38,8 +42,12 @@ export async function POST(request: Request, { params }: Context) {
         await stagePublicMedia(user, siteId, current.draft.mediaRevisionId);
       }
     }
-    const site = command.action === 'chat' ? await editWithChat(user, siteId, command)
-      : await modifySite(user, siteId, command.revision, site => applyCommand(site, command));
+    let site = command.action === 'chat' ? await editWithChat(user, siteId, command)
+      : await modifySite(user, siteId, effectiveCommand.revision, state => applyCommand(state, effectiveCommand));
+    if (command.action === 'save' || command.action === 'apply') {
+      const repair = await reconcileSectionAssociations(user, siteId, site.revision, site.draft.sections.map(section => section.id));
+      site = repair.site;
+    }
     if (command.action === 'publish') await recordPlatformEvent(siteId, { type: 'publication', surface: 'public', operation: 'publish', status: 'succeeded', snapshotId: site.published?.knowledgeRevisionId }).catch(() => undefined);
     return { site };
   });

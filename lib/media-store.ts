@@ -110,6 +110,19 @@ export async function saveMediaLibrary(user: WorkspaceUser, siteId: string, revi
   return { site, library };
 }
 
+/** Content targets can be deleted independently of immutable media revisions. Preserve the photos, but retire only links whose section no longer exists. */
+export async function reconcileSectionAssociations(user: WorkspaceUser, siteId: string, revision: number, sectionIds: readonly string[]) {
+  const { getSite } = await import('./site-store');
+  const current = await getSite(user, siteId);
+  if (current.revision !== revision || !current.draft.mediaRevisionId) return { site: current, repaired: false };
+  const library = await readMediaLibrary(user, siteId, current.draft.mediaRevisionId);
+  const known = new Set(sectionIds);
+  const associations = library.associations.filter(link => link.targetType !== 'section' || known.has(link.targetId!));
+  if (associations.length === library.associations.length) return { site: current, repaired: false };
+  const saved = await saveMediaLibrary(user, siteId, revision, { ...library, associations });
+  return { site: saved.site, repaired: true };
+}
+
 /** A staged manifest is immutable and inaccessible through public routes until publication. */
 export async function stagePublicMedia(user: WorkspaceUser, siteId: string, revisionId: string) {
   const library = await readMediaLibrary(user, siteId, revisionId);

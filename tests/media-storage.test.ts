@@ -70,6 +70,18 @@ test('photo route lifecycle separates private originals, reviewed revisions and 
     const restored = await modifySite(user, id, current.revision, site => applyCommand(site, { action: 'undo', revision: site.revision }));
     assert.equal(restored.draft.mediaRevisionId, applied.library.id); assert.equal(restored.published?.mediaRevisionId, empty.library.id);
     assert.equal((await downloadFile(user, id, fileId)).file.mime, 'image/webp');
+    const removedSectionId = restored.draft.sections[0]!.id;
+    const savedResponse = await sitePost(json(`/api/sites/${id}`, {
+      action: 'save',
+      revision: restored.revision,
+      content: { ...restored.draft, sections: restored.draft.sections.filter(section => section.id !== removedSectionId) }
+    }), context);
+    assert.equal(savedResponse.status, 200);
+    const saved = (await savedResponse.json()).site;
+    const reconciledMedia = await readMediaLibrary(user, id, saved.draft.mediaRevisionId!);
+    assert.ok(reconciledMedia.associations.every(link => link.targetType !== 'section' || link.targetId !== removedSectionId));
+    const republishedResponse = await sitePost(json(`/api/sites/${id}`, { action: 'publish', revision: saved.revision }), context);
+    assert.equal(republishedResponse.status, 200);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
