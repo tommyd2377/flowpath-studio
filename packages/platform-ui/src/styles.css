@@ -583,3 +583,49 @@
 .platform-website-text-link { transition: box-shadow .2s, color .2s; }
 .platform-website-text-link:is(:hover, :focus-visible) { box-shadow: 0 2px 0 var(--platform-accent, #acbeff); }
 @media (prefers-reduced-motion: reduce) { .platform-website-text-link { transition: none; } }
+.platform-task-browser { width: min(1160px, 100%); margin: 24px auto; padding: 0 16px 32px; color: var(--platform-text, inherit); }
+.platform-query-surface { margin-top: 20px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 20px; padding: clamp(16px, 3vw, 30px); }
+.platform-query-children, .platform-criteria-chips { display: flex; flex-wrap: wrap; gap: 10px; margin-block: 16px; }
+.platform-criteria-chip { display: inline-flex; align-items: center; gap: 8px; border: 1px solid currentColor; border-radius: 24px; padding: 6px 12px; }
+.platform-criteria-chip button { background: transparent; border: 0; color: inherit; min-width: 28px; min-height: 28px; cursor: pointer; }
+.platform-query-filters { margin-block: 20px; }
+.platform-query-filters form { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; padding-block: 14px; }
+.platform-query-filters label { display: flex; flex-direction: column; gap: 6px; }
+.platform-query-filters :is(input, select), .platform-query-surface > label select { color: inherit; background: var(--platform-surface, #202330); border: 1px solid color-mix(in srgb, currentColor 30%, transparent); border-radius: 8px; padding: 10px; max-width: 100%; }
+.platform-query-records { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 16px; margin-block: 20px; }
+.platform-query-records[data-view=list] { grid-template-columns: 1fr; }
+.platform-query-card { border: 1px solid color-mix(in srgb, currentColor 16%, transparent); border-radius: 16px; padding: 18px; overflow-wrap: anywhere; }
+.platform-query-card h3 { margin-block: 8px; }
+.platform-query-card dl > div { display: flex; justify-content: space-between; gap: 16px; }
+.platform-query-card dd { margin: 0; }
+.platform-query-table { overflow-x: auto; }
+.platform-query-table :is(th, td) { text-align: left; padding: 10px; border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent); }
+.knowledge-collections ul { padding-inline-start: 20px; }
+@media (max-width: 600px) { .platform-task-browser { padding-inline: 8px; } .platform-query-filters form { display: grid; } .platform-query-surface { padding: 14px; } }
+
+.platform-query-surface { scroll-margin-top: 140px; overflow-wrap: anywhere; }
+.platform-query-surface form, .platform-task-artifact, .platform-action-review { display: grid; gap: 12px; margin-block: 16px; min-width: 0; }
+.platform-query-surface label { min-width: 0; }
+.platform-query-surface :is(input:not([type=checkbox]), select, textarea) { color: inherit; background: var(--platform-surface, #202330); border: 1px solid color-mix(in srgb, currentColor 30%, transparent); border-radius: 8px; padding: 10px; max-width: 100%; box-sizing: border-box; }
+.platform-query-surface :is(input:not([type=checkbox]), textarea) { width: 100%; }
+.platform-query-surface :is(button, input, select, textarea):focus-visible { outline: 2px solid var(--platform-accent, #c8ac85); outline-offset: 3px; }
+.platform-query-surface button { max-width: 100%; white-space: normal; }
+.platform-query-surface iframe { width: 100%; min-height: 260px; border: 0; }
+.platform-action-review[open] { display: block; }
+.platform-action-review button { margin: 8px; }
+.platform-task-artifact ol { padding-inline-start: 24px; }
+.platform-task-artifact li { margin-block: 12px; }
+
+.platform-query-filters > .text-button, .platform-query-surface [aria-label="Compose an artifact"] > button, .platform-query-surface [aria-label="Reviewed publisher links"] > a { margin-inline-end: 12px; margin-block: 8px; }
+
+.platform-query-surface :is([aria-label], [role="status"], .platform-task-artifact, .platform-action-review) { scroll-margin-top: 140px; }
+
+/* Controlled imported-site layouts share the same content and navigation. */
+.platform-website[data-website-layout=editorial] .platform-website-hero { border-bottom: 1px solid var(--platform-line); }
+.platform-website[data-website-layout=editorial] .platform-website-section { padding-block: clamp(40px, 6cqw, 80px); }
+.platform-website[data-website-layout=editorial] .platform-website-stories { max-width: 76ch; }
+.platform-website[data-website-layout=compact] .platform-website-hero { padding-block: 32px; }
+.platform-website[data-website-layout=compact] .platform-website-hero h1 { font-size: clamp(30px, 4cqw, 52px); max-width: 25ch; }
+.platform-website[data-website-layout=compact] .platform-website-section { padding-block: 28px; }
+.platform-website[data-website-layout=compact] .platform-content-card-copy { padding-block: 12px; }
+.platform-website[data-website-layout=compact] .platform-website-entries { gap: 18px; }

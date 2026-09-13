@@ -8,7 +8,7 @@ import { DEFAULT_OPENING } from '../../lib/site-opening';
 import { DEFAULT_EXPLORE_SETTINGS, demoExploreResult } from '../../lib/explore-model';
 
 const origin = 'http://127.0.0.1:3225';
-async function fixture(page: Page) {
+async function fixture(page: Page, generalPhotos = false) {
   await page.route(/^https?:\/\//, route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort('blockedbyclient'));
   const post = async (path: string, data: unknown) => {
     const response = await page.request.post(path, { headers: { Origin: origin }, data });
@@ -29,7 +29,8 @@ async function fixture(page: Page) {
   review = await post(`/api/sites/${site.id}/knowledge`, { action: 'revise', revision: site.revision, candidateId: review.candidates[0].id, catalog: graph });
   site = (await post(`/api/sites/${site.id}/knowledge`, { action: 'apply', revision: site.revision, candidateId: review.candidates[0].id })).site;
   const ids: string[] = [];
-  for (const [index, color] of ['#698ca1', '#c1a782', '#859982'].entries()) {
+  const colors = generalPhotos ? ['#698ca1', '#c1a782', '#859982', '#94a1bf', '#b68778', '#647980', '#ac9772', '#547a68', '#c4a8b2'] : ['#698ca1', '#c1a782', '#859982'];
+  for (const [index, color] of colors.entries()) {
     // Test-only illustration; no external images or model calls.
     const svg = `<svg width="900" height="680" xmlns="http://www.w3.org/2000/svg"><rect width="900" height="680" fill="${color}"/><ellipse cx="450" cy="520" rx="270" ry="55" fill="#243636" opacity=".15"/><path d="M220 275 Q450 720 680 275Z" fill="#ede5d5"/><ellipse cx="450" cy="275" rx="230" ry="70" fill="#e2d6bf"/><ellipse cx="450" cy="275" rx="197" ry="48" fill="${color}"/></svg>`;
     ids.push(await upload(`illustration-${index}.png`, 'image/png', await sharp(Buffer.from(svg)).png().toBuffer()));
@@ -37,7 +38,7 @@ async function fixture(page: Page) {
   site = (await post(`/api/sites/${site.id}/media`, { revision: site.revision, library: { schemaVersion: 1, id: randomUUID(),
     assets: ids.map((id, index) => ({ id, width: 900, height: 680, caption: `Studio study ${index + 1}`, alt: `Synthetic ceramic bowl illustration ${index + 1}`, credit: 'Local test illustration' })),
     albums: [{ id: 'studies', title: 'Studio studies', description: 'An illustrated collection.', assetIds: ids }],
-    associations: ids.map((assetId, index) => ({ id: `association-${index}`, assetId, targetType: 'entity', targetId: index === 1 ? 'white' : 'blue', role: 'example', primary: index === 0 })),
+    associations: ids.map((assetId, index) => ({ id: `association-${index}`, assetId, ...(generalPhotos ? { targetType: 'site' } : { targetType: 'entity', targetId: index === 1 ? 'white' : 'blue' }), role: 'example', primary: index === 0 })),
   } })).site;
   site = (await post(`/api/sites/${site.id}`, { action: 'save', revision: site.revision, content: { ...site.draft,
     contact: 'hello@harbor.example', hours: 'Tuesday–Sunday, 10am–5pm', style: { layout: 'editorial', palette: 'parchment' },
@@ -53,6 +54,28 @@ async function ask(page: Page, value: string) {
   const input = page.getByRole('textbox', { name: 'What would you like to see?', exact: true });
   await input.fill(value); await input.press('Enter');
 }
+
+test('site photos appear between content sections on desktop and mobile without adding repeated navigation', async ({ page }, info) => {
+  await fixture(page, true);
+  await page.getByRole('button', { name: 'Browse published content', exact: true }).click();
+  const website = page.locator('[data-published-website]');
+  await expect(website).toBeVisible();
+  const sections = website.locator(':scope > .platform-website-section');
+  await expect(sections.nth(1)).toHaveAttribute('data-section-kind', 'photos');
+  await expect(sections.nth(2)).not.toHaveAttribute('data-section-kind', 'photos');
+  await expect(sections.nth(1).locator('img')).toHaveCount(4);
+  await expect(sections.nth(1).getByText('Example photo', { exact: true })).toHaveCount(4);
+  const navigation = website.getByRole('navigation', { name: 'Website navigation' });
+  await navigation.locator('summary').click();
+  await expect(navigation.getByRole('link', { name: 'Studio studies', exact: true })).toHaveCount(1);
+  await navigation.locator('summary').click();
+  await sections.nth(1).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: info.outputPath('distributed-photos-desktop.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await sections.nth(1).scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  await page.screenshot({ path: info.outputPath('distributed-photos-mobile.png') });
+});
 
 test('full website, grouped records, published footer, photos and Home work on desktop and mobile', async ({ page }, info) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));

@@ -9,6 +9,7 @@ export const knowledgeQuerySchema = z.object({
   entityIds: z.array(reference).max(12).optional(), factIds: z.array(reference).max(40).optional(), assetIds: z.array(reference).max(12).optional(),
   asOf: temporalDateSchema.optional(), filters: z.array(catalogFilterSchema).max(24).optional(),
   expansion: z.number().int().min(0).max(2).optional(),
+  includeBlocks: z.boolean().optional(),
 }).strict();
 export type KnowledgeQuery = z.infer<typeof knowledgeQuerySchema>;
 export const KNOWLEDGE_LIMITS = Object.freeze({ entities: 12, facts: 40, relationships: 20, assets: 12, bytes: 32_000, expansion: 2 });
@@ -96,7 +97,7 @@ export function retrieveKnowledge(input: KnowledgeCatalog, request: KnowledgeQue
     .map(relation => score(`${relation.kind} ${relation.label} ${relation.inverseLabel ?? ''}`, words)));
   const ranked = catalog.entities.filter(entity => allowed.has(entity.id)).map(entity => ({ entity,
     score: explicit.has(entity.id) ? 100_000 : score(`${entity.name} ${(entity.aliases ?? []).join(' ')} ${entity.kind}`, words) * 10
-      + score(entity.summary, words) + relationshipScore(entity.id) + Math.max(0, ...allFacts.filter(fact => fact.entityId === entity.id).map(factScore)) }))
+      + score(entity.summary, words) + score((entity.blocks ?? []).map(block => block.text).join(' '), words) + relationshipScore(entity.id) + Math.max(0, ...allFacts.filter(fact => fact.entityId === entity.id).map(factScore)) }))
     .filter(item => item.score > 0 || !words.length && !explicit.size).sort((a, b) => b.score - a.score || a.entity.id.localeCompare(b.entity.id));
   const selected = new Set(ranked.slice(0, KNOWLEDGE_LIMITS.entities).map(item => item.entity.id));
   for (let depth = 0; depth < (query.expansion ?? 1) && selected.size < KNOWLEDGE_LIMITS.entities; depth++) {
@@ -130,9 +131,14 @@ export function retrieveKnowledge(input: KnowledgeCatalog, request: KnowledgeQue
   const result = { schemaVersion: 1 as const, revisionId: catalog.id, asOf,
     status: (!selected.size ? 'unresolved' : values.some(value => value.status === 'conflict') || ranked.length > 1 && ranked[0].score === ranked[1].score && words.length > 0 && explicit.size === 0 ? 'ambiguous' : 'resolved') as 'unresolved' | 'ambiguous' | 'resolved',
     reason: selected.size ? 'Only approved publication content; conditions and unknowns must remain visible.' : 'No matching published knowledge.',
-    entities: projected.entities.filter(entity => selected.has(entity.id)).map(entity => requestedFields ? { ...entity, attributes: Object.fromEntries(Object.entries(entity.attributes).filter(([field]) => requestedFields.has(`${entity.id}/attributes.${field}`))) } : entity), facts, values, relationships: relations.slice(0, KNOWLEDGE_LIMITS.relationships),
+    entities: projected.entities.filter(entity => selected.has(entity.id)).map(entity => {
+      const { blocks, ...metadata } = entity;
+      const projected = query.includeBlocks === false ? metadata : entity;
+      void blocks;
+      return requestedFields ? { ...projected, attributes: Object.fromEntries(Object.entries(entity.attributes).filter(([field]) => requestedFields.has(`${entity.id}/attributes.${field}`))) } : projected;
+    }), facts, values, relationships: relations.slice(0, KNOWLEDGE_LIMITS.relationships),
     media: media ? { revisionId: media.id, assets: keptAssets, associations: links.filter(link => keptAssets.some(asset => asset.id === link.assetId)) } : null,
-    limits: KNOWLEDGE_LIMITS, omitted: { entities: Math.max(0, ranked.length - selected.size), facts: relevantFacts.length - facts.length, relationships: Math.max(0, relations.length - KNOWLEDGE_LIMITS.relationships), assets: Math.max(0, assets.length - keptAssets.length) } };
+    limits: KNOWLEDGE_LIMITS, omitted: { entities: Math.max(0, ranked.length - selected.size), facts: relevantFacts.length - facts.length, relationships: Math.max(0, relations.length - KNOWLEDGE_LIMITS.relationships), assets: Math.max(0, assets.length - keptAssets.length), blocks: query.includeBlocks === false ? projected.entities.filter(entity => selected.has(entity.id)).reduce((count, entity) => count + (entity.blocks?.length ?? 0), 0) : 0 } };
   // Fail explicitly rather than leak an unbounded context or return an
   // apparently complete answer after dropping assertions or qualifications.
   if (new TextEncoder().encode(JSON.stringify(result)).length > KNOWLEDGE_LIMITS.bytes) throw new Error('Knowledge context exceeds 32,000 bytes. Narrow the question or references.');

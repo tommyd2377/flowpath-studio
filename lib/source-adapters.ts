@@ -1,3 +1,4 @@
+import { htmlDocument } from './html-document';
 import { crc32, inflateRawSync } from 'node:zlib';
 import { AppError } from './errors';
 import { fetchWebsiteHtml, type WebsiteTransport } from './website-fetch';
@@ -203,13 +204,10 @@ export function extractXlsx(bytes: Uint8Array): { text: string; sheets: XlsxShee
   return { text, sheets };
 }
 
-export function htmlToText(html: string) {
-  const withoutUnsafe = html.replace(/<!--[\s\S]*?-->/g, '').replace(/<script\b[\s\S]*?<\/script>/gi, '').replace(/<style\b[\s\S]*?<\/style>/gi, '');
-  const title = withoutUnsafe.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1];
-  const body = withoutUnsafe.replace(/<title\b[\s\S]*?<\/title>/gi, '').replace(/<(?:h[1-6]|p|li|div|section|article|br|tr)\b[^>]*>/gi, '\n').replace(/<\/(?:h[1-6]|p|li|div|section|article|tr)\s*>/gi, '\n').replace(/<\/(?:td|th)\s*>/gi, '\t');
-  const text = xmlEntities(body.replace(/<[^>]+>/g, ' ')).replace(/[ \t]+/g, ' ').replace(/[ \t]*\n[ \t]*/g, '\n').replace(/\n{2,}/g, '\n').trim();
-  const result = [title ? `Title: ${xmlEntities(title).trim()}` : '', text].filter(Boolean).join('\n\n');
-  if (!result) throw new AppError('This webpage did not contain readable text.');
+export function htmlToText(html: string, options: { allowEmpty?: boolean } = {}) {
+  const document = htmlDocument(html, false);
+  const result = [document.title ? `Title: ${document.title}` : '', document.text].filter(Boolean).join('\n\n');
+  if (!result && !options.allowEmpty) throw new AppError('This webpage did not contain readable text.');
   return result;
 }
 

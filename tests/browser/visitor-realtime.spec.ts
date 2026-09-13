@@ -3,6 +3,8 @@ import type { Site } from '../../lib/site-model';
 import type { VisitorContext, VisitorHistory, VisitorControlUpdate } from '../../lib/visitor-realtime-context';
 import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
+import { taskFixture } from '../../fixtures/visitor-tasks';
+import type { VisitorTaskView } from '@thevoice/platform-ui/task-view';
 
 const origin = 'http://127.0.0.1:3225';
 type Harness = { controls: VisitorControlUpdate[]; requests: { context: VisitorContext; history: VisitorHistory }[]; chats: { context: VisitorContext; history: VisitorHistory; text: string }[]; outputActive: boolean; outgoing: { stopped: boolean; enabled: boolean }[]; audioMuted: boolean; ack: boolean; failControl: boolean; deferConnection: boolean; deferTrack: boolean; neverResolvePlay: boolean; connect: () => void; attach: () => void; revision: number; calls: number; closed: number; aborted: number; tracks: { stopped: boolean; enabled: boolean }[]; deferPermission: boolean; releasePermission: () => void; emit: (event: unknown) => void; disconnect: () => void; offers: string[] };
@@ -436,6 +438,149 @@ test('manual context pauses outgoing audio until the matching owner ACK, preserv
   expect(await page.evaluate(() => ({ calls: window.__visitorVoice.calls, live: window.__visitorVoice.tracks.every(track => track.enabled && !track.stopped), muted: window.__visitorVoice.audioMuted }))).toEqual({ calls: 1, live: true, muted: false });
 });
 
+test('spoken cancellation clears stale activity and waits for quiet output plus the new owner revision', async ({ page }) => {
+  await prepare(page);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
+  await page.evaluate(() => {
+    const state = window.__visitorVoice; state.ack = false;
+    state.emit({ type: 'response_started', revision: 1 });
+    state.emit({ type: 'activity', revision: 1, interactionRevision: 0, activity: 'images' });
+  });
+  await expect(page.getByRole('status').filter({ has: page.locator('span'), hasText: 'Finding images…' })).toBeVisible();
+  await page.evaluate(() => {
+    const state = window.__visitorVoice;
+    state.emit({ type: 'response_cancelled', revision: 2, interactionRevision: 0 });
+    state.emit({ type: 'task_error', revision: 1, interactionRevision: 0, message: 'Obsolete timeout' });
+    state.emit({ type: 'navigation', id: 'obsolete-navigation', revision: 1, target: { kind: 'browse' } });
+    state.emit({ type: 'playback_started', responseId: 'obsolete-audio', interactionRevision: 0 });
+  });
+  // The voice stage retains its last label for the fade, but removes it from
+  // accessibility; the floating activity indicator must also be gone.
+  await expect(page.getByRole('status').filter({ hasText: 'Finding images…' })).toHaveCount(0);
+  await expect(page.getByText('Obsolete timeout')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.audioMuted)).toBe(true);
+  // Output is quiet already, but the last accepted revision predates cancellation.
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.filter(update => update.ready).length)).toBeGreaterThan(1);
+  expect(await page.evaluate(() => window.__visitorVoice.outgoing.every(track => track.enabled && !track.stopped))).toBe(true);
+  await page.evaluate(() => {
+    const state = window.__visitorVoice; state.outputActive = true;
+  });
+  // Let the audio observer see the old output before acknowledging the new view.
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.at(-1)?.audio?.outputActive)).toBe(true);
+  await page.evaluate(() => {
+    const state = window.__visitorVoice, latest = state.controls.at(-1)!;
+    state.ack = true; state.emit({ type: 'control_applied', seq: latest.seq, interactionRevision: 0, revision: 2, ready: true });
+  });
+  expect(await page.evaluate(() => window.__visitorVoice.audioMuted)).toBe(true);
+  await page.evaluate(() => { window.__visitorVoice.outputActive = false; });
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.audioMuted)).toBe(false);
+  await page.evaluate(() => {
+    window.__visitorVoice.emit({ type: 'response_started', revision: 3 });
+    window.__visitorVoice.emit({ type: 'navigation', id: 'current-home', revision: 3, target: { kind: 'home' } });
+  });
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.navigationAck?.id === 'current-home' && update.navigationAck.status === 'applied'))).toBe(true);
+  expect(await page.evaluate(() => window.__visitorVoice.controls.some(update => update.navigationAck?.id === 'obsolete-navigation'))).toBe(false);
+  expect(await page.evaluate(() => window.__visitorVoice.calls)).toBe(1);
+});
+
+test('a quiet minute ends voice despite repeated idle events, then restart keeps the view and accepts a new request', async ({ page }) => {
+  await prepare(page);
+  await page.clock.install();
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
+  await page.evaluate(() => {
+    const state = window.__visitorVoice;
+    state.emit({ type: 'transcript', id: 'before-pause', role: 'user', text: 'Show the contact information.', revision: 1 });
+    state.emit({ type: 'response_started', revision: 1 });
+    state.emit({ type: 'navigation', id: 'before-pause-view', revision: 1, target: { kind: 'open', id: 'source:contact' } });
+  });
+  const foreground = page.locator('[data-workspace-focused]:not([inert])');
+  await expect(foreground).toHaveCount(1);
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.navigationAck?.id === 'before-pause-view'))).toBe(true);
+  await page.evaluate(() => window.__visitorVoice.emit({ type: 'backend_idle', revision: 1, interactionRevision: 0 }));
+  for (let step = 0; step < 3; step++) {
+    await page.clock.fastForward(15_000);
+    await page.evaluate(() => window.__visitorVoice.emit({ type: 'backend_idle', revision: 1, interactionRevision: 0 }));
+    await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  }
+  await page.clock.fastForward(15_100);
+  await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeVisible();
+  await expect(page.getByText('Voice ended after 1 minute of inactivity. Tap the wave to continue.', { exact: true })).toBeVisible();
+  await expect(foreground).toHaveCount(1);
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.tracks.every(track => track.stopped))).toBe(true);
+  expect(await page.evaluate(() => window.__visitorVoice.calls)).toBe(1);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
+  const restarted = await page.evaluate(() => window.__visitorVoice.requests[1]);
+  expect(restarted.history).toEqual([{ role: 'user', text: 'Show the contact information.' }]);
+  expect(restarted.context.screen?.focusedSourceId).toBe('contact');
+  await page.evaluate(() => {
+    window.__visitorVoice.emit({ type: 'transcript', id: 'after-pause', role: 'user', text: 'Take me home instead.', revision: 2 });
+    window.__visitorVoice.emit({ type: 'response_started', revision: 2 });
+    window.__visitorVoice.emit({ type: 'navigation', id: 'after-pause-home', revision: 2, target: { kind: 'home' } });
+  });
+  await expect(foreground).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.navigationAck?.id === 'after-pause-home' && update.navigationAck.status === 'applied'))).toBe(true);
+});
+
+for (const mobile of [false, true]) test(`clear-all chat controls close three greeting panels without a model request${mobile ? ' on mobile' : ''}`, async ({ page }) => {
+  if (mobile) { await page.setViewportSize({ width: 390, height: 844 }); await page.emulateMedia({ reducedMotion: 'reduce' }); }
+  await prepare(page, true);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
+  await page.evaluate(() => { window.__visitorVoice.emit({ type: 'greeting_progress', text: 'Welcome.', revision: 0, interactionRevision: 0 }); window.__visitorVoice.outputActive = true; });
+  await expect(page.locator('.platform-workspace-card')).toHaveCount(3);
+  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  const input = page.getByRole('textbox', { name: 'What would you like to see?' });
+  for (const command of ['close all three panels', 'clear workspace']) {
+    await input.fill(command); await page.getByRole('button', { name: 'Show me', exact: true }).click();
+    await expect(page.locator('.platform-workspace-card')).toHaveCount(0);
+    await expect(page.locator('[data-workspace-focused]')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Clear workspace', exact: true })).toHaveCount(0);
+    await expect(input).toHaveValue('');
+  }
+  expect(await page.evaluate(() => window.__visitorVoice.chats)).toHaveLength(0);
+  await expect(page.getByText('The task could not finish. Any confirmed views remain available.')).toHaveCount(0);
+});
+
+test('a model-generated bulk close is applied after chat layout moves and acknowledged as empty', async ({ page }) => {
+  await prepare(page, true);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
+  await page.evaluate(() => { window.__visitorVoice.emit({ type: 'greeting_progress', text: 'Welcome.', revision: 0, interactionRevision: 0 }); window.__visitorVoice.outputActive = true; });
+  await expect(page.locator('.platform-workspace-card')).toHaveCount(3);
+  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  await page.evaluate(() => {
+    const previousFetch = window.fetch.bind(window);
+    window.fetch = async (url, init) => {
+      if (/\/api\/visitor\/[^/]+$/.test(String(url)) && init?.method === 'POST') {
+        const request = JSON.parse(String(init.body)); window.__visitorVoice.chats.push(request);
+        const workspace = request.context.workspace;
+        // Simulate layout moving during model latency, without changing objects.
+        document.querySelector<HTMLElement>('.visitor-workspace')!.style.paddingTop = '40px';
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const events = [
+          { type: 'control', control: { id: '00000000-0000-4000-8000-000000000001', token: 'a'.repeat(43) } },
+          { type: 'navigation', id: '00000000-0000-4000-8000-000000000002', target: { kind: 'workspace', batch: { schemaVersion: 1, requestId: 'clear-after-layout', publicationId: workspace.publicationId, baseRevision: workspace.revision, sceneRevision: request.context.scene.revision,
+            operations: workspace.objects.map((object: { instanceId: string }) => ({ kind: 'close', instanceId: object.instanceId })) } } },
+          { type: 'done', text: 'The workspace is clear.', availability: { enabled: true, mode: 'both', live: true, chatRemaining: 24, voiceRemaining: 5, resetsAt: '' } },
+        ];
+        return new Response(events.map(event => JSON.stringify(event)).join('\n') + '\n', { headers: { 'Content-Type': 'application/x-ndjson' } });
+      }
+      return previousFetch(url, init);
+    };
+  });
+  await page.getByRole('textbox', { name: 'What would you like to see?' }).fill('Put the workspace back into an empty state.');
+  await page.getByRole('button', { name: 'Show me', exact: true }).click();
+  await expect(page.locator('.platform-workspace-card')).toHaveCount(0);
+  await expect(page.getByText('The workspace is clear.', { exact: true })).toBeVisible();
+  const ack = await page.evaluate(() => window.__visitorVoice.controls.find(update => update.navigationAck?.id === '00000000-0000-4000-8000-000000000002'));
+  expect(ack?.navigationAck?.status).toBe('applied'); expect(ack?.context.workspace?.objects).toEqual([]);
+  expect(await page.evaluate(() => window.__visitorVoice.chats)).toHaveLength(1);
+  await expect(page.getByText('The workspace changed. Use its current objects before trying again.')).toHaveCount(0);
+});
+
 test('continuous busy animation cannot starve accepted view updates or navigation acknowledgments', async ({ page }) => {
   await prepare(page);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
@@ -507,7 +652,24 @@ test('live adapter receives actual photo focus, modal obscuring, offscreen retai
   await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.at(-1)?.context.scene?.objects.some(object => object.name === 'Scene photo' && object.visibility === 'full'))).toBe(true);
   await focused.getByRole('button', { name: 'Open photo: Scene photo' }).click(); await expect(page.getByRole('dialog')).toBeVisible();
   await expect.poll(() => page.evaluate(() => { const scene = window.__visitorVoice.controls.at(-1)?.context.scene; return scene?.modal?.kind === 'photo' && scene.objects.every(object => object.open && object.mounted && object.visibility === 'obscured'); })).toBe(true);
-  await page.getByRole('button', { name: 'Close photo', exact: true }).click();
+  const navigate = async (id: string, target: unknown) => {
+    await page.evaluate(({ id, target }) => {
+      const state = window.__visitorVoice, revision = state.revision + 1, interactionRevision = state.controls.at(-1)!.interactionRevision;
+      state.emit({ type: 'response_started', revision, interactionRevision }); state.emit({ type: 'navigation', id, revision, interactionRevision, target });
+    }, { id, target });
+    await expect.poll(() => page.evaluate(id => window.__visitorVoice.controls.find(update => update.navigationAck?.id === id)?.navigationAck?.status, id)).toBe('applied');
+  };
+  await navigate('back-from-photo', { kind: 'back' });
+  await expect(page.getByRole('dialog')).toHaveCount(0); await expect(focused).toContainText('Scene photo');
+  const beforeReopen = await page.evaluate(() => window.__visitorVoice.controls.at(-1)!.interactionRevision);
+  await focused.getByRole('button', { name: 'Open photo: Scene photo' }).click(); await expect(page.getByRole('dialog')).toBeVisible();
+  await expect.poll(() => page.evaluate(revision => {
+    const update = window.__visitorVoice.controls.at(-1);
+    return update && update.interactionRevision > revision && update.context.scene?.modal?.kind === 'photo';
+  }, beforeReopen)).toBe(true);
+  await navigate('open-through-photo', { kind: 'open', id: 'source:section:weddings' });
+  await expect(page.getByRole('dialog')).toHaveCount(0); await expect(focused).toContainText('Wedding stories');
+  await navigate('return-to-photo', { kind: 'back' }); await expect(focused).toContainText('Scene photo');
   await focused.getByRole('button', { name: 'Back to workspace' }).click(); await expect(focused).toHaveCount(0);
   await page.locator('[data-workspace-content$=":section:weddings"]').first().click(); await expect(focused).toBeVisible();
   await focused.getByRole('button', { name: 'Back to workspace' }).click(); await expect(focused).toHaveCount(0);
@@ -522,4 +684,182 @@ test('live adapter receives actual photo focus, modal obscuring, offscreen retai
   const count = await page.evaluate(() => window.__visitorVoice.controls.length); await page.waitForTimeout(600);
   expect(await page.evaluate(() => window.__visitorVoice.controls.length)).toBeLessThanOrEqual(count + 1);
   expect(await page.evaluate(() => window.__visitorVoice.calls)).toBe(1);
+});
+
+test('mocked chat and voice share real visitor query state and reject a late display after manual correction', async ({ page }) => {
+  await prepare(page);
+  const post = async (path: string, data: unknown) => { const response = await page.request.post(path, { headers: { Origin: origin }, data }); const body = await response.json(); expect(response.ok(), JSON.stringify(body)).toBeTruthy(); return body; };
+  let site: Site = (await post('/api/sites', { name: 'Task channel conformance', slug: `task-channels-${Date.now()}`, kind: 'general' })).site;
+  const space = taskFixture(), metadata = { version: space.version, name: space.name, rootId: space.rootId, fields: space.fields, relationshipTypes: space.relationshipTypes, collections: space.collections, edges: space.edges };
+  let { review } = await post(`/api/sites/${site.id}/collections`, { action: 'begin', siteRevision: site.revision, metadata });
+  ({ review } = await post(`/api/sites/${site.id}/collections`, { action: 'append', reviewId: review.id, revision: review.revision, chunk: { records: space.records, memberships: space.memberships, relationships: space.relationships } }));
+  ({ review } = await post(`/api/sites/${site.id}/collections`, { action: 'finish', reviewId: review.id, revision: review.revision }));
+  site = (await post(`/api/sites/${site.id}/collections`, { action: 'apply', reviewId: review.id, revision: review.revision, siteRevision: site.revision })).site;
+  site = (await post(`/api/sites/${site.id}`, { action: 'save', revision: site.revision, content: { ...site.draft, visitorSpeaksFirst: true, visitor: { enabled: true, mode: 'both', voiceTier: 'standard', chatDailyLimit: 25, voiceDailyLimit: 5 } } })).site;
+  site = (await post(`/api/sites/${site.id}`, { action: 'publish', revision: site.revision })).site;
+  await page.goto(`/s/${site.slug}`);
+  let lastView: VisitorTaskView | undefined;
+  page.on('response', async response => { if (response.url().endsWith('/tasks') && response.ok()) { const value = await response.json().catch(() => ({})); if (value.view) lastView = value.view; } });
+  await page.getByRole('button', { name: 'Browse and filter collections' }).click();
+  const results = page.getByRole('region', { name: 'Collection results', exact: true }); await expect(results.getByRole('status')).toHaveText('8 matching records');
+  await page.evaluate(() => {
+    const previousFetch = window.fetch.bind(window);
+    window.fetch = async (url, init) => {
+      const path = String(url);
+      if (/\/api\/visitor\/[^/]+$/.test(path) && init?.method === 'POST') {
+        const request = JSON.parse(String(init.body));
+        const send = async (input: unknown) => { const response = await previousFetch(`${path}/tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }); const body = await response.json(); if (!response.ok) throw new Error(body.error); return body; };
+        const { view } = await send({ action: 'refresh', sessionId: request.context.taskSession.sessionId });
+        const updated = await send({ action: 'execute', sessionId: view.sessionId, call: { operationId: crypto.randomUUID(), capabilityId: 'query.patch', expectedRevision: view.revision, input: { queryId: view.query.queryId, baseRevision: view.query.revision, operations: [{ op: 'addConstraint', parentId: 'criteria', expression: { kind: 'field', id: 'minimum', fieldId: 'reading-minutes', op: 'gte', value: { type: 'number', value: 5, unit: 'units' } } }] } } });
+        const events = [{ type: 'control', control: { id: '00000000-0000-4000-8000-000000000001', token: 'a'.repeat(43) } }, { type: 'navigation', id: crypto.randomUUID(), target: { kind: 'task', view: updated.view } }, { type: 'done', text: 'Three published records match.', availability: { enabled: true, mode: 'both', live: true, chatRemaining: 24, voiceRemaining: 5, resetsAt: '' } }];
+        return new Response(events.map(event => JSON.stringify(event)).join('\n') + '\n', { headers: { 'Content-Type': 'application/x-ndjson' } });
+      }
+      return previousFetch(url, init);
+    };
+  });
+  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  const input = page.getByRole('textbox', { name: 'What would you like to see?', exact: true }); await input.fill('Find records with a reading measure of at least five'); await input.press('Enter');
+  await expect(results.getByRole('status')).toHaveText('3 matching records'); await expect(page.getByText('Three published records match.', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Voice', exact: true }).click(); await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
+  const path = `/api/visitor/${site.slug}/tasks`, current = (await post(path, { action: 'refresh', sessionId: lastView!.sessionId })).view as VisitorTaskView;
+  const voice = await post(path, { action: 'execute', sessionId: current.sessionId, call: { operationId: randomUUID(), capabilityId: 'query.patch', expectedRevision: current.revision, input: { queryId: current.query.queryId, baseRevision: current.query.revision, operations: [{ op: 'replaceConstraint', nodeId: 'minimum', expression: { kind: 'field', id: 'minimum', fieldId: 'reading-minutes', op: 'gte', value: { type: 'number', value: 6, unit: 'units' } } }] } } });
+  await page.evaluate(view => { window.__visitorVoice.emit({ type: 'response_started', revision: 1 }); window.__visitorVoice.emit({ type: 'navigation', id: 'task-voice', revision: 1, target: { kind: 'task', view } }); }, voice.view);
+  await expect(results.getByRole('status')).toHaveText('2 matching records');
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.find(update => update.navigationAck?.id === 'task-voice')?.navigationAck?.status)).toBe('applied');
+  await results.getByRole('button', { name: 'Remove criterion reading-minutes' }).click(); await expect(results.getByRole('status')).toHaveText('8 matching records');
+  await page.evaluate(view => window.__visitorVoice.emit({ type: 'navigation', id: 'late-task-voice', revision: 2, target: { kind: 'task', view } }), voice.view);
+  await expect(results.getByRole('status')).toHaveText('8 matching records'); expect(await page.evaluate(() => window.__visitorVoice.controls.some(update => update.navigationAck?.id === 'late-task-voice' && update.navigationAck.status === 'applied'))).toBe(false);
+});
+
+for (const mobile of [false, true]) test(`foreground cards yield to voice task views and Home${mobile ? ' on mobile with reduced motion' : ''}`, async ({ page }) => {
+  if (mobile) { await page.setViewportSize({ width: 390, height: 844 }); await page.emulateMedia({ reducedMotion: 'reduce' }); }
+  await prepare(page);
+  const post = async (path: string, data: unknown) => {
+    const response = await page.request.post(path, { headers: { Origin: origin }, data });
+    const body = await response.json(); expect(response.ok(), JSON.stringify(body)).toBeTruthy(); return body;
+  };
+  let site: Site = (await post('/api/sites', { name: 'Foreground conformance', slug: `foreground-${Date.now()}`, kind: 'general' })).site;
+  const upload = await page.request.post(`/api/sites/${site.id}/files`, { headers: { Origin: origin, 'Content-Type': 'text/csv', 'X-File-Name': 'places.csv', 'X-Site-Revision': String(site.revision) }, data: Buffer.from('Name,Kind,Summary\nHarbor,place,An approved harbor.\nForest,place,An approved forest.') });
+  expect(upload.ok()).toBeTruthy(); const uploaded = await upload.json(); site = uploaded.site;
+  const knowledge = await post(`/api/sites/${site.id}/knowledge`, { action: 'analyze', fileId: uploaded.fileId, revision: site.revision, requestId: randomUUID() });
+  site = (await post(`/api/sites/${site.id}/knowledge`, { action: 'apply', revision: site.revision, candidateId: knowledge.candidates[0].id, candidateRevisionId: knowledge.candidates[0].catalog.id })).site;
+  site = (await post(`/api/sites/${site.id}`, { action: 'save', revision: site.revision, content: { ...site.draft, contact: 'hello@foreground.example', visitorSpeaksFirst: true, visitor: { enabled: true, mode: 'both', voiceTier: 'standard', chatDailyLimit: 25, voiceDailyLimit: 5 } } })).site;
+  site = (await post(`/api/sites/${site.id}`, { action: 'publish', revision: site.revision })).site;
+  await page.goto(`/s/${site.slug}`);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
+  const focused = page.locator('[data-workspace-focused]:not([inert])');
+  let revision = 0;
+  const navigate = async (id: string, target: unknown) => {
+    await page.evaluate(({ id, target, revision }) => { window.__visitorVoice.emit({ type: 'response_started', revision }); window.__visitorVoice.emit({ type: 'navigation', id, revision, target }); }, { id, target, revision: ++revision });
+    await expect.poll(() => page.evaluate(id => window.__visitorVoice.controls.find(update => update.navigationAck?.id === id)?.navigationAck?.status, id)).toBe('applied');
+  };
+  const task = async (capabilityId: string, input: (view: VisitorTaskView) => unknown) => {
+    const sessionId = await page.evaluate(() => window.__visitorVoice.controls.at(-1)!.context.taskSession!.sessionId);
+    const { view } = await post(`/api/visitor/${site.slug}/tasks`, { action: 'refresh', sessionId });
+    return (await post(`/api/visitor/${site.slug}/tasks`, { action: 'execute', sessionId, call: { operationId: randomUUID(), capabilityId, expectedRevision: view.revision, input: input(view) } })).view as VisitorTaskView;
+  };
+  await navigate('open-contact', { kind: 'open', id: 'source:contact' });
+  await expect(focused).toHaveCount(1);
+  expect(await page.evaluate(() => window.__visitorVoice.controls.at(-1)?.context.screen?.focusedSourceId)).toBe('contact');
+  const query = await task('query.activate', view => ({ queryId: view.query.queryId }));
+  await navigate('show-query', { kind: 'task', view: query });
+  await expect(focused).toHaveCount(0);
+  const results = page.getByRole('region', { name: 'Collection results', exact: true });
+  await expect(results.getByRole('status')).toHaveText('2 matching records');
+  const detail = await task('record.detail', view => ({ recordId: view.records[0].id }));
+  await navigate('show-detail', { kind: 'task', view: detail });
+  await expect(results.getByRole('region', { name: 'Record detail' })).toBeVisible();
+  await task('records.lookup', () => ({ recordIds: [query.records[0].id] }));
+  await navigate('back-to-query', { kind: 'back' });
+  await expect(results.getByRole('region', { name: 'Record detail' })).toHaveCount(0);
+  await navigate('contact-again', { kind: 'open', id: 'source:contact' });
+  await navigate('open-harbor', { kind: 'open', id: `entity:${query.records[0].id}` });
+  await expect(focused).toContainText(query.records[0].name);
+  expect(await page.evaluate(() => window.__visitorVoice.controls.at(-1)?.context.screen?.focusedEntityId)).toBe(query.records[0].id);
+  await navigate('back-to-contact', { kind: 'back' });
+  await expect(focused).toContainText('Get in touch');
+  const home = await task('home', () => ({}));
+  await navigate('task-home', { kind: 'task', view: home });
+  await expect(focused).toHaveCount(0); await expect(results).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.at(-1)?.context.scene?.page)).toBe('home');
+  // A late result from before Home cannot reopen a card or disturb a newer foreground.
+  await navigate('new-contact', { kind: 'open', id: 'source:contact' });
+  await page.evaluate(view => { window.__visitorVoice.emit({ type: 'response_started', revision: 99 }); window.__visitorVoice.emit({ type: 'navigation', id: 'late-query', revision: 99, target: { kind: 'task', view } }); }, query);
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.find(update => update.navigationAck?.id === 'late-query')?.navigationAck?.status)).toBe('cancelled');
+  await expect(focused).toHaveCount(1); await expect(focused).toContainText('Get in touch');
+  // The same foreground transition must work through chat's streamed adapter.
+  await page.evaluate(() => {
+    const previousFetch = window.fetch.bind(window);
+    window.fetch = async (url, init) => {
+      const path = String(url);
+      if (/\/api\/visitor\/[^/]+$/.test(path) && init?.method === 'POST') {
+        const input = JSON.parse(String(init.body));
+        const send = async (data: unknown) => { const response = await previousFetch(`${path}/tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }); if (!response.ok) throw new Error('Synthetic task failed'); return response.json(); };
+        const { view } = await send({ action: 'refresh', sessionId: input.context.taskSession.sessionId });
+        const next = await send({ action: 'execute', sessionId: view.sessionId, call: { operationId: crypto.randomUUID(), capabilityId: 'query.activate', expectedRevision: view.revision, input: { queryId: view.query.queryId } } });
+        return new Response([
+          { type: 'control', control: { id: '00000000-0000-4000-8000-000000000001', token: 'a'.repeat(43) } },
+          { type: 'navigation', id: crypto.randomUUID(), target: { kind: 'task', view: next.view } },
+          { type: 'done', text: 'Here are the published places.', availability: { enabled: true, mode: 'both', live: true, chatRemaining: 24, voiceRemaining: 5, resetsAt: '' } },
+        ].map(event => JSON.stringify(event)).join('\n') + '\n', { headers: { 'Content-Type': 'application/x-ndjson' } });
+      }
+      return previousFetch(url, init);
+    };
+  });
+  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  const input = page.getByRole('textbox', { name: 'What would you like to see?', exact: true });
+  await input.fill('Show the published places'); await input.press('Enter');
+  await expect(page.getByText('Here are the published places.', { exact: true })).toBeVisible();
+  await expect(focused).toHaveCount(0); await expect(results.getByRole('status')).toHaveText('2 matching records');
+  // Clearing the visible workspace must not depend on a healthy task service.
+  const tasksUrl = `**/api/visitor/${site.slug}/tasks`;
+  await page.route(tasksUrl, route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Synthetic task outage' }) }));
+  await input.fill('Clear workspace'); await input.press('Enter');
+  await expect(results).toHaveCount(0); await expect(focused).toHaveCount(0);
+  await expect(page.locator('.platform-workspace-card')).toHaveCount(0);
+  await page.unroute(tasksUrl);
+  await page.getByRole('button', { name: 'Browse and filter collections', exact: true }).click();
+  await expect(results).toBeVisible();
+  await input.fill('Take me home'); await input.press('Enter');
+  await expect(results).toHaveCount(0); await expect(focused).toHaveCount(0);
+});
+
+test('voice startup handles legacy descriptive kinds and reports a failed task preflight before an explicit retry', async ({ page }) => {
+  await prepare(page);
+  const post = async (path: string, data: unknown) => {
+    const response = await page.request.post(path, { headers: { Origin: origin }, data });
+    const body = await response.json(); expect(response.ok(), JSON.stringify(body)).toBeTruthy(); return body;
+  };
+  let site: Site = (await post('/api/sites', { name: 'Legacy startup', slug: `legacy-start-${Date.now()}`, kind: 'general' })).site;
+  const text = "Name,Kind,Summary\nHarbor,Traveler's guide (regional),An approved regional guide.";
+  const upload = await page.request.post(`/api/sites/${site.id}/files`, { headers: { Origin: origin, 'Content-Type': 'text/csv', 'X-File-Name': 'startup.csv', 'X-Site-Revision': String(site.revision) }, data: Buffer.from(text) });
+  expect(upload.ok()).toBeTruthy(); const uploaded = await upload.json(); site = uploaded.site;
+  const path = `/api/sites/${site.id}/knowledge`;
+  const knowledge = await post(path, { action: 'analyze', fileId: uploaded.fileId, revision: site.revision, requestId: randomUUID() });
+  site = (await post(path, { action: 'apply', revision: site.revision, candidateId: knowledge.candidates[0].id, candidateRevisionId: knowledge.candidates[0].catalog.id })).site;
+  site = (await post(`/api/sites/${site.id}`, { action: 'save', revision: site.revision, content: { ...site.draft, visitorSpeaksFirst: true, visitor: { enabled: true, mode: 'both', voiceTier: 'standard', chatDailyLimit: 25, voiceDailyLimit: 5 } } })).site;
+  site = (await post(`/api/sites/${site.id}`, { action: 'publish', revision: site.revision })).site;
+  let unavailable = true, attempts = 0;
+  const diagnostics: string[] = []; page.on('console', message => { if (message.text().includes('[flowpath:visitor]')) diagnostics.push(message.text()); });
+  await page.route(`**/api/visitor/${site.slug}/tasks`, route => {
+    if (route.request().postDataJSON().action === 'init') {
+      attempts++;
+      if (unavailable) return route.fulfill({ status: 400, json: { error: 'Synthetic catalog unavailable.' } });
+    }
+    return route.continue();
+  });
+  await page.goto(`/s/${site.slug}`);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByText('Could not prepare the website: Synthetic catalog unavailable.', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => window.__visitorVoice.calls)).toBe(0);
+  expect(attempts).toBe(1);
+  expect(diagnostics.some(value => value.includes('"stage":"context"') && value.includes('"status":"failed"') && value.includes('"httpStatus":400'))).toBe(true);
+  unavailable = false;
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
+  expect(attempts).toBe(2);
+  expect(await page.evaluate(() => window.__visitorVoice.calls)).toBe(1);
+  expect(diagnostics.some(value => value.includes('"stage":"context"') && value.includes('"status":"succeeded"'))).toBe(true);
 });

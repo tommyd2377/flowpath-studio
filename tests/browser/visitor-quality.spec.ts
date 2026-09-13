@@ -235,6 +235,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) test(`a new le
   await expect(page.locator('[data-workspace-focused]:not([inert])').getByRole('heading', { level: 2 })).toBeInViewport();
   await scrollAway(page); await showView(page, 1);
   const heading = page.locator('[data-workspace-focused]:not([inert])').getByRole('heading', { level: 2 });
+  await expect(page.locator('[data-workspace-focused]:not([inert])')).toHaveAttribute('data-workspace-transition', 'settled');
   await expect.poll(() => heading.evaluate(element => {
     const box = element.getBoundingClientRect();
     return box.top >= 16 && box.bottom <= innerHeight - 16;
@@ -250,6 +251,7 @@ test('manual scrolling preserves an already focused result without automatic pag
   await showView(page, 0);
   const heading = page.locator('[data-workspace-focused]:not([inert])').getByRole('heading', { level: 2 });
   await expect(heading).toBeInViewport();
+  await expect(page.locator('[data-workspace-focused]:not([inert])')).toHaveAttribute('data-workspace-transition', 'settled');
   await page.evaluate(() => document.querySelector<HTMLButtonElement>('.site-wave')?.focus({ preventScroll: true }));
   await page.mouse.wheel(0, 80);
   await page.waitForTimeout(250);
@@ -329,7 +331,7 @@ test('voice spotlight, reading view, comparison and back reuse the catalog witho
   await command(3, { kind: 'back' });
   await expect(page.locator('.platform-workspace-card')).toHaveCount(1);
   await command(4, { kind: 'compare', ids });
-  await expect(page.locator('.platform-comparison-table')).toBeVisible();
+  await expect(page.locator('[data-workspace-focused]:not([inert]) .platform-comparison-table')).toBeVisible();
   await command(5, { kind: 'collapse' });
   await expect(page.locator('.platform-workspace-card')).toHaveCount(2);
   expect(await page.evaluate(() => window.__visitorQuality.calls)).toBe(1);

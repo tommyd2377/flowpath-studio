@@ -9,12 +9,14 @@ const cli = createRequire(import.meta.url).resolve('@playwright/test/cli');
 const groups = {
   // Source imports create several sites. Give them fresh data rather than
   // exhausting the unchanged 12-site pilot cap in the runtime group.
+  tasks: ['visitor-tasks.spec.ts'],
   ingestion: ['source-review.spec.ts', 'semantic-ingestion.spec.ts'],
   workspace: ['adaptive-workspace.spec.ts'],
-  website: ['published-website.spec.ts'],
+  website: ['published-website.spec.ts', 'website-import.spec.ts'],
+  brochure: ['brochure-review.spec.ts'],
   core: ['media.spec.ts', 'media-runtime.spec.ts', 'motion.spec.ts', 'platform.spec.ts', 'shared-reveal.spec.ts'],
   voice: ['visitor-realtime.spec.ts'],
-  quality: ['visitor-quality.spec.ts'],
+  quality: ['visitor-quality.spec.ts', 'studio-runtime.spec.ts'],
   search: ['search-explore.spec.ts'],
   billing: ['billing.spec.ts'],
 };

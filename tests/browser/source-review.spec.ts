@@ -96,6 +96,7 @@ test('source excerpts and explicit replacement preserve corrections, resolve upd
   await expect(missing).toContainText('Photos stay in your library');
 
   const alpha = proposal.locator('.knowledge-item').filter({ has: page.locator('summary', { hasText: 'Alpha Workshop' }) });
+  await proposal.getByText(/^Edit item names, descriptions and fields/).click();
   await alpha.locator(':scope > summary').click();
   const sourceToggle = alpha.locator('.knowledge-field-source').filter({ has: page.locator('summary', { hasText: 'Source for Price' }) });
   await sourceToggle.locator('summary').focus(); await page.keyboard.press('Enter');

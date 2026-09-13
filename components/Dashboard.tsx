@@ -104,14 +104,14 @@ export default function Dashboard({ initialSites, initialSite, user, editor, ini
   async function command(action: Command) {
     if (requestInFlight.current) return;
     if (unsaved && action.action !== 'save') { setError('Save or undo your unsaved form changes first.'); return; }
-    if (mediaPending && ['publish', 'undo', 'remove-file'].includes(action.action)) { setError('Apply or discard your photo changes in Files first.'); return; }
+    if (mediaPending && ['publish', 'undo', 'remove-file', 'clear-history'].includes(action.action)) { setError('Apply or discard your photo changes in Files first.'); return; }
     requestInFlight.current = true;
     setBusy(true); setError(''); setNotice('');
     try {
       const result = await request<{ site: Site }>(`/api/sites/${site.id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...action, revision: site.revision }) });
       acceptSite(result.site);
       if (action.action === 'chat') { setText(''); setSelectedFileIds([]); chatRequest.current = null; }
-      else setNotice(action.action === 'publish' ? (cloud ? 'Published to Firebase. Your site is ready to open in this app.' : 'Published locally. Your site is ready to open.') : action.action === 'undo' ? 'Last draft change undone.' : action.action === 'discard' ? 'Proposal dismissed.' : action.action === 'remove-file' ? 'File removed.' : action.action === 'use-logo' ? 'Logo added to your draft. Publish to update your site.' : 'Draft saved.');
+      else setNotice(action.action === 'publish' ? (cloud ? 'Published to Firebase. Your site is ready to open in this app.' : 'Published locally. Your site is ready to open.') : action.action === 'undo' ? 'Last draft change undone.' : action.action === 'clear-history' ? 'Undo history cleared. Unused originals can now be deleted.' : action.action === 'discard' ? 'Proposal dismissed.' : action.action === 'remove-file' ? 'File removed.' : action.action === 'use-logo' ? 'Logo added to your draft. Publish to update your site.' : 'Draft saved.');
       setPublishReview(false);
       if (action.action === 'apply' || action.action === 'save' || action.action === 'undo' || action.action === 'use-logo' || action.action === 'remove-file') setPreviewMode('draft');
     } catch (error) { setError((error as Error).message); }

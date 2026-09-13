@@ -84,11 +84,21 @@ test('DOCX/XLSX/OCR and URL import stay reviewable, accessible, and private befo
   await expect(page.getByRole('heading', { name: 'Knowledge', exact: true })).toBeVisible();
   await expect(page.getByRole('combobox', { name: 'Source file', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Site editor', exact: true }).getByRole('status')).toContainText(ocrState.jobs.at(-1).message);
-  let websiteRequest: { action?: string; url?: string } | undefined;
+  const websiteUrl = 'https://example.test/about';
+  await page.route(`${origin}/api/sites/${site.id}/website/migration`, async route => {
+    const payload = route.request().method() === 'POST' ? route.request().postDataJSON() : null;
+    if (payload?.action === 'discover' && payload.url === websiteUrl) {
+      return route.fulfill({ json: { site, migration: { id: randomUUID(), url: websiteUrl,
+        pages: [{ url: websiteUrl, title: 'About', status: 'ready', message: 'HTML available', characters: 100 }],
+        selectedPages: [websiteUrl], images: [], notes: [], updatedAt: new Date().toISOString() } } });
+    }
+    return route.continue();
+  });
+  let websiteRequest: { action?: string; url?: string; urls?: string[] } | undefined;
   await page.route(`${origin}/api/sites/${site.id}/knowledge`, async route => {
     if (route.request().method() === 'POST') {
-      const payload = route.request().postDataJSON() as { action?: string; url?: string };
-      if (payload.action === 'analyze-url' && payload.url === 'https://example.test/about') {
+      const payload = route.request().postDataJSON() as { action?: string; url?: string; urls?: string[] };
+      if (payload.action === 'analyze-website' && payload.url === websiteUrl) {
         websiteRequest = payload;
         await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ catalog: null, candidates: [], sources: [], semanticMode: 'structured', jobs: [{ id: randomUUID(), sourceName: payload.url, status: 'needs_review', message: 'Fixture website HTML import ready.', stage: 'review', startedAt: Date.now(), updatedAt: Date.now() }] }) });
         return;
@@ -96,12 +106,14 @@ test('DOCX/XLSX/OCR and URL import stay reviewable, accessible, and private befo
     }
     await route.continue();
   });
-  await page.getByRole('textbox', { name: /^Website URL/ }).fill('https://example.test/about');
-  await page.getByRole('button', { name: 'Interpret website', exact: true }).click();
+  const importer = page.getByRole('region', { name: 'Import a website', exact: true });
+  await importer.getByLabel('Domain or website URL', { exact: true }).fill(websiteUrl);
+  await importer.getByRole('button', { name: 'Find website pages', exact: true }).click();
+  await importer.getByRole('button', { name: 'Import selected page knowledge', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Site editor', exact: true }).getByRole('status').filter({ hasText: 'Fixture website HTML import ready.' })).toBeVisible();
-  expect(websiteRequest?.action).toBe('analyze-url'); expect(websiteRequest?.url).toBe('https://example.test/about');
-  await page.getByRole('textbox', { name: /^Website URL/ }).fill('http://localhost:3225/private');
-  await page.getByRole('button', { name: 'Interpret website', exact: true }).click();
+  expect(websiteRequest?.action).toBe('analyze-website'); expect(websiteRequest?.url).toBe(websiteUrl); expect(websiteRequest?.urls).toEqual([websiteUrl]);
+  await importer.getByLabel('Domain or website URL', { exact: true }).fill('http://localhost:3225/private');
+  await importer.getByRole('button', { name: 'Find website pages', exact: true }).click();
   await expect(page.getByRole('alert').filter({ hasText: 'public HTTPS' })).toBeVisible();
 
   const publicRevision = site.published!.knowledgeRevisionId!;
@@ -137,6 +149,7 @@ test('publisher identity decisions, aliases and singleton corrections are keyboa
   await match.getByRole('button', { name: 'Keep separate', exact: true }).focus();
   await page.keyboard.press('Enter');
   await expect(match).toContainText('Rejected'); await expect(match).toBeFocused();
+  await page.getByText(/^Edit item names, descriptions and fields/).click();
   await page.locator('.knowledge-item > summary').first().click();
   await page.getByRole('textbox', { name: /^Approved alternate labels/ }).first().fill('Alpha A, AA');
   await expect(match.getByRole('button', { name: 'Save alias', exact: true })).toBeDisabled();
@@ -151,6 +164,7 @@ test('publisher identity decisions, aliases and singleton corrections are keyboa
   await page.getByLabel('Fact label', { exact: true }).fill('Email');
   await page.getByLabel('Assertion value', { exact: true }).fill('unpublished-claim@example.test');
   await page.getByRole('button', { name: 'Save corrections', exact: true }).click();
+  await page.getByText(/^Individual fields and source evidence/).click();
   const assertion = page.getByRole('article', { name: 'Alpha properties.email', exact: true });
   await expect(assertion).toBeVisible();
   await assertion.getByRole('button', { name: 'Reject assertion', exact: true }).focus(); await page.keyboard.press('Enter');

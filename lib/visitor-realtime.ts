@@ -25,6 +25,7 @@ export const visitorRealtimeEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('backend_idle'), revision, interactionRevision: revision }).strict(),
   z.object({ type: z.literal('task_error'), revision, interactionRevision: revision, message: z.string().min(1).max(500) }).strict(),
   z.object({ type: z.literal('response_started'), revision, interactionRevision: revision }).strict(),
+  z.object({ type: z.literal('response_cancelled'), revision, interactionRevision: revision }).strict(),
   z.object({ type: z.literal('playback_started'), responseId, interactionRevision: revision }).strict(),
   z.object({ type: z.enum(['playback_stopped', 'playback_cleared']), responseId: responseId.optional() }).strict(),
   // The host validates these references against its current published snapshot.

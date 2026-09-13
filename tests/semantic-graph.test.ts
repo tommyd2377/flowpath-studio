@@ -34,7 +34,10 @@ test('model evidence binds prose fields only to exact, complete anchors', () => 
   const source = { anchors: [{ id: 'html-lines-1-2', format: 'html' as const, label: 'Lines 1–2', excerpt: 'Alpha is offered weekly.', lineStart: 1, lineEnd: 2 }], fields: [] };
   const value = { complete: true, issues: [], name: 'Graph', description: '', attributes: [], entities: [{ id: 'alpha', kind: 'offering', name: 'Alpha', summary: 'Offered weekly.', attributes: [] }], collections: [{ id: 'all', name: 'All', entityIds: ['alpha'] }], relationships: [], facts: [], evidence: [{ entityId: 'alpha', field: 'summary', anchorIds: ['html-lines-1-2'] }], jobs: [] };
   const parsed = parseSemanticReplyWithProvenance(value, source);
-  assert.deepEqual(parsed.provenance.fields, [{ entityId: 'alpha', field: 'summary', anchorIds: ['html-lines-1-2'] }]);
+  assert.deepEqual(parsed.provenance.fields, [
+    { entityId: 'alpha', field: 'summary', anchorIds: ['html-lines-1-2'] },
+    { entityId: 'alpha', field: 'name', anchorIds: ['html-lines-1-2'] },
+  ]);
   assert.throws(() => parseSemanticReplyWithProvenance({ ...value, evidence: [{ entityId: 'alpha', field: 'summary', anchorIds: ['missing'] }] }, source), /known anchors/);
 });
 
@@ -148,7 +151,9 @@ test('strict provider schema supports nullable optional values, singleton predic
   const parsed = parseSemanticReplyWithProvenance(reply, source);
   let artifact = mergeKnowledge(null, parsed.catalog, { fileId: randomUUID(), name: 'prose.txt', hash: 'x', provenance: parsed.provenance });
   artifact.assertionReviews = refreshAssertionReviews(artifact, 'model');
-  assert.ok(artifact.assertionReviews.every(review => review.support === 'unsupported'));
+  assert.equal(artifact.assertionReviews.filter(review => review.support !== 'unsupported').length, 1, 'only the literal name has source evidence');
+  assert.ok(artifact.assertionReviews.find(review => review.targetId.endsWith('/name'))?.support !== 'unsupported');
+  assert.equal(artifact.assertionReviews.find(review => review.targetType === 'fact')?.support, 'unsupported', 'a mentioned name does not support an invented email');
   assert.throws(() => catalogForPublication(artifact), /unsupported/);
   assert.throws(() => validateAssertionReviews([], artifact.catalog), /cover/);
   artifact = resolveAssertionReviews(artifact, artifact.assertionReviews.map(review => ({ targetType: review.targetType, targetId: review.targetId, decision: review.targetType === 'fact' ? 'reject' : 'approve' })));

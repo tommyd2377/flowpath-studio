@@ -27,10 +27,10 @@ export function assertPublicWebsiteUrl(value: string) {
   return url;
 }
 type Address = { address: string; family: number };
-type WebsiteResponse = { status: number; contentType: string; remoteAddress: string; bytes: Uint8Array };
+type WebsiteResponse = { status: number; contentType: string; remoteAddress: string; bytes: Uint8Array; location?: string };
 export type WebsiteTransport = {
   resolve: (hostname: string) => Promise<Address[]>;
-  connect: (url: URL, address: Address, signal: AbortSignal) => Promise<WebsiteResponse>;
+  connect: (url: URL, address: Address, signal: AbortSignal, maxBytes?: number) => Promise<WebsiteResponse>;
 };
 function sameAddress(left: string, right: string) {
   const list = new BlockList();
@@ -40,47 +40,61 @@ function sameAddress(left: string, right: string) {
 /** No proxy, cookie jar, user headers, redirects, retry, or second DNS lookup. */
 const transport: WebsiteTransport = {
   resolve: hostname => lookup(hostname, { all: true, verbatim: true }),
-  connect: (url, address, signal) => new Promise((resolve, reject) => {
+  connect: (url, address, signal, maxBytes = MAX_BYTES) => new Promise((resolve, reject) => {
     const req = request({ protocol: 'https:', hostname: address.address, family: address.family, servername: url.hostname,
       port: 443, method: 'GET', path: `${url.pathname}${url.search}`, agent: false, signal,
-      headers: { Host: url.host, Accept: 'text/html,application/xhtml+xml', 'Accept-Encoding': 'identity' },
+      headers: { Host: url.host, Accept: 'text/html,application/xhtml+xml,application/xml,text/xml,text/plain,image/png,image/jpeg,image/webp', 'User-Agent': 'FlowPathStudio/1.0', 'Accept-Encoding': 'identity' },
     }, response => {
       const remoteAddress = response.socket.remoteAddress ?? '';
       const contentType = String(response.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
       const status = response.statusCode ?? 0;
-      if (!sameAddress(remoteAddress, address.address) || !isPublicAddress(remoteAddress) || status < 200 || status >= 300
-        || !['text/html', 'application/xhtml+xml'].includes(contentType) || response.headers['content-encoding'] && response.headers['content-encoding'] !== 'identity'
-        || Number(response.headers['content-length'] ?? 0) > MAX_BYTES) {
+      if (!sameAddress(remoteAddress, address.address) || !isPublicAddress(remoteAddress)
+        || response.headers['content-encoding'] && response.headers['content-encoding'] !== 'identity'
+        || Number(response.headers['content-length'] ?? 0) > maxBytes) {
         response.destroy(); reject(new AppError('Website destination, status, content type or size is not supported. Redirects are not followed.')); return;
       }
       const chunks: Buffer[] = []; let size = 0;
       response.on('data', (chunk: Buffer) => {
         size += chunk.length;
-        if (size > MAX_BYTES) { response.destroy(new AppError('The website page is larger than the 2 MB import limit.')); return; }
+        if (size > maxBytes) { response.destroy(new AppError('The website page is larger than the import size limit.')); return; }
         chunks.push(chunk);
       });
       response.on('error', reject);
-      response.on('end', () => resolve({ status, contentType, remoteAddress, bytes: Buffer.concat(chunks) }));
+      response.on('end', () => resolve({ status, contentType, remoteAddress, bytes: Buffer.concat(chunks), location: response.headers.location }));
     });
     req.on('error', reject); req.end();
   }),
 };
-export async function fetchWebsiteHtml(value: string, io: WebsiteTransport = transport) {
+export async function fetchWebsiteBytes(value: string, io: WebsiteTransport = transport, parentSignal?: AbortSignal, maxBytes = MAX_BYTES) {
+  if (maxBytes < 1 || maxBytes > 10 * 1024 * 1024) throw new AppError('Invalid download size limit.');
   const url = assertPublicWebsiteUrl(value);
-  const signal = AbortSignal.timeout(15_000);
+  const signal = parentSignal ? AbortSignal.any([parentSignal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000);
+  if (signal.aborted) throw new AppError('The website import deadline was reached.');
   let onAbort: () => void = () => {};
   const timeout = new Promise<never>((_, reject) => { onAbort = () => reject(new AppError('The website exceeded the 15 second import limit.')); signal.addEventListener('abort', onAbort, { once: true }); });
   try {
     const addresses = await Promise.race([io.resolve(url.hostname), timeout]);
     if (!addresses.length || addresses.length > 32 || addresses.some(item => !isPublicAddress(item.address) || isIP(item.address) !== item.family)) throw new AppError('The website resolves to a non-public or unsupported destination.');
-    const response = await Promise.race([io.connect(url, addresses[0], signal), timeout]);
+    const response = await Promise.race([io.connect(url, addresses[0], signal, maxBytes), timeout]);
     if (!sameAddress(response.remoteAddress, addresses[0].address) || !isPublicAddress(response.remoteAddress)) throw new AppError('The connected website address did not match its validated DNS destination.');
-    if (response.status < 200 || response.status >= 300) throw new AppError(`The website returned HTTP ${response.status}. Redirects are not followed.`);
-    if (!['text/html', 'application/xhtml+xml'].includes(response.contentType)) throw new AppError('Website imports accept HTML pages only.');
-    if (response.bytes.length > MAX_BYTES) throw new AppError('The website page is larger than the 2 MB import limit.');
-    return { html: new TextDecoder('utf-8', { fatal: true }).decode(response.bytes), url: url.toString() };
+    if (response.bytes.length > maxBytes) throw new AppError('The website page is larger than the import size limit.');
+    return { ...response, url: url.toString() };
   } catch (error) {
     if (error instanceof AppError) throw error;
     throw new AppError('The website could not be fetched safely within the import limit.');
   } finally { signal.removeEventListener('abort', onAbort); }
+}
+
+/** Legacy single-page imports deliberately do not follow redirects. */
+export async function fetchWebsiteHtml(value: string, io?: WebsiteTransport) {
+  const response = await fetchWebsiteResource(value, io);
+  if (response.status < 200 || response.status >= 300) throw new AppError(`The website returned HTTP ${response.status}. Redirects are not followed.`);
+  if (!['text/html', 'application/xhtml+xml'].includes(response.contentType)) throw new AppError('Website imports accept HTML pages only.');
+  return { html: response.text, url: response.url };
+}
+
+export async function fetchWebsiteResource(value: string, io?: WebsiteTransport, signal?: AbortSignal) {
+  const response = await fetchWebsiteBytes(value, io, signal);
+  try { return { ...response, text: new TextDecoder('utf-8', { fatal: true }).decode(response.bytes) }; }
+  catch { throw new AppError('The website could not be fetched safely within the import limit.'); }
 }

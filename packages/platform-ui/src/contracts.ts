@@ -17,6 +17,7 @@ export const attributeDefinitionSchema = z.object({
   id, label, type: z.enum(['text', 'number', 'money', 'date', 'boolean']),
   unit: z.string().trim().min(1).max(32).optional(),
   currency: z.string().regex(/^[A-Z]{3}$/).optional(),
+  aliases: z.array(label).max(16).optional(),
 }).strict();
 export const catalogEntitySchema = z.object({
   id, kind: z.string().trim().min(1).max(64), name: label,
@@ -25,8 +26,9 @@ export const catalogEntitySchema = z.object({
   aliases: z.array(label).max(12).optional(),
   /** Scoped source identifiers, not executable destinations or identity proof on their own. */
   identifiers: z.array(z.object({ scheme: id, value: z.string().trim().min(1).max(200) }).strict()).max(8).optional(),
+  blocks: z.array(z.object({ id, kind: z.enum(['paragraph', 'heading']), text: z.string().max(8000) }).strict()).max(24).optional(),
 }).strict();
-export const catalogCollectionSchema = z.object({ id, name: label, entityIds: ids() }).strict();
+export const catalogCollectionSchema = z.object({ id, name: label, entityIds: ids(), parentIds: ids(8).optional() }).strict();
 export const catalogRelationshipSchema = z.object({ id, fromEntityId: id, toEntityId: id, label,
   kind: z.string().trim().min(1).max(80).optional(), inverseLabel: label.optional(),
   confidence: z.number().finite().min(0).max(1).optional(), validFrom: temporalDate.optional(), validTo: temporalDate.optional(),
@@ -210,6 +212,14 @@ export function validateCatalog(input: unknown): KnowledgeCatalog {
     }
   }
   for (const collection of catalog.collections) references(collection.entityIds, entityIds, `collection ${collection.id}`);
+  const collectionIds = new Set(catalog.collections.map(collection => collection.id));
+  for (const collection of catalog.collections) references(collection.parentIds ?? [], collectionIds, 'collection parents');
+  const collections = new Map(catalog.collections.map(collection => [collection.id, collection]));
+  function visitCollection(id: string, path: string[]) {
+    if (path.includes(id) || path.length > 7) invalid('Collection containment must be acyclic with at most eight levels.');
+    for (const parent of collections.get(id)?.parentIds ?? []) visitCollection(parent, [...path, id]);
+  }
+  for (const collection of catalog.collections) visitCollection(collection.id, []);
   for (const relationship of catalog.relationships) {
     if (!entityIds.has(relationship.fromEntityId) || !entityIds.has(relationship.toEntityId)) invalid('Unknown relationship entity.');
     if (relationship.fromEntityId === relationship.toEntityId) invalid('A relationship requires two distinct entities.');

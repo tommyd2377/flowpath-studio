@@ -1,4 +1,4 @@
-export function textPdf(pageLines: string[][]) {
+export function textPdf(pageLines: string[][], paddingBytes = 0) {
   const objects: string[] = ['<< /Type /Catalog /Pages 2 0 R >>', '', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
   const pageIds: number[] = [];
   for (const lines of pageLines) {
@@ -8,6 +8,7 @@ export function textPdf(pageLines: string[][]) {
     objects.push(`<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`);
   }
   objects[1] = `<< /Type /Pages /Kids [${pageIds.map(id => `${id} 0 R`).join(' ')}] /Count ${pageIds.length} >>`;
+  if (paddingBytes) objects.push(`<< /Length ${paddingBytes} >>\nstream\n${' '.repeat(paddingBytes)}\nendstream`);
   let result = '%PDF-1.4\n'; const offsets = [0];
   objects.forEach((body, index) => { offsets.push(Buffer.byteLength(result)); result += `${index + 1} 0 obj\n${body}\nendobj\n`; });
   const start = Buffer.byteLength(result);

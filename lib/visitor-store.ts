@@ -5,7 +5,7 @@ import { getBackendMode } from './firebase/config';
 import { getEditorStatus } from './editor-config';
 import { withDatabase } from './local-store';
 import { AppError } from './errors';
-import { contentSchema } from './site-model';
+import { contentSchema, nativeWebsiteContent } from './site-model';
 import { visitorSettings } from './visitor-model';
 import { availability, currentLedger, reserveReply } from './visitor-quota';
 import { reserveSearch, searchRemaining } from './explore-quota';
@@ -13,7 +13,7 @@ import { reserveSearch, searchRemaining } from './explore-quota';
 export async function visitorAccess(slug: string, request?: { requestId: string; kind: 'chat' | 'voice' | 'search'; greeting?: boolean }) {
   const live = getEditorStatus().mode === 'openai';
   const useContent = (raw: unknown, siteId: string, storedUsage: unknown) => {
-    const content = contentSchema.parse(raw);
+    const content = contentSchema.parse(nativeWebsiteContent(raw));
     if (request?.greeting && content.visitorSpeaksFirst) throw new AppError('This site lets the visitor speak first.', 403);
     const settings = visitorSettings(content);
     const ledger = currentLedger(storedUsage);

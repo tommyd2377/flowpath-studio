@@ -1,7 +1,8 @@
+import type { WebsiteMigration } from './website-migration-model';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { contentSchema, sampleContent, type Site, type SiteContent, type SiteFile } from './site-model';
+import { nativeWebsiteContent, contentSchema, sampleContent, type Site, type SiteContent, type SiteFile } from './site-model';
 import { AppError } from './errors';
 import type { VisitorLedger } from './visitor-quota';
 import { DEFAULT_VISITOR_SETTINGS } from './visitor-model';
@@ -10,7 +11,7 @@ import { DEFAULT_OPENING } from './site-opening';
 export { AppError } from './errors';
 export type StoredFile = SiteFile & { data?: string; text?: string; objectPath?: string; thumbnailData?: string; originalData?: string;
   thumbnailObjectPath?: string; originalObjectPath?: string; originalSize?: number; localImage?: boolean };
-export type StoredSite = Omit<Site, 'files'> & { files: StoredFile[]; mediaRefs?: Record<string, string[]> };
+export type StoredSite = Omit<Site, 'files'> & { files: StoredFile[]; mediaRefs?: Record<string, string[]>; websiteMigration?: WebsiteMigration };
 type Database = { schemaVersion: 1; sites: StoredSite[]; visitorUsage?: VisitorLedger };
 const globalStore = globalThis as typeof globalThis & { voiceStoreQueue?: Promise<unknown> };
 const directory = () => process.env.VOICE_DATA_DIR || join(process.cwd(), 'data');
@@ -52,8 +53,8 @@ export function findSite(db: Database, id: string) {
 }
 
 export function clientSite(site: StoredSite): Site {
-  const { mediaRefs: privateReferences, ...client } = site;
-  void privateReferences;
+  const { mediaRefs: privateReferences, websiteMigration: privateMigration, ...client } = site;
+  void privateReferences; void privateMigration;
   return { ...client, files: site.files.map(({ id, name, mime, size, uploadedAt, kind, image }) => ({ id, name, mime, size, uploadedAt, kind, ...(image ? { image } : {}) })) };
 }
 
@@ -65,7 +66,7 @@ export function pruneMediaReferences(site: StoredSite) {
 }
 
 export function updateDraft(site: StoredSite, content: SiteContent) {
-  const parsed = contentSchema.parse(content);
+  const parsed = contentSchema.parse(nativeWebsiteContent(content));
   if (parsed.logoAssetId && !site.files.some(file => file.id === parsed.logoAssetId && file.kind === 'image')) {
     throw new AppError('Choose a logo uploaded to this site.');
   }

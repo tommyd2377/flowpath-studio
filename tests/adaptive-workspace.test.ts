@@ -78,6 +78,29 @@ test('invalid/private/revision-mismatched references, unsafe IDs and invented ca
   }
   assert.throws(() => validateWorkspace({ ...fresh(), focusedId: 'missing' }, authority));
 });
+test('closing every object tolerates layout-only changes but still rejects changed workspace ownership', () => {
+  const state = add(add(add(fresh(), 'entity', 'blue', 'first'), 'entity', 'white', 'second'), 'photo', 'blue-photo', 'third');
+  const focused = applyWorkspaceBatch(state, workspaceBatch(state, [{ kind: 'focus', instanceId: 'first' }, { kind: 'focus', instanceId: 'second' }]), authority).state;
+  const groups = [
+    [{ kind: 'reset' as const, objects: [] }],
+    [{ kind: 'replace' as const, objects: [] }],
+    focused.objects.map(object => ({ kind: 'close' as const, instanceId: object.instanceId })),
+  ];
+  for (const operations of groups) {
+    const batch = workspaceBatch(focused, operations, crypto.randomUUID(), 1);
+    const cleared = applyWorkspaceBatch(focused, batch, authority, 9).state;
+    assert.deepEqual(cleared.objects, []); assert.equal(cleared.focusedId, null); assert.deepEqual(cleared.focusHistory, []);
+    assert.equal(applyWorkspaceBatch(cleared, batch, authority, 10).status, 'duplicate');
+    const changed = add(focused, 'fact', 'address', 'new-item');
+    assert.throws(() => applyWorkspaceBatch(changed, batch, authority, 9), /workspace changed/);
+    assert.throws(() => applyWorkspaceBatch(focused, { ...batch, publicationId: 'old-publication' }, authority, 9), /publication changed/);
+  }
+  const partial = workspaceBatch(focused, [{ kind: 'close', instanceId: 'first' }], 'close-spatial-subset', 1);
+  assert.throws(() => applyWorkspaceBatch(focused, partial, authority, 9), /workspace changed/);
+  const mixed = workspaceBatch(focused, [{ kind: 'reset', objects: [] }, { kind: 'add', object: objectInput(record('fact', 'address')) }], 'replace-from-old-scene', 1);
+  assert.throws(() => applyWorkspaceBatch(focused, mixed, authority, 9), /workspace changed/);
+  assert.equal(focused.objects.length, 3);
+});
 test('capacity never silently evicts and explicit replacement/reset stay deterministic', () => {
   let state = fresh(); for (const record of authority.records.slice(0, 12)) state = add(state, record.reference.kind, record.reference.id);
   const overflow = authority.records[12];

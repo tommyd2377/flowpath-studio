@@ -47,11 +47,13 @@ Existing daily request limits remain in force. Direct generation has a single bo
 
 ## Current pilot limits
 
-- Upload: 10 MB photos, 2 MB PDFs/DOCX/XLSX/HTML, 256 KB CSV/TXT; 100 photos plus 20 other sources, with a 100 MB site cap including photo originals and display variants.
+- Upload: 10 MB photos/PDFs, 2 MB DOCX/XLSX/HTML, 256 KB CSV/TXT; 100 photos plus 20 other sources, with a 100 MB site cap including photo originals and display variants.
 - Extraction: 40 PDF pages and 60,000 extracted characters. Office/HTML adapters are bounded. Empty/unreadable pages, encrypted or damaged PDFs and unavailable OCR fail explicitly. Embedded PDF images are not interpreted. Connected interpretation and correction have a 90-second provider timeout, with no automatic retries; timed-out attempts still count toward the AI limit.
 - Catalog: 100 entities, 24 attributes and bounded collections/relationships/jobs. Oversized records fail rather than silently truncating.
 - Import/review activity: 50 explicit attempts per site in this pilot. No unattended worker or automatic paid retry. Ambiguous interruptions require an explicit new attempt after checking saved state.
 - The demo correction grammar supports exact-name rename and attribute changes; broader conversational corrections require the configured interpreter.
+
+The 10 MB PDF cap is enforced as 10 MiB (10,485,760 bytes) in both the upload reader and source extractor, in demo and Firebase modes. File bytes remain in private storage; increasing this cap does not increase the Firestore document limit or the PDF page/text limits. A hosting provider can impose a smaller HTTP body limit before the application receives a file. For example, [Vercel Functions limit request bodies to 4.5 MB](https://vercel.com/docs/functions/limitations); that deployment would need a separately implemented authorized direct-to-storage or chunked upload path for larger files. Raising this application's cap alone does not bypass the host limit.
 
 The first photo and album release adds publisher-reviewed media, contextual card imagery and shared galleries. See [Photos and albums](photo-library.md) for the workflow, current image limits, publication boundaries and connected-interpretation scope.
 

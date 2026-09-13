@@ -272,7 +272,7 @@ export function interpretSourceWithProvenance(name: string, source: ExtractedSou
       attributes.set(attribute.id, attribute);
     }
     const entities = parts.flatMap(part => part.catalog.entities);
-    const catalog = validateCatalog({ ...parts[0].catalog, attributes: [...attributes.values()], entities, facts: parts.flatMap(part => part.catalog.facts ?? []), collections: [{ id: 'all', name: 'All sheets', entityIds: entities.map(entity => entity.id) }] });
+    const catalog = validateCatalog({ ...parts[0].catalog, attributes: [...attributes.values()], entities, facts: parts.flatMap(part => part.catalog.facts ?? []), collections: [{ id: 'all', name: 'All sheets', entityIds: [] }, ...parts.map((part, index) => ({ id: `sheet-${createHash('sha256').update(source.xlsxSheets!.filter(sheet => sheet.rows.length)[index].name).digest('hex').slice(0, 24)}`, name: source.xlsxSheets!.filter(sheet => sheet.rows.length)[index].name, parentIds: ['all'], entityIds: part.catalog.entities.map(entity => entity.id) }))] });
     const provenance = validateSourceProvenance({ anchors: parts.flatMap(part => part.provenance.anchors), fields: parts.flatMap(part => part.provenance.fields), facts: parts.flatMap(part => part.provenance.facts ?? []) }, catalog);
     return { catalog, provenance };
   }
@@ -292,6 +292,7 @@ export function interpretSourceWithProvenance(name: string, source: ExtractedSou
   }
   // Explicit field blocks can be interpreted honestly without a semantic model.
   const blocks = textBlocks(source.text);
+  if (/^#{1,6}\s+\S/m.test(source.text)) return interpretHeadingSource(name, source);
   const records: Record<string, string>[] = [];
   for (const block of blocks) {
     const record: Record<string, string> = Object.create(null);
@@ -313,8 +314,67 @@ export function interpretSourceWithProvenance(name: string, source: ExtractedSou
 
 export function interpretStructuredSource(name: string, source: ExtractedSource): KnowledgeCatalog | null { return interpretSourceWithProvenance(name, source)?.catalog ?? null; }
 
+/** Heading structure is a review proposal. A section remains one record with detail blocks. */
+function interpretHeadingSource(name: string, source: ExtractedSource): { catalog: KnowledgeCatalog; provenance: SourceProvenance } | null {
+  const originalSource = source;
+  if (source.text.split(/^#{1,6}\s+.+$/m)[0].trim()) {
+    // Preserve preamble as a reviewable introduction record rather than dropping it.
+    source = { ...source, text: `# Introduction\n${source.text}` };
+  }
+  const headings = [...source.text.matchAll(/^(#{1,6})\s+(.+)$/gm)];
+  if (!headings.length || headings.length > 24) return null;
+  const collections: KnowledgeCatalog['collections'] = [], entities: KnowledgeCatalog['entities'] = [], stack: { level: number; id: string }[] = [];
+  const provenance = unlinkedSourceProvenance(originalSource), facts: NonNullable<KnowledgeCatalog['facts']> = [];
+  provenance.facts ??= [];
+  for (let index = 0; index < headings.length; index++) {
+    const heading = headings[index], level = heading[1].length, title = heading[2].trim();
+    while (stack.length && stack.at(-1)!.level >= level) stack.pop();
+    const id = `heading-${createHash('sha256').update([...stack.map(item => item.id), title].join('/')).digest('hex').slice(0, 24)}`;
+    const start = heading.index!, end = headings[index + 1]?.index ?? source.text.length;
+    const body = source.text.slice(start + heading[0].length, end).trim();
+    const collection = { id, name: title, entityIds: [] as string[], ...(stack.length ? { parentIds: [stack.at(-1)!.id] } : {}) };
+    collections.push(collection); stack.push({ level, id });
+    if (!body) continue;
+    const labeled = interpretSourceWithProvenance(name, { ...source, text: body, format: 'text', pageRanges: undefined });
+    if (labeled) {
+      // Preserve exact original-source locations while namespacing record/fact identities.
+      const recordIds = new Map(labeled.catalog.entities.map(entity => [entity.id, `record-${createHash('sha256').update(`${id}/${entity.id}`).digest('hex').slice(0, 32)}`]));
+      const factIds = new Map((labeled.catalog.facts ?? []).map(fact => [fact.id, `fact-${createHash('sha256').update(`${id}/${fact.id}`).digest('hex').slice(0, 32)}`]));
+      const bodyStart = source.text.indexOf(body, start + heading[0].length) - (source.text.length - originalSource.text.length);
+      const lineStarts = [0, ...[...body.matchAll(/\r\n|\r|\n/g)].map(match => match.index! + match[0].length)];
+      const anchorIds = new Map(labeled.provenance.anchors.map(anchor => [anchor.id, `anchor-${createHash('sha256').update(`${id}/${anchor.id}`).digest('hex').slice(0, 32)}`]));
+      for (const anchor of labeled.provenance.anchors) {
+        const originalStart = bodyStart + lineStarts[(anchor.lineStart ?? 1) - 1] + (anchor.characterStart ?? 0);
+        const lineStart = 1 + (originalSource.text.slice(0, originalStart).match(/\r\n|\r|\n/g)?.length ?? 0);
+        const mapped = blockAnchor(originalSource, { text: anchor.excerpt, start: originalStart, end: originalStart + anchor.excerpt.length, lineStart, lineEnd: lineStart + (anchor.excerpt.match(/\r\n|\r|\n/g)?.length ?? 0) });
+        provenance.anchors.push({ ...mapped, id: anchorIds.get(anchor.id)!, ...(anchor.truncated ? { truncated: true } : {}) });
+      }
+      provenance.fields.push(...labeled.provenance.fields.map(field => ({ ...field, entityId: recordIds.get(field.entityId)!, anchorIds: field.anchorIds.map(id => anchorIds.get(id)!) })));
+      provenance.facts.push(...(labeled.provenance.facts ?? []).map(fact => ({ ...fact, targetId: factIds.get(fact.targetId)!, anchorIds: fact.anchorIds.map(id => anchorIds.get(id)!) })));
+      facts.push(...(labeled.catalog.facts ?? []).map(fact => ({ ...fact, id: factIds.get(fact.id)!, entityId: recordIds.get(fact.entityId)! })));
+      for (const entity of labeled.catalog.entities) { const entityId = recordIds.get(entity.id)!; entities.push({ ...entity, id: entityId }); collection.entityIds.push(entityId); }
+    } else {
+      const paragraphs = body.split(/\n\s*\n/).map(text => text.trim()).filter(Boolean);
+      if (paragraphs.length > 24 || paragraphs.some(text => text.length > 8000)) throw new AppError('A heading section exceeds the detail-block limits. Split it; nothing was omitted.');
+      const entityId = `record-${id}`;
+      entities.push({ id: entityId, name: title, kind: 'article', summary: body.slice(0, 1500), attributes: {}, blocks: paragraphs.map((text, i) => ({ id: `block-${i}`, kind: 'paragraph', text })) });
+      collection.entityIds.push(entityId);
+    }
+  }
+  if (!entities.length) return null;
+  // Infer definitions using the same bounded row reader; labeled fields retain their values.
+  const attributes = new Map<string, AttributeDefinition>();
+  for (const heading of headings) {
+    const index = headings.indexOf(heading), body = source.text.slice(heading.index! + heading[0].length, headings[index + 1]?.index ?? source.text.length).trim();
+    const part = body && interpretSourceWithProvenance(name, { text: body, format: 'text' });
+    if (part) for (const field of part.catalog.attributes) { if (attributes.has(field.id) && JSON.stringify(attributes.get(field.id)) !== JSON.stringify(field)) throw new AppError('Heading sections disagree on field meanings. Review separate sources.'); attributes.set(field.id, field); }
+  }
+  const catalog = validateCatalog({ schemaVersion: 1, id: randomUUID(), name: name.replace(/\.[^.]+$/, ''), description: '', attributes: [...attributes.values()], entities, collections, facts, relationships: [], jobs: [], capabilities: [] });
+  return { catalog, provenance: validateSourceProvenance(provenance, catalog) };
+}
+
 export async function extractSource(name: string, mime: string, bytes: Uint8Array, options?: { ocrProvider?: OcrProvider; signal?: AbortSignal }): Promise<ExtractedSource> {
-  const byteLimit = mime.startsWith('image/') ? 10 * 1024 * 1024 : ['text/plain', 'text/csv'].includes(mime) ? 256 * 1024 : 2 * 1024 * 1024;
+  const byteLimit = mime.startsWith('image/') || mime === 'application/pdf' ? 10 * 1024 * 1024 : ['text/plain', 'text/csv'].includes(mime) ? 256 * 1024 : 2 * 1024 * 1024;
   if (bytes.length > byteLimit || !bytes.length) throw new AppError('Use a non-empty source within the existing upload size limit.');
   if (mime === 'application/pdf') {
     let task: import('pdfjs-dist/types/src/display/api').PDFDocumentLoadingTask;

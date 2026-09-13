@@ -1,6 +1,6 @@
 # FlowPath visitor task system: implementation plan
 
-Design date: 2026-09-13. This is a proposed implementation sequence, not a completion report. The authoritative design is [architecture.md](architecture.md), including section 4A on hierarchical collections. The [paste-ready prompt](codex-prompt.md) authorizes a future implementation task.
+Design date: 2026-09-13. M0–M6 have been implemented in the current checkout; final verification status, code paths, measurements and acceptance steps are tracked in [implementation-report.md](implementation-report.md). M7 remains a separate live authorization gate. This document retains the original exit criteria. The authoritative design is [architecture.md](architecture.md), including section 4A on hierarchical collections. The [paste-ready prompt](codex-prompt.md) defines the authorized implementation scope.
 
 ## 1. Scope and priorities
 

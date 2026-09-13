@@ -1,5 +1,5 @@
 .assistant { width: 100%; margin: 0 auto; padding: 0; }
-.modes { display: inline-flex; position: relative; gap: 3px; padding: 4px; margin: 20px auto 14px; border: 1px solid #74806435; background: #12181085; border-radius: 30px; }
+.modes { display: inline-flex; position: sticky; top: 12px; z-index: 90; gap: 3px; padding: 4px; margin: 20px auto 14px; border: 1px solid #74806435; background: var(--platform-bg, #121810); border-radius: 30px; }
 .modes button { position: relative; background: none; color: #a4ac99; border-radius: 30px; padding: 8px 17px; font-size: 12px; }
 .modes button[aria-pressed='true'] { color: #efeade; }
 .modes button:disabled { opacity: .4; cursor: default; }

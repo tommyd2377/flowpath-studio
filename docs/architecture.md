@@ -19,6 +19,7 @@ flowchart LR
 | Boundary | Main files |
 | --- | --- |
 | Studio and review | [Dashboard](../components/Dashboard.tsx), [KnowledgeReview](../components/KnowledgeReview.tsx), [MediaPanel](../components/MediaPanel.tsx), [OpeningSettings](../components/OpeningSettings.tsx) |
+| Website migration | [crawler](../lib/website-import.ts), [pinned transport](../lib/website-fetch.ts), [private design/report schema](../lib/website-import-model.ts), [workflow and limits](website-import.md) |
 | Source ingestion and corrections | [source-extractors](../lib/source-extractors.ts), [ingestion](../lib/ingestion.ts), [knowledge-model](../lib/knowledge-model.ts), [knowledge-store](../lib/knowledge-store.ts) |
 | Photo preparation and review | [image-processing](../lib/image-processing.ts), [media-interpretation](../lib/media-interpretation.ts), [media-store](../lib/media-store.ts) |
 | Site persistence and publication | [site-model](../lib/site-model.ts), [site-store](../lib/site-store.ts), [site-commands](../lib/site-commands.ts), [site API](../app/api/sites/[siteId]/route.ts) |
@@ -95,9 +96,9 @@ The current bounds are pilot constraints, not subscription entitlements:
 
 | Area | Implemented bound / source |
 | --- | --- |
-| Uploads | 10 MB per photo, 2 MB per PDF/DOCX/XLSX/HTML, 256 KB per CSV/TXT; 100 photos + 20 other files; 100 MB total including photo originals and variants. [Validation](../lib/file-validation.ts) |
+| Uploads | 10 MB per photo or PDF, 2 MB per DOCX/XLSX/HTML, 256 KB per CSV/TXT; 100 photos + 20 other files; 100 MB total including photo originals and variants. [Validation](../lib/file-validation.ts) |
 | Extraction | 40 PDF pages and 60,000 extracted characters; Office/HTML adapters are bounded; OCR uses an injectable local provider. [Extractor](../lib/source-extractors.ts) |
-| Catalog | 100 entities, 24 attributes, 24 collections, 200 relationships, 12 jobs, 20 registered links; additional payload/depth/reference checks. [Contracts](../packages/platform-ui/src/contracts.ts) |
+| Legacy v1 catalog | 100 entities, 24 attributes, 24 collections, 200 relationships, 12 jobs, 20 registered links; additional payload/depth/reference checks. [Contracts](../packages/platform-ui/src/contracts.ts) |
 | Media | 100 assets, 24 albums, 300 associations; 40 million decoded pixels per upload. [Media schema](../packages/platform-ui/src/media.ts), [image processing](../lib/image-processing.ts) |
 | Review and storage | 50 import/review jobs per site; 700,000-byte knowledge artifacts; 750,000-byte serialized cloud site state; up to 20 draft-history entries. [Knowledge store](../lib/knowledge-store.ts), [cloud store](../lib/cloud-store.ts), [local store](../lib/local-store.ts) |
 | Connected owner generations | Shared across text edits, semantic interpretation/correction and photo interpretation: 10 attempts per owner and 100 globally per UTC day, plus owner cooldown and replay protection. [AI setup](ai-editor-setup.md) |
@@ -115,3 +116,9 @@ Uploads and immutable projections can be staged before the final revision-checke
 Use Node 24 and the scripts in [package.json](../package.json). `npm run check` runs lint, types, persistent offline tests, the packed-package consumer and the production build. `npm run test:browser` then starts an isolated local demo server on port 3225 with disposable data and a fresh headless Playwright context; it does not use a signed-in browser profile. See [Playwright configuration](../playwright.config.ts).
 
 The [synthetic fixture catalogs](../fixtures/README.md) cover structurally different domains. Keep fixtures, direct-provider mocks, storage/publication tests and browser interaction tests aligned when extending a contract. Offline checks cover real local extraction, image processing, OpenUI parsing and browser layout; mocked Firebase/provider transports do not establish live service configuration or model quality.
+
+## Hierarchical visitor tasks (v2)
+
+The [visitor task implementation report](visitor-task-system/implementation-report.md) maps the implemented hierarchy, query, publication and task contracts to code and verification. `catalog-repository` stages immutable bounded chunks and a validated manifest; the site draft/history/publication stores only its reference. Public v2 routes bypass full legacy catalog hydration. `catalog-query-index` compiles authorized scope, field, lexical and relationship indexes, while `catalog-query` evaluates typed criteria and produces bounded revision-bound pages. Canonical records can belong to multiple collections without duplicating facts.
+
+`visitor-task-bridge` connects the existing chat/voice executor to one typed `visitor-capabilities` registry and session/evidence store. `VisitorTasks` provides the same operations for manual browsing, exact display acknowledgment, selections, artifact editing and synthetic action review. Current-publication authorization precedes index/record access; browser state is not evidence authority. Local/cloud transport contracts share CAS semantics, with cloud tested only through injection. The implementation retains the existing workspace, media authorization and Motion system. Full limits, memory accounting, v1 migration/rollback and unactivated vendor boundaries are documented in the report.

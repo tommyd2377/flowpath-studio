@@ -97,7 +97,12 @@ export function applyWorkspaceBatch(current: WorkspaceState, input: unknown, aut
     if (receipt.fingerprint !== fingerprint) fail('A request ID was reused with conflicting operations.');
     return { state: current, status: 'duplicate' };
   }
-  if (batch.baseRevision !== current.revision || batch.sceneRevision !== undefined && batch.sceneRevision !== sceneRevision) fail('The workspace changed. Use its current objects before trying again.');
+  // Closing the entire unchanged set does not depend on where cards moved.
+  // Partial/spatial actions still require the original scene; all actions keep
+  // the publication and workspace revision guards (including late clears).
+  const clearsAll = batch.operations.length === 1 && (batch.operations[0].kind === 'reset' || batch.operations[0].kind === 'replace') && batch.operations[0].objects.length === 0
+    || batch.operations.every(operation => operation.kind === 'close') && current.objects.every(object => batch.operations.some(operation => operation.kind === 'close' && operation.instanceId === object.instanceId));
+  if (batch.baseRevision !== current.revision || !clearsAll && batch.sceneRevision !== undefined && batch.sceneRevision !== sceneRevision) fail('The workspace changed. Use its current objects before trying again.');
   const next = structuredClone(current);
   const aliases: Record<string, string> = {};
   const get = (id: string) => next.objects.find(object => object.instanceId === (aliases[id] ?? id)) ?? fail('That object is no longer open.');

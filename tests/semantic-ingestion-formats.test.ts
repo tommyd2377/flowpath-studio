@@ -92,7 +92,7 @@ for (const [index, entry] of corpus.entries()) for (const format of ['pdf', 'txt
       return { factId: `fact-${factIndex}`, anchorIds: [anchor.id] };
     });
     const envelope = { complete: true, issues: [], name: entry.title, description: '', attributes: [],
-      entities: [{ id: 'item', name: entry.title, kind: entry.kind, summary: entry.lines[0], aliases: null, identifiers: null, attributes: [] }],
+      entities: [{ id: 'item', name: entry.title, kind: entry.kind, summary: entry.lines[0], aliases: null, identifiers: null, blocks: null, attributes: [] }],
       collections: [], relationships: [], jobs: [], facts, evidence };
     assert.ok(wireSchema.safeParse(envelope).success, 'the full generated wire contract accepts the fixture');
     const parsed = parseSemanticProviderReply(JSON.stringify(envelope), provenance);

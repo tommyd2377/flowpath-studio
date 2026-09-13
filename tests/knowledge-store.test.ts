@@ -49,9 +49,11 @@ test('local lifecycle: review correction, immutable Apply, publication, private 
     assert.equal(reapplied.catalog?.entities[0].name, 'Reviewed One');
     assert.equal((await getPublishedKnowledge(id, revisionId))?.entities[0].name, 'One', 'reviewing a draft without originals leaves publication unchanged');
     const withOpening = await modifySite(user, id, reapplied.site.revision, site => {
+      site.draft.catalogPublicationId = 'f45568f4-d389-48e7-99bd-fd6f9ec53054';
       site.draft.opening = { highlights: ['Welcome'], featuredEntityIds: [reapplied.catalog!.entities[0].id], capabilityIds: [], tone: 'warm' };
     });
     const removed = await removeKnowledge(user, id, withOpening.revision);
+    assert.equal(removed.site.draft.catalogPublicationId, undefined);
     assert.deepEqual(removed.site.draft.opening?.featuredEntityIds, []);
     assert.deepEqual(removed.site.draft.opening?.highlights, ['Welcome']);
     assert.equal(await getKnowledgeCatalogForSite(user, id), null);
@@ -88,7 +90,7 @@ test('local lifecycle: review correction, immutable Apply, publication, private 
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
-test('owner routes accept a real PDF upload and return a validated review candidate offline', async () => {
+test('owner routes accept a real PDF over 2 MB and return a validated review candidate offline', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'voice-knowledge-route-test-'));
   process.env.VOICE_DATA_DIR = directory; process.env.VOICE_BACKEND = 'demo'; process.env.VOICE_AI_MODE = 'demo';
   try {
@@ -98,7 +100,9 @@ test('owner routes accept a real PDF upload and return a validated review candid
     const user = { uid: 'local-demo', mode: 'demo' as const, email: null, displayName: null };
     const id = (await listSites(user))[0].id; const site = await getSite(user, id);
     const origin = 'http://127.0.0.1:3220';
-    const result = await upload(new Request(`${origin}/api/sites/${id}/files`, { method: 'POST', headers: { origin, 'content-type': 'application/pdf', 'x-site-revision': String(site.revision), 'x-file-name': 'route-item.pdf' }, body: textPdf([['Name: Route item', 'Kind: offering', 'Price [USD]: 19']]) }), { params: Promise.resolve({ siteId: id }) });
+    const bytes = textPdf([['Name: Route item', 'Kind: offering', 'Price [USD]: 19']], 3 * 1024 * 1024);
+    assert.ok(bytes.length > 2 * 1024 * 1024 && bytes.length < 10 * 1024 * 1024);
+    const result = await upload(new Request(`${origin}/api/sites/${id}/files`, { method: 'POST', headers: { origin, 'content-type': 'application/pdf', 'x-site-revision': String(site.revision), 'x-file-name': 'route-item.pdf' }, body: bytes }), { params: Promise.resolve({ siteId: id }) });
     assert.equal(result.status, 200); const uploaded = await result.json();
     const interpretation = await knowledge(new Request(`${origin}/api/sites/${id}/knowledge`, { method: 'POST', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify({ action: 'analyze', revision: uploaded.site.revision, fileId: uploaded.site.files.at(-1).id, requestId: randomUUID() }) }), { params: Promise.resolve({ siteId: id }) });
     assert.equal(interpretation.status, 200);

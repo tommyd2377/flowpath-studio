@@ -134,6 +134,7 @@ test.describe.serial('offline publisher-to-visitor proof', () => {
     await knowledgeAction(page, 'Interpret source');
     const proposal = page.getByRole('region', { name: 'Knowledge proposal' });
     await expect(proposal.getByRole('heading', { name: 'Review the interpretation' })).toBeVisible();
+    await proposal.getByText(/^Edit item names, descriptions and fields/).click();
     const first = proposal.locator('.knowledge-item').filter({ has: page.locator('summary', { hasText: 'Example Blanco' }) });
     await first.locator(':scope > summary').click();
     await first.getByLabel('Name', { exact: true }).fill('Example Blanco Reviewed');
@@ -141,6 +142,7 @@ test.describe.serial('offline publisher-to-visitor proof', () => {
     await knowledgeAction(page, 'Save corrections');
     await proposal.getByLabel('Correct the interpretation').fill('Rename "Example Reposado" to "Example Reposado Selected"');
     await knowledgeAction(page, 'Propose correction');
+    await proposal.getByText(/^Edit item names, descriptions and fields/).click();
     await expect(proposal.locator('.knowledge-item > summary', { hasText: 'Example Reposado Selected' })).toBeVisible();
     await screenshot(page, info.outputPath('publisher-correction.png'));
     await knowledgeAction(page, 'Apply to draft');
@@ -321,7 +323,8 @@ test.describe.serial('offline publisher-to-visitor proof', () => {
     const created = await page.request.post('/api/sites', { headers, data: { name: 'Offline PDF Proof', slug: `pdf-proof-${Date.now()}`, kind: 'general' } });
     expect(created.ok(), await created.text()).toBeTruthy();
     let site = (await created.json()).site;
-    const bytes = textPdf([['ID: pdf-workshop', 'Name: Example PDF Workshop', 'Kind: session', 'Summary: Fictional workshop for offline verification.', 'Price [USD]: 24', 'Duration: 60']]);
+    const bytes = textPdf([['ID: pdf-workshop', 'Name: Example PDF Workshop', 'Kind: session', 'Summary: Fictional workshop for offline verification.', 'Price [USD]: 24', 'Duration: 60']], 9 * 1024 * 1024);
+    expect(bytes.length).toBeGreaterThan(9 * 1024 * 1024); expect(bytes.length).toBeLessThan(10 * 1024 * 1024);
     const uploaded = await page.request.post(`/api/sites/${site.id}/files`, { headers: { ...headers, 'Content-Type': 'application/pdf', 'X-File-Name': 'offline-proof.pdf', 'X-Site-Revision': String(site.revision) }, data: Buffer.from(bytes) });
     expect(uploaded.ok(), await uploaded.text()).toBeTruthy();
     site = (await uploaded.json()).site;

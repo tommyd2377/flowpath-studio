@@ -56,7 +56,7 @@ test('the generated JSON Schema itself permits exactly one complete citation tar
 test('generated fact targets bind their definition and value type without a second field identifier', () => {
   const wire = z.fromJSONSchema(semanticReplyJsonSchema() as Parameters<typeof z.fromJSONSchema>[0]);
   const common = { id: 'fact', entityId: 'harbor', confidence: null, validFrom: null, validTo: null, observedAt: null, polarity: null, qualifiers: null, expression: null };
-  const envelope = (target: unknown) => ({ ...reply(), entities: reply().entities.map(entity => ({ ...entity, aliases: null, identifiers: null })), facts: [{ ...common, target }] });
+  const envelope = (target: unknown) => ({ ...reply(), entities: reply().entities.map(entity => ({ ...entity, aliases: null, identifiers: null, blocks: null })), facts: [{ ...common, target }] });
   const cases = [
     { type: 'text', value: 'hello@example.test', wrong: false, currency: null },
     { type: 'number', value: 4.5, wrong: '4.5', currency: null },
@@ -138,7 +138,7 @@ test('separate evidence entries coalesce by exact target without losing source a
     { relationshipId: 'located-at', anchorIds: ['page-1'] }, { relationshipId: 'located-at', anchorIds: ['page-2'] },
   ];
   const result = parse({ ...reply(), facts, relationships, evidence });
-  assert.deepEqual(result.provenance?.fields, [{ entityId: 'harbor', field: 'summary', anchorIds: ['page-1', 'page-2'] }]);
+  assert.deepEqual(result.provenance?.fields, [{ entityId: 'harbor', field: 'summary', anchorIds: ['page-1', 'page-2'] }, { entityId: 'harbor', field: 'name', anchorIds: ['page-1', 'page-2'] }, { entityId: 'clay', field: 'name', anchorIds: ['page-2'] }]);
   assert.deepEqual(result.provenance?.facts, [{ targetId: 'class-fact', anchorIds: ['page-1', 'page-2'] }]);
   assert.deepEqual(result.provenance?.relationships, [{ targetId: 'located-at', anchorIds: ['page-1', 'page-2'] }]);
   assert.deepEqual(source.anchors.map(anchor => anchor.id), ['page-1', 'page-2']);
@@ -190,4 +190,14 @@ test('nullable wire properties retain unknown fact values and remove only option
   assert.equal(result.catalog.facts?.[0].confidence, undefined);
   assert.equal(result.catalog.facts?.[0].definition?.unit, undefined);
   assert.deepEqual(result.provenance?.fields[0].anchorIds, ['page-1']);
+});
+
+
+test('literal name locations do not infer types, facts, substring matches or truncated evidence', () => {
+  const input = { ...reply(), entities: [{ ...reply().entities[0], name: 'Oregon' }] };
+  const result = parse(input, { anchors: [{ ...source.anchors[0], excerpt: 'Oregonian coast' }, { ...source.anchors[1], excerpt: 'Oregon', truncated: true }], fields: [] });
+  assert.deepEqual(result.provenance?.fields, []);
+  const exact = parse(input, { anchors: [{ ...source.anchors[0], excerpt: 'Visit Oregon, then Idaho.' }], fields: [] });
+  assert.deepEqual(exact.provenance?.fields, [{ entityId: 'harbor', field: 'name', anchorIds: ['page-1'] }]);
+  assert.deepEqual(exact.catalog.entities[0].attributes, {});
 });

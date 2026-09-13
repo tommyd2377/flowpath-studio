@@ -1,6 +1,7 @@
 import 'server-only';
 import { createHash, randomUUID } from 'node:crypto';
 import { runVisitorTask } from './visitor-task-runner';
+import { createVisitorTaskBridge } from './visitor-task-bridge';
 import { createVisitorRealtimeMailbox } from './visitor-realtime-mailbox';
 import { validateVisitorContext, type VisitorContext } from './visitor-realtime-context';
 import { parseWorkspaceReply, publishedWorkspace, workspaceInstructions, workspaceJsonSchema } from './visitor-workspace';
@@ -8,6 +9,8 @@ import { exploreSettings, exploreContextForResult } from './explore-model';
 import { exploreVoiceTool, validateExploreVoice } from './explore-voice';
 import { contextualSearchQuery, searchPlacement } from './explore-workspace';
 import { visitorDiagnostic, diagnosticError } from './visitor-diagnostics';
+import { lookupVisitorResearch } from './visitor-research';
+import { publishedContentTool, readPublishedContent } from './visitor-published-content';
 import { authorizedExplore } from './explore-service';
 import { visitorAccess } from './visitor-store';
 import { assistantPurposeInstructions, type VisitorAvailability } from './visitor-model';
@@ -56,13 +59,16 @@ export function visitorChatTask(options: { slug: string; siteId: string; content
         if (status !== 'applied') throw new Error('The browser did not apply the requested view.');
         return { status, currentView: context };
       };
-      const tools = [{ type: 'function', name: 'update_workspace', description: 'Arrange published information or retained external results. Use exact references and the latest state returned by previous tools. Wait for browser acknowledgment.', parameters: workspaceJsonSchema() },
+      const taskBridge = (options.catalog || options.content.catalogPublicationId) ? await createVisitorTaskBridge(options.slug, context.taskSession?.sessionId, async (query, kind, signal) => (await authorizedExplore(options.slug, { query, kind, requestId: randomUUID() }, signal, snapshot)).result) : null;
+      const tools = [publishedContentTool, ...(taskBridge ? [taskBridge.tool] : []), { type: 'function', name: 'update_workspace', description: 'Arrange published information or retained external results. Use exact references and the latest state returned by previous tools. Wait for browser acknowledgment.', parameters: workspaceJsonSchema() },
         ...(exploreSettings(options.content).enabled ? [exploreVoiceTool] : [])];
       const result = await runVisitorTask({ model: 'gpt-5.6-luna', channel: 'chat', apiKey: process.env.OPENAI_API_KEY?.trim() ?? '', signal,
-        instructions: () => `${assistantPurposeInstructions(options.content)}\n${workspaceInstructions(context.workspace!, publishedWorkspace(options.content, options.catalog, options.media, context.externalResults), context.scene, options.request.text, options.catalog, options.media, 'tool')}`,
-        context: { request: options.request.text, history: options.request.history, currentView: context }, tools, onUsage: options.onUsage,
+        instructions: async () => `${taskBridge ? await taskBridge.instructions() : ''}\n${assistantPurposeInstructions(options.content)}\n${workspaceInstructions(context.workspace!, publishedWorkspace(options.content, options.catalog, options.media, context.externalResults), context.scene, options.request.text, options.catalog, options.media, 'tool')}`,
+        context: { request: options.request.text, history: options.request.history, currentView: context }, tools, beforeModel: () => taskBridge?.beforeModel() ?? Promise.resolve(), onUsage: async usage => { options.onUsage(usage); await taskBridge?.usage(usage); },
         execute: async (name, args) => {
           await assertCurrent();
+          if (name === 'read_published_content') return { data: readPublishedContent(JSON.parse(args), publishedWorkspace(options.content, options.catalog, options.media), options.catalog) };
+          if (name === 'visitor_task' && taskBridge) return taskBridge.execute(args, signal, view => display({ kind: 'task', view }));
           if (name === 'update_workspace') {
             const reply = parseWorkspaceReply(JSON.parse(args), context.workspace!, publishedWorkspace(options.content, options.catalog, options.media, context.externalResults), context.scene);
             if (!reply.batch) return { data: { status: 'unavailable', message: reply.message }, directText: reply.message };
@@ -74,12 +80,12 @@ export function visitorChatTask(options: { slug: string; siteId: string; content
             searchPlacement(context.workspace, context.externalResults ?? [], requested.search.annotationTarget);
             requested.search.query = contextualSearchQuery(requested.search.query, context.workspace, publishedWorkspace(options.content, options.catalog, options.media), context.explore);
           }
-          const { result: found } = await authorizedExplore(options.slug, { requestId: randomUUID(), ...requested.search }, signal, snapshot);
+          const found = await lookupVisitorResearch(async (query, kind, signal) => (await authorizedExplore(options.slug, { requestId: randomUUID(), query, kind, ...(requested.search?.annotationTarget ? { annotationTarget: requested.search.annotationTarget } : {}) }, signal, snapshot)).result, requested.search.query, requested.search.kind, signal);
           const applied = await display({ kind: 'explore', result: found });
           return { data: { ...applied, evidence: { ...exploreContextForResult(found, found.kind, null), answer: found.answer, sources: found.sources, citations: found.citations } } };
         },
       });
-      await assertCurrent(); emit({ type: 'done', text: result.text, availability: (await visitorAccess(options.slug)).availability });
+      await taskBridge?.finish(); await assertCurrent(); emit({ type: 'done', text: result.text, availability: (await visitorAccess(options.slug)).availability });
     } finally { unsubscribe(); await mailbox.close(); }
   }
   const stream = new ReadableStream<Uint8Array>({

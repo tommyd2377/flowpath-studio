@@ -22,6 +22,7 @@ import { demoVisitorReply, visitorSettings, type VisitorAvailability, type Visit
 import { demoPresentation, presentationSources, presentationSummary, validatePresentation, type SitePresentation as Presentation } from '@/lib/site-presentation';
 import { useVisitorVoice } from '@/lib/use-visitor-voice';
 import { useVisitorSession } from '@/lib/use-visitor-session';
+import { useVisitorTasks } from './VisitorTasks';
 import { captureVisitorContext, navigateVisitorView } from '@/lib/visitor-view-context';
 import type { VisitorContext } from '@/lib/visitor-request';
 import styles from './VisitorAssistant.module.css';
@@ -35,7 +36,9 @@ import type { PlatformEventInput } from '@/lib/platform-events';
 const ease = [0.22, 1, 0.36, 1] as const;
 const spring = { type: 'spring', stiffness: 330, damping: 34, mass: 0.8 } as const;
 
-export default function VisitorAssistant({ content, slug, entered, initialCatalogPlan, initialSourceIds = [], onControlActivate, onContentInvoke, onContentReset, homeRef, onViewChange, catalog, media, interactionRef, onPhotoView, onCatalogEvent, identity, opening }: {
+export default function VisitorAssistant({ content, slug, entered, initialCatalogPlan, initialSourceIds = [], onControlActivate, onContentInvoke, onContentReset, homeRef, workspaceRef, onDismissMedia, onViewChange, catalog, media, interactionRef, onPhotoView, onCatalogEvent, identity, opening }: {
+  onDismissMedia?: () => void;
+  workspaceRef?: MutableRefObject<VisitorWorkspaceHandle | null>;
   homeRef?: MutableRefObject<(() => void) | null>;
   identity?: ReactNode; opening?: ReactNode;
   content: SiteContent; slug?: string; entered: boolean; contentInvoked: boolean; initialCatalogPlan?: PresentationPlan | null; initialSourceIds?: string[]; onControlActivate: () => void; onContentInvoke: () => void; onContentReset?: () => void; onViewChange: (active: boolean) => void; catalog?: KnowledgeCatalog | null;
@@ -47,6 +50,7 @@ export default function VisitorAssistant({ content, slug, entered, initialCatalo
   const searchSettings = exploreSettings(content);
   const searchView = useRef<SearchExploreHandle>(null);
   const workspaceView = useRef<VisitorWorkspaceHandle>(null);
+  const setWorkspaceHandle = useCallback((handle: VisitorWorkspaceHandle | null) => { workspaceView.current = handle; if (workspaceRef) workspaceRef.current = handle; }, [workspaceRef]);
   const greeting = useRef<ReturnType<typeof followGreeting> | null>(null);
   const cancelGreeting = useCallback(() => { greeting.current?.cancel(); greeting.current = null; }, []);
   const greetingPoints = useMemo(() => greetingVisuals(content, publishedWorkspace(content, catalog, media), catalog), [content, catalog, media]);
@@ -54,6 +58,8 @@ export default function VisitorAssistant({ content, slug, entered, initialCatalo
     enabled: true, mode: settings.mode, live: false, chatRemaining: settings.chatDailyLimit,
     voiceRemaining: settings.voiceDailyLimit, resetsAt: '',
   });
+  const [availabilityLoading, setAvailabilityLoading] = useState(!!slug);
+  const tasks = useVisitorTasks();
   const [mode, setMode] = useState<'chat' | 'voice'>(settings.mode === 'chat' ? 'chat' : 'voice');
   const historyRef = useRef<VisitorMessage[]>([]);
   function appendMessages(additions: VisitorMessage[]) { historyRef.current = [...historyRef.current, ...additions].slice(-8).map(item => ({ ...item, text: item.text.slice(0, 2000) })); }
@@ -111,12 +117,13 @@ export default function VisitorAssistant({ content, slug, entered, initialCatalo
   const updateContext = liveVoice.updateContext;
   const getContext = useCallback((): VisitorContext => captureVisitorContext(siteRoot.current, {
     ...workspaceView.current?.context(),
+    ...(tasks?.current() ? { taskSession: tasks.current() } : {}),
     ...(!workspaceView.current && searchView.current?.context() ? { explore: searchView.current.context() } : {}),
     ...(!workspaceView.current && catalogState.current ? { catalogState: catalogState.current } : {}),
     ...(!workspaceView.current && acceptedCatalogPlan.current ? { catalogPlan: acceptedCatalogPlan.current } : {}),
     ...(!workspaceView.current && acceptedPresentation.current ? { presentation: acceptedPresentation.current } : {}),
-  }, entityIds, sourceIds), [entityIds, sourceIds]);
-  const manualInteraction = useCallback(() => { cancelGreeting(); pending.current?.abort(); searchView.current?.cancel(); cancelDemo(); manualInterrupt(); }, [cancelGreeting, cancelDemo, manualInterrupt]);
+  }, entityIds, sourceIds), [entityIds, sourceIds, tasks]);
+  const manualInteraction = useCallback(() => { cancelGreeting(); pending.current?.abort(); searchView.current?.cancel(); cancelDemo(); manualInterrupt(); tasks?.interrupt(); }, [cancelGreeting, cancelDemo, manualInterrupt, tasks]);
   useEffect(() => {
     const hidden = () => { if (document.hidden) cancelGreeting(); };
     document.addEventListener('visibilitychange', hidden);
@@ -175,7 +182,8 @@ export default function VisitorAssistant({ content, slug, entered, initialCatalo
         const body = await response.json();
         if (!response.ok || !body.availability) throw new Error(body.error || 'The assistant is unavailable.');
         if (!controller.signal.aborted) setState(body.availability);
-      }).catch(error => { if (!controller.signal.aborted) setError(error.message); });
+      }).catch(error => { if (!controller.signal.aborted) setError(error.message); })
+      .finally(() => { if (!controller.signal.aborted) setAvailabilityLoading(false); });
     return () => { controller.abort(); pending.current?.abort(); };
   }, [slug]);
   useEffect(() => {
@@ -204,6 +212,7 @@ export default function VisitorAssistant({ content, slug, entered, initialCatalo
           result = { text: selected.message, workspaceBatch: selected.batch, demo: true, availability: next };
         }
       } else {
+        await tasks?.settle(); signal.throwIfAborted();
         const response = await fetch(`/api/visitor/${encodeURIComponent(slug)}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
           body: JSON.stringify({ kind, requestId: traceId, history, context: getContext(),
@@ -218,7 +227,8 @@ export default function VisitorAssistant({ content, slug, entered, initialCatalo
             if (event.type === 'done') { completed = { text: event.text, availability: event.availability }; return; }
             if (!control || !workspaceView.current) throw new Error('The task controls are unavailable.');
             let status: 'applied' | 'failed' | 'cancelled' = 'failed';
-            if (event.target.kind === 'workspace') status = await workspaceView.current.apply(event.target.batch, signal);
+            if (event.target.kind === 'task') status = await tasks?.show(event.target.view, signal) ?? 'failed';
+            else if (event.target.kind === 'workspace') status = await workspaceView.current.apply(event.target.batch, signal);
             else if (event.target.kind === 'explore') {
               if (event.target.result) {
                 if (!searchView.current) throw new Error('The search view is unavailable.');
@@ -298,7 +308,7 @@ export default function VisitorAssistant({ content, slug, entered, initialCatalo
     catch (error) { if (!controller.signal.aborted) setError(error instanceof Error ? error.message : 'Search could not start.'); }
     finally { if (pending.current === controller) { pending.current = null; inFlight.current = false; setBusy(false); } }
   }
-  async function home(signal?: AbortSignal) {
+  async function home(signal?: AbortSignal, clear = false) {
     if (signal?.aborted) return 'cancelled' as const;
     // A spoken Home must not interrupt its own navigation acknowledgement.
     if (!signal) manualInteraction();
@@ -307,15 +317,20 @@ export default function VisitorAssistant({ content, slug, entered, initialCatalo
     setPresentation(initialPresentation); acceptedPresentation.current = initialPresentation;
     setCatalogPlan(initialCatalogPlan ?? undefined); acceptedCatalogPlan.current = initialCatalogPlan ?? undefined;
     catalogState.current = catalog ? initialInteraction(catalog) : undefined;
+    // Clearing visible surfaces must work even while task storage is unavailable.
+    // Existing manual interruption owns cancellation; hiding never creates a task.
+    if (clear) tasks?.hide();
+    const taskStatus = clear ? undefined : await tasks?.home(signal);
     onContentReset?.();
-    const status = await workspaceView.current?.home(signal) ?? 'failed';
-    updateContext(getContext(), true); return status;
+    const status = await (clear ? workspaceView.current?.clear(signal) : workspaceView.current?.home(signal)) ?? 'failed';
+    updateContext(getContext(), true); return taskStatus && taskStatus !== 'applied' ? taskStatus : status;
   }
   useEffect(() => { if (homeRef) homeRef.current = () => { void home(); }; return () => { if (homeRef) homeRef.current = null; }; });
   async function sendChat(event?: FormEvent, question = text) {
     event?.preventDefault();
     const outgoing = question.trim();
     if (visitorPageIntent(outgoing) === 'home') { await home(); return; }
+    if (visitorPageIntent(outgoing) === 'clear') { await home(undefined, true); return; }
     if (visitorPageIntent(outgoing) === 'browse') { manualInteraction(); setText(''); setChatExpanded(false); await workspaceView.current?.browse(); return; }
     if (!state?.live) {
     const searchKind = exploreKindForText(outgoing);
@@ -366,7 +381,7 @@ export default function VisitorAssistant({ content, slug, entered, initialCatalo
       if (element?.form?.contains(document.activeElement)) element.focus({ preventScroll: true });
     }
   }
-  function startVoice() {
+  async function startVoice() {
     if (voiceBusy) { endVoice(); return; }
     if (disabled || !state?.voiceRemaining) return;
     searchView.current?.cancel(); pending.current?.abort();
@@ -379,6 +394,7 @@ export default function VisitorAssistant({ content, slug, entered, initialCatalo
       if (surface) surface.scrollTo({ top: 0, behavior: 'instant' }); else window.scrollTo({ top: 0, behavior: 'instant' });
     }
     if (state.live && slug) {
+      try { await tasks?.settle(); } catch (error) { setError(error instanceof Error ? `Could not prepare the website: ${error.message}` : 'The visitor task session could not start. Try again.'); return; }
       demoVoice.cancel();
       const earlierHistory = historyRef.current.slice(-8);
       beginGreeting(!earlierHistory.length);
@@ -395,7 +411,9 @@ export default function VisitorAssistant({ content, slug, entered, initialCatalo
         onNavigate: async (event, signal) => {
           cancelGreeting();
           const target = event.target;
+          if (target.kind === 'task') { const status = await tasks?.show(target.view, signal) ?? 'unavailable'; updateContext(getContext(), true); return status; }
           if (target.kind === 'home') return home(signal);
+          if (target.kind === 'clear') return home(signal, true);
           if (target.kind === 'browse') return workspaceView.current?.browse(signal) ?? 'unavailable';
           if (target.kind === 'workspace') {
             if (!workspaceView.current) return 'unavailable';
@@ -413,7 +431,9 @@ export default function VisitorAssistant({ content, slug, entered, initialCatalo
           }
           if (['open', 'expand', 'spotlight', 'compare', 'back', 'collapse'].includes(target.kind)) {
             if (workspaceView.current) {
-              const status = await workspaceView.current.navigate(target.kind, 'id' in target ? target.id : undefined, 'ids' in target ? target.ids : undefined, signal);
+              const context = workspaceView.current.context();
+              const back = (target.kind === 'back' || target.kind === 'collapse') && !context.workspace.focusedId && !context.scene?.modal ? tasks?.back(signal) : undefined;
+              const status = await (back ?? workspaceView.current.navigate(target.kind, 'id' in target ? target.id : undefined, 'ids' in target ? target.ids : undefined, signal));
               updateContext(getContext(), true); return status;
             }
             if (!catalog) {
@@ -482,7 +502,7 @@ export default function VisitorAssistant({ content, slug, entered, initialCatalo
     : activeMode === 'chat' && state.chatRemaining === 0 ? 'Chat has reached its daily limit. Please return after the daily reset.'
     : voiceExhausted && !voiceBusy && settings.mode !== 'chat' ? 'Voice has reached its daily limit. Continue by typing below.' : '');
 
-  const modeControls = settings.mode !== 'chat' && <motion.div layout="position" className={styles.modes} role="group" aria-label="Conversation mode" {...reveal}>
+  const modeControls = settings.mode !== 'chat' && <motion.div layout="position" className={styles.modes} data-visitor-conversation-controls="true" role="group" aria-label="Conversation mode" {...reveal}>
         {(['voice', 'chat'] as const).map(option => <motion.button type="button" key={option} aria-pressed={activeMode === option} disabled={option === 'voice' && voiceExhausted}
           title={option === 'voice' && voiceExhausted ? 'Daily voice limit reached' : undefined} onClick={() => switchMode(option)} whileTap={reduce ? undefined : { scale: 0.96 }}>
           {activeMode === option && <motion.span layoutId="selected-mode" className={styles.modeSelection} style={{ borderRadius: 30 }} transition={spring}/>}
@@ -507,11 +527,12 @@ export default function VisitorAssistant({ content, slug, entered, initialCatalo
               onClick={() => { input.current?.focus({ preventScroll: true }); void sendChat(undefined, suggestion.question.slice(0, 2000)); }}
               whileHover={reduce ? undefined : { y: -2 }} whileTap={reduce ? undefined : { scale: .97 }}><suggestion.icon size={13}/><span>{suggestion.label}</span></motion.button>)}
           </div>}>
-          <form className={styles.composer} onSubmit={event => void sendChat(event)}>
-            <textarea ref={input} aria-label="What would you like to see?" placeholder={presentation ? 'Go deeper, compare, or explore something else…' : 'Show me what you have in mind…'} rows={1} maxLength={2000} value={text} readOnly={busy}
+          {availabilityLoading && <p role="status" className={styles.voiceNote}>Getting the assistant ready…</p>}
+          <form className={styles.composer} aria-busy={availabilityLoading || busy} onSubmit={event => void sendChat(event)}>
+            <textarea ref={input} aria-label="What would you like to see?" placeholder={availabilityLoading ? 'Getting the assistant ready…' : presentation ? 'Go deeper, compare, or explore something else…' : 'Show me what you have in mind…'} rows={1} maxLength={2000} value={text} readOnly={busy || availabilityLoading}
               onFocus={() => { onControlActivate(); if (!busy) setChatExpanded(!workspaceView.current?.context().workspace.focusedId); }} onPointerDown={() => { onControlActivate(); if (!busy) setChatExpanded(!workspaceView.current?.context().workspace.focusedId); }}
               onChange={event => { setText(event.target.value); if (!busy) setChatExpanded(!workspaceView.current?.context().workspace.focusedId); }} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }}/>
-            <motion.button className={styles.send} type={busy ? 'button' : 'submit'} aria-label={busy ? 'Stop request' : 'Show me'} title={busy ? 'Stop request' : 'Show me'} disabled={!busy && !text.trim()}
+            <motion.button className={styles.send} type={busy ? 'button' : 'submit'} aria-label={busy ? 'Stop request' : 'Show me'} title={busy ? 'Stop request' : 'Show me'} disabled={!busy && (!text.trim() || availabilityLoading || disabled || !state?.chatRemaining)}
               onClick={event => { if (busy) { event.preventDefault(); pending.current?.abort(); } }} whileHover={reduce || !text.trim() && !busy ? undefined : { scale: 1.04 }} whileTap={reduce ? undefined : { scale: 0.93 }}>
               <AnimatePresence mode="wait" initial={false}><motion.span key={busy ? 'stop' : 'send'} initial={{ opacity: 0, y: reduce ? 0 : 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: reduce ? 0 : -5 }} transition={{ duration: reduce ? 0 : 0.24 }}>{busy ? <Square size={14} fill="currentColor"/> : <ArrowUp size={18}/>}</motion.span></AnimatePresence>
             </motion.button>
@@ -525,7 +546,7 @@ export default function VisitorAssistant({ content, slug, entered, initialCatalo
       {activeMode === 'voice' && !voiceBusy && !!(voice.error || liveVoice.message || error) && !!state?.chatRemaining && state.enabled && <button type="button" className={styles.fallback} onClick={() => { requestControlFocus(false, 'chat'); switchMode('chat'); }}>Continue by typing</button>}
       <motion.div className={styles.results} initial={false} animate={{ opacity: entered || activeMode === 'chat' ? 1 : .55 }} transition={{ duration: reduce ? 0 : .8 }}>
       {opening}
-      <VisitorWorkspace handleRef={workspaceView} content={content} catalog={catalog} media={media} onInteraction={manualInteraction} onContext={searchContextChanged} onInvoke={onContentInvoke} onPhotoView={onPhotoView} onAnnotate={annotate} pendingAnnotationId={pendingAnnotationId} onHome={() => { void home(); }} onReset={() => searchView.current?.reset()}/>
+      <VisitorWorkspace onDismissMedia={onDismissMedia} handleRef={setWorkspaceHandle} content={content} catalog={catalog} media={media} onInteraction={manualInteraction} onContext={searchContextChanged} onInvoke={onContentInvoke} onPhotoView={onPhotoView} onAnnotate={annotate} pendingAnnotationId={pendingAnnotationId} onHome={() => { void home(); }} onReset={() => searchView.current?.reset()}/>
       {searchSettings.enabled && <SearchExplore handleRef={searchView} content={content} slug={slug} beforeSearch={target => workspaceView.current?.beforeSearch(target)} onResult={async (result, signal) => workspaceView.current?.showExternal(result, signal)} getExternalContext={() => workspaceView.current?.context().explore} onExternalCommand={command => workspaceView.current?.externalCommand(command) ?? false} onInteraction={() => { manualInteraction(); onContentInvoke(); }} onContext={searchContextChanged} onActivity={setSearchActivity} onPendingAnnotationChange={setPendingAnnotationId}/>}
       </motion.div>
     </motion.section>

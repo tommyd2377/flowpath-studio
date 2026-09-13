@@ -131,7 +131,7 @@ export function catalogPresentationSummary(plan: PresentationPlan, catalog: Know
 export function catalogKnowledgeSummary(plan: PresentationPlan, catalog: KnowledgeCatalog, query: string, media?: MediaLibrary): string {
   const entityIds = [...new Set(plan.components.flatMap(component => component.entityIds))].slice(0, 12);
   if (!entityIds.length) return catalogPresentationSummary(plan, catalog);
-  const result = retrieveKnowledge(catalog, { revisionId: catalog.id, query, entityIds, expansion: 0 }, media);
+  const result = retrieveKnowledge(catalog, { revisionId: catalog.id, query, entityIds, expansion: 0, includeBlocks: false }, media);
   const text = query.toLowerCase();
   const values = result.values.filter(value => value.field.startsWith('properties.') && (
     value.field.slice(11).split(/[-_]/).some(word => word.length > 2 && text.includes(word))
@@ -146,7 +146,7 @@ export function catalogKnowledgeSummary(plan: PresentationPlan, catalog: Knowled
 
 export function catalogPresentationContext(catalog: KnowledgeCatalog, state: CatalogInteractionState, media?: MediaLibrary, query?: string) {
   const followup = !query || /\b(this|that|these|those|first|second|third|selected|it|them)\b/i.test(query);
-  const knowledge = retrieveKnowledge(catalog, { revisionId: catalog.id, query,
+  const knowledge = retrieveKnowledge(catalog, { revisionId: catalog.id, query, includeBlocks: false,
     intent: /\b(photos?|pictures?|images?)\b/i.test(query ?? '') ? 'photos' : 'answer',
     ...(followup ? { entityIds: [...new Set([...(state.focusedId ? [state.focusedId] : []), ...state.selectedIds, ...state.entityIds.slice(0, 6)])].slice(0, 12),
       ...(state.focusedRef?.kind === 'photo' ? { assetIds: [state.focusedRef.id] } : {}) } : {}), expansion: 1 }, media);

@@ -5,9 +5,10 @@ import { catalogEntitySchema, catalogCollectionSchema, catalogFactSchema, catalo
 import { AppError } from './errors';
 import { sourceAnchorSchema, validateSourceProvenance, type SourceAnchor, type SourceGraphReference, type SourceProvenance } from './source-provenance';
 import { refreshAssertionReviews, remapAssertionReviews, type AssertionReview } from './knowledge-assertions';
+import type { WebsiteProposal } from './website-import-model';
 
 export type KnowledgeJob = {
-  id: string; fileId?: string; sourceUrl?: string; operation?: 'source' | 'review'; sourceName: string; sourceHash: string; baseDraftHash: string; baseRevision: number;
+  id: string; fileId?: string; sourceUrl?: string; operation?: 'source' | 'review' | 'website'; sourceName: string; sourceHash: string; baseDraftHash: string; baseRevision: number;
   status: 'running' | 'needs_review' | 'applied' | 'discarded' | 'failed' | 'interrupted';
   stage: 'extracting' | 'interpreting' | 'review'; claim: string; startedAt: number; updatedAt: number;
   message: string; candidateRevisionId?: string; appliedRevisionId?: string; paidAttempt?: boolean;
@@ -22,9 +23,9 @@ export type GraphUpdate = { id: string; targetType: 'fact' | 'relationship'; kin
   previousSource?: { sourceName: string; anchorId: string }; incomingSource?: { sourceName: string; anchorId: string } };
 export type GraphCorrection = { id: string; targetType: 'fact' | 'relationship'; targetId: string; sourceKey: string; action: 'source-added' | 'source-updated' | 'source-removed' | 'publisher-kept' | 'source-accepted' | 'publisher-corrected';
   before: GraphValue | null; after: GraphValue | null; sourceName?: string; anchorIds?: string[]; recordedAt: number };
-export type KnowledgeArtifact = { schemaVersion: 1; id: string; catalog: KnowledgeCatalog; origins: SourceOrigin[]; notes: string[]; updates?: SourceUpdate[];
+export type KnowledgeArtifact = { schemaVersion: 1; id: string; catalog: KnowledgeCatalog; origins: SourceOrigin[]; notes: string[]; updates?: SourceUpdate[]; website?: WebsiteProposal;
   updateAnchors?: SourceAnchor[]; updateContext?: SourceUpdateContext; identityMatches?: SourceIdentityMatch[]; graphUpdates?: GraphUpdate[]; correctionHistory?: GraphCorrection[]; identityRemaps?: Record<string, string>; assertionReviews?: AssertionReview[] };
-export type KnowledgeCandidate = { id: string; catalog: KnowledgeCatalog; notes: string[]; sourceName: string; baseRevision: number;
+export type KnowledgeCandidate = { id: string; catalog: KnowledgeCatalog; notes: string[]; sourceName: string; baseRevision: number; website?: WebsiteProposal;
   origins?: Pick<SourceOrigin, 'key' | 'name' | 'provenance'>[]; updates?: SourceUpdate[]; updateAnchors?: SourceAnchor[]; identityMatches?: SourceIdentityMatch[]; graphUpdates?: GraphUpdate[]; correctionHistory?: GraphCorrection[]; assertionReviews?: AssertionReview[] };
 export const hashValue = (value: unknown) => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 export const sourceKey = (name: string) => name.trim().toLowerCase();
@@ -279,7 +280,7 @@ export function mergeKnowledge(current: KnowledgeArtifact | null, incoming: Know
   const relationIds = new Map(imported.relationships.map(relation => [relation.id, `relation-${hashValue([key, relation.id]).slice(0, 24)}`]));
   const factIds = new Map((imported.facts ?? []).map(fact => [fact.id, `fact-${hashValue([key, fact.id]).slice(0, 24)}`]));
   const sourceCatalog = validateCatalog({ ...imported, id: randomUUID(), entities,
-    collections: imported.collections.map(collection => ({ ...collection, id: `group-${hashValue([key, collection.id]).slice(0, 24)}`, entityIds: collection.entityIds.map(id => map.get(id)!) })),
+    collections: imported.collections.map(collection => ({ ...collection, id: `group-${hashValue([key, collection.id]).slice(0, 24)}`, ...(collection.parentIds ? { parentIds: collection.parentIds.map(id => `group-${hashValue([key, id]).slice(0, 24)}`) } : {}), entityIds: collection.entityIds.map(id => map.get(id)!) })),
     relationships: imported.relationships.map(relation => ({ ...relation, id: relationIds.get(relation.id)!, fromEntityId: map.get(relation.fromEntityId)!, toEntityId: map.get(relation.toEntityId)! })),
     facts: imported.facts?.map(fact => ({ ...fact, id: factIds.get(fact.id)!, entityId: map.get(fact.entityId)! })),
     jobs: imported.jobs.map(job => ({ ...job, id: `job-${hashValue([key, job.id]).slice(0, 24)}` })),
@@ -310,8 +311,8 @@ export function mergeKnowledge(current: KnowledgeArtifact | null, incoming: Know
   const definitions = new Map(result.attributes.map(attribute => [attribute.id, attribute]));
   for (const attribute of sourceCatalog.attributes) {
     const existing = definitions.get(attribute.id);
-    if (existing && JSON.stringify(existing) !== JSON.stringify(attribute)) throw new AppError(`The attribute “${attribute.label}” has a different type or unit in another source. Rename that column or correct the source before combining it.`);
-    definitions.set(attribute.id, attribute);
+    if (existing && ['type', 'unit', 'currency'].some(key => existing[key as keyof typeof existing] !== attribute[key as keyof typeof attribute])) throw new AppError(`The attribute “${attribute.label}” has a different type or unit in another source. Rename that column or correct the source before combining it.`);
+    definitions.set(attribute.id, existing ? { ...attribute, label: existing.label, ...(existing.aliases ? { aliases: existing.aliases } : {}) } : attribute);
   }
   result.attributes = [...definitions.values()];
   for (const entity of sourceCatalog.entities) {
@@ -346,6 +347,8 @@ export function mergeKnowledge(current: KnowledgeArtifact | null, incoming: Know
       if (existing[field] === baseline[field]) existing[field] = entity[field];
       else if (existing[field] !== entity[field]) notes.push(`An earlier publisher ${field} correction for “${existing.name}” differs from the incoming source.`);
     }
+    if (JSON.stringify(existing.blocks) === JSON.stringify(baseline.blocks)) existing.blocks = entity.blocks;
+    else if (JSON.stringify(existing.blocks) !== JSON.stringify(entity.blocks)) notes.push(`Kept your detail blocks for “${existing.name}”.`);
     for (const field of new Set([...Object.keys(baseline.attributes), ...Object.keys(entity.attributes)])) {
       if (entity.attributes[field] !== baseline.attributes[field] && entity.attributes[field] !== existing.attributes[field]) addUpdate(existing.attributes[field] === baseline.attributes[field] ? 'changed' : 'conflict', entity, baseline, existing, entity, `attributes.${field}`);
       if (existing.attributes[field] === baseline.attributes[field]) {
@@ -362,7 +365,7 @@ export function mergeKnowledge(current: KnowledgeArtifact | null, incoming: Know
   result.collections = result.collections.filter(collection => {
     const baseline = previous?.baseline.collections.find(item => item.id === collection.id);
     if (!baseline || sourceCatalog.collections.some(item => item.id === collection.id)) return true;
-    const keep = JSON.stringify(collection) !== JSON.stringify(baseline);
+    const keep = JSON.stringify(collection) !== JSON.stringify(baseline) || result.collections.some(child => child.parentIds?.includes(collection.id));
     notes.push(keep ? `Kept your edited collection “${collection.name}”, which is absent from the new source.` : `Removed the unchanged source collection “${collection.name}”, which is absent from the new source.`);
     return keep;
   });
@@ -680,7 +683,7 @@ export function resolveKnowledgeUpdates(artifact: KnowledgeArtifact, decisions: 
       if (index >= 0) catalog.capabilities![index].entityIds = [...new Set([...capability.entityIds, ...catalog.capabilities![index].entityIds])]; else (catalog.capabilities ??= []).push(structuredClone(capability));
     }
   }
-  catalog.collections = catalog.collections.map(collection => ({ ...collection, entityIds: collection.entityIds.filter(id => entityIds.has(id)) })).filter(collection => collection.entityIds.length);
+  catalog.collections = catalog.collections.map(collection => ({ ...collection, entityIds: collection.entityIds.filter(id => entityIds.has(id)) }));
   catalog.relationships = catalog.relationships.filter(relation => entityIds.has(relation.fromEntityId) && entityIds.has(relation.toEntityId));
   catalog.facts = catalog.facts?.filter(fact => entityIds.has(fact.entityId));
   catalog.capabilities = catalog.capabilities?.filter(capability => !capability.entityIds.length || capability.entityIds.some(id => entityIds.has(id))).map(capability => ({ ...capability, entityIds: capability.entityIds.filter(id => entityIds.has(id)) }));

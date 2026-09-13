@@ -34,13 +34,16 @@ export type VisitorWorkspaceHandle = {
   annotationTarget: (text: string) => AnnotationTarget | undefined;
   browse: (signal?: AbortSignal) => Promise<'applied' | 'failed' | 'cancelled'>;
   home: (signal?: AbortSignal) => Promise<'applied' | 'failed' | 'cancelled'>;
+  clear: (signal?: AbortSignal) => Promise<'applied' | 'failed' | 'cancelled'>;
+  releaseFocus: (signal?: AbortSignal) => Promise<'applied' | 'failed' | 'cancelled'>;
   beforeSearch: (target?: AnnotationTarget) => void;
   reset: () => void;
 };
-export default function VisitorWorkspace({ content, catalog, media, handleRef, onInteraction, onContext, onInvoke, onPhotoView, onAnnotate, onHome, onReset, pendingAnnotationId }: {
+export default function VisitorWorkspace({ content, catalog, media, handleRef, onInteraction, onContext, onInvoke, onPhotoView, onAnnotate, onHome, onReset, onDismissMedia, pendingAnnotationId }: {
   pendingAnnotationId?: string;
   content: SiteContent; catalog?: KnowledgeCatalog | null; media?: MediaLibrary | null; handleRef?: Ref<VisitorWorkspaceHandle>;
   onInteraction: () => void; onContext?: () => void; onInvoke?: () => void; onPhotoView?: (id: string) => void;
+  onDismissMedia?: () => void;
   onHome?: () => void; onReset?: () => void;
   onAnnotate?: (target: AnnotationTarget, name: string) => void;
 }) {
@@ -56,7 +59,7 @@ export default function VisitorWorkspace({ content, catalog, media, handleRef, o
   const current = useRef(state);
   const scene = useRef<WorkspaceScene | undefined>(undefined);
   const root = useRef<HTMLDivElement>(null);
-  const [browsing, setBrowsing] = useState(false);
+  const [browsing, setBrowsing] = useState(content.style?.entry === 'website');
   const [query, setQuery] = useState('');
   const [greetingIds, setGreetingIds] = useState<string[]>([]);
 
@@ -87,12 +90,15 @@ export default function VisitorWorkspace({ content, catalog, media, handleRef, o
     try {
       const previousFocus = current.current.focusedId;
       const accepted = applyWorkspaceBatch(current.current, batch, authorityRef.current, scene.current?.revision);
+      const resetSurfaces = !accepted.state.objects.length || batch.operations.some(operation => operation.kind === 'replace' || operation.kind === 'reset');
+      if (accepted.state.focusedId !== previousFocus || resetSurfaces) { setExternalSelection({}); onDismissMedia?.(); }
+      if (!accepted.state.objects.length) { setGreetingIds([]); setHighlighted(null); }
       // A non-focused result (such as a comparison or search grid) must not
       // stay behind Browse mode's hidden workspace. Focused cards keep their
       // website return context; new workspace views reveal the workspace.
       if (!accepted.state.focusedId && batch.operations.some(operation => operation.kind === 'add' || operation.kind === 'replace')) setBrowsing(false);
       current.current = accepted.state; setFocusKeyboard(moveFocus && accepted.state.focusedId !== previousFocus); setState(accepted.state); setError(''); if (invoke) onInvoke?.();
-      if (accepted.status !== 'duplicate' && batch.operations.some(op => op.kind === 'reset' || op.kind === 'replace')) {
+      if (accepted.status !== 'duplicate' && resetSurfaces) {
         const kept = new Set(accepted.state.objects.flatMap(object => object.references.filter(ref => ref.kind === 'external').map(ref => ref.id)));
         setExternal(items => items.filter(item => kept.has(item.id)));
         setExternalSelection(items => Object.fromEntries(Object.entries(items).filter(([id]) => kept.has(id))));
@@ -129,19 +135,19 @@ export default function VisitorWorkspace({ content, catalog, media, handleRef, o
     manual([{ kind: 'reset', objects: [] }]);
     setExternal([]); setExternalSelection({}); setExternalKinds({}); setExternalActive(null);
   }
-  async function home(signal?: AbortSignal) {
+  async function home(signal?: AbortSignal, clear = false) {
     if (signal?.aborted) return 'cancelled' as const;
     setGreetingIds([]);
     setBrowsing(false); setQuery(''); setError(''); setHighlighted(null);
     setExternal([]); setExternalSelection({}); setExternalKinds({}); setExternalActive(null);
     const opening = openingWorkspace(authorityRef.current, content);
-    const status = await apply(workspaceBatch(current.current, [{ kind: 'replace', objects: opening.objects.map(({ instanceId, component, references }) => ({ instanceId, component, references })) }]), signal, false, false);
+    const status = await apply(workspaceBatch(current.current, clear ? [{ kind: 'reset', objects: [] }] : [{ kind: 'replace', objects: opening.objects.map(({ instanceId, component, references }) => ({ instanceId, component, references })) }]), signal, false, false);
     root.current?.closest('[data-visitor-site]')?.scrollIntoView({ block: 'start', behavior: 'instant' });
     capture(); return status;
   }
   async function browse(signal?: AbortSignal) {
     if (signal?.aborted) return 'cancelled' as const;
-    if (!signal) onInteraction(); setBrowsing(true); setQuery(''); setHighlighted(null); onInvoke?.();
+    if (!signal) onInteraction(); onDismissMedia?.(); setExternalSelection({}); setBrowsing(true); setQuery(''); setHighlighted(null); onInvoke?.();
     if (current.current.focusedId) await apply(workspaceBatch(current.current, Array.from({ length: current.current.focusHistory.length + 1 }, () => ({ kind: 'return' as const }))), signal, false);
     await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
     await new Promise<void>(resolve => {
@@ -156,6 +162,14 @@ export default function VisitorWorkspace({ content, catalog, media, handleRef, o
       }; requestAnimationFrame(settle);
     });
     capture(); return 'applied' as const;
+  }
+  async function releaseFocus(signal?: AbortSignal) {
+    if (signal?.aborted) return 'cancelled' as const;
+    setExternalSelection({}); setHighlighted(null);
+    // Keep the open-object set, but return every floating layer before another
+    // host surface takes the foreground. Wait for its exit animation as well.
+    if (current.current.focusedId) return apply(workspaceBatch(current.current, Array.from({ length: current.current.focusHistory.length + 1 }, () => ({ kind: 'return' as const }))), signal);
+    return acknowledgeWorkspace(root.current, () => current.current, authorityRef.current, current.current.revision, signal);
   }
   const homeClick = () => { if (onHome) onHome(); else { onInteraction(); onReset?.(); void home(); } };
   function open(record: WorkspaceRecord, component = record.component, originObject?: WorkspaceObject, focus = true) {
@@ -229,8 +243,15 @@ export default function VisitorWorkspace({ content, catalog, media, handleRef, o
         return record ? spotlight(record, signal) : 'failed';
       }
       setHighlighted(null);
-      if (kind === 'back' || kind === 'collapse') return apply(workspaceBatch(state, [{ kind: 'return' }]), signal);
-      if (kind === 'compare' && ids && catalog) return apply(workspaceBatch(state, [{ kind: 'add', object: { instanceId: `compare-${ids.join('-')}`.slice(0, 100), component: 'comparison', references: ids.map(id => ({ kind: 'entity', id, revisionId: catalog.id })) } }]), signal);
+      if (kind === 'back' || kind === 'collapse') {
+        if (captureWorkspaceScene(root.current, state, authorityRef.current).modal?.kind === 'photo' && onDismissMedia) { onDismissMedia(); return acknowledgeWorkspace(root.current, () => current.current, authorityRef.current, state.revision, signal); }
+        if (Object.values(externalSelection).some(Boolean)) { setExternalSelection({}); return acknowledgeWorkspace(root.current, () => current.current, authorityRef.current, state.revision, signal); }
+        return apply(workspaceBatch(state, [{ kind: 'return' }]), signal);
+      }
+      if (kind === 'compare' && ids && catalog) {
+        const instanceId = `compare-${ids.join('-')}`.slice(0, 100);
+        return apply(workspaceBatch(state, [{ kind: 'add', object: { instanceId, component: 'comparison', references: ids.map(id => ({ kind: 'entity', id, revisionId: catalog.id })) } }, { kind: 'focus', instanceId }]), signal);
+      }
       const existing = state.objects.find(object => object.instanceId === id);
       if (existing) return apply(workspaceBatch(state, [{ kind: kind === 'expand' ? 'expand' : 'focus', instanceId: existing.instanceId }]), signal);
       const record = authorityRef.current.records.find(record => record.reference.id === id || `${record.reference.kind}:${record.reference.id}` === id);
@@ -282,7 +303,7 @@ export default function VisitorWorkspace({ content, catalog, media, handleRef, o
       return id ? annotationTargetForObject(current.current, id) : undefined;
     },
     externalCommand,
-    browse, home,
+    browse, home, clear: signal => home(signal, true), releaseFocus,
     beforeSearch: target => { searchPlacement(current.current, external.map(item => exploreContextForResult(item, item.kind, null)), target); },
     reset: () => { reset(); setBrowsing(false); },
   }));
@@ -360,7 +381,7 @@ export default function VisitorWorkspace({ content, catalog, media, handleRef, o
     const values = knowledge.values.filter(value => value.entityId === entity.id && !['name', 'summary'].includes(value.field));
     const valueFields = new Set(values.map(value => value.field));
     const photos = media?.associations.filter(link => link.targetType === 'entity' && link.targetId === entity.id).flatMap(link => authority.records.find(record => record.reference.kind === 'photo' && record.reference.id === link.assetId) ?? []) ?? [];
-    return <div data-entity-id={entity.id} className="platform-workspace-copy"><p>{entity.summary}</p>
+    return <div data-entity-id={entity.id} className="platform-workspace-copy">{(focused || object.expanded) && entity.blocks?.length ? entity.blocks.map(block => block.kind === 'heading' ? <h3 key={block.id}>{block.text}</h3> : <p key={block.id}>{block.text}</p>) : <p>{entity.summary}</p>}
       {(focused || object.expanded) && catalog.capabilities?.some(capability => !capability.entityIds.length || capability.entityIds.includes(entity.id)) && <nav aria-label={`Published links for ${entity.name}`}>{catalog.capabilities.filter(capability => !capability.entityIds.length || capability.entityIds.includes(entity.id)).map(capability => <a key={capability.id} href={capability.url} target="_blank" rel="noopener noreferrer" onClick={onInteraction}>{capability.label} ↗</a>)}</nav>}
       {photos.length > 0 && tiles(photos.slice(0, focused || object.expanded ? 4 : 1), object)}
       <dl className="platform-workspace-facts">{catalog.attributes.filter(attribute => entity.attributes[attribute.id] != null && !valueFields.has(`attributes.${attribute.id}`)).slice(0, focused || object.expanded ? 24 : 3).map(attribute => <div key={attribute.id}><dt>{attribute.label}</dt><dd>{formatAttribute(entity.attributes[attribute.id], attribute)}</dd></div>)}</dl>
@@ -399,9 +420,9 @@ export default function VisitorWorkspace({ content, catalog, media, handleRef, o
     {error && <p role="alert">{error}</p>}
     <AdaptiveWorkspace objects={state.objects} focusedId={state.focusedId} carouselIds={greetingIds} onCarouselInteract={onInteraction} highlightedReference={highlighted} authority={authority} onOperation={manual} render={render} onSettled={capture} onHome={homeClick} focusKeyboard={focusKeyboard} layout={content.style?.layout} style={siteStyle(content) as CSSProperties}/>
     {external.filter(isRetained).map(result => <ExternalSearchViewer key={result.id} result={result} selected={externalSelection[result.id] ?? null} onHome={homeClick} onClose={() => { onInteraction(); externalCommand({ kind: 'back' }, result.id); }}/>) }
-    {browsing && <PublishedWebsite name={content.name} {...copy} logoAssetId={content.logoAssetId} hero={heroRecord ? websiteEntry(heroRecord, media) : undefined} sections={sections}
+    {browsing && <PublishedWebsite layout={content.style?.layout} name={content.name} {...copy} logoAssetId={content.logoAssetId} hero={heroRecord ? websiteEntry(heroRecord, media) : undefined} sections={sections}
       contact={content.contact} hours={content.hours} onHome={homeClick} onInteraction={onInteraction} query={query}
       onQueryChange={value => { onInteraction(); setQuery(value); }} searchResults={directory.map(record => websiteEntry(record, media))}
-      highlightedId={highlighted ? referenceKey(highlighted) : undefined} onOpen={id => { const record = authority.records.find(record => referenceKey(record.reference) === id); if (record) open(record); }}/>}
+      highlightedId={highlighted ? referenceKey(highlighted) : undefined} onOpen={id => { const record = authority.records.find(record => referenceKey(record.reference) === id); if (record) open(record); }}/> }
   </div>;
 }

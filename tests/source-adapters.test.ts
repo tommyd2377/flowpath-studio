@@ -38,7 +38,7 @@ function zip(files: Record<string, string>) {
 }
 
 test('HTML excludes script content but retains header/footer contact data', () => {
-  assert.equal(htmlToText('<html><head><title>Studio</title><script>alert(1)</script></head><body><nav>Menu</nav><h1>Hello</h1><p>World &amp; more</p></body></html>'), 'Title: Studio\n\nMenu\nHello\nWorld & more');
+  assert.equal(htmlToText('<html><head><title>Studio</title><script>alert(1)</script></head><body><nav>Menu</nav><h1>Hello</h1><p>World &amp; more</p></body></html>'), 'Title: Studio\n\nMenu\n# Hello\nWorld & more');
 });
 
 test('website adapter enforces public HTTPS and bounded mocked fetch', async () => {

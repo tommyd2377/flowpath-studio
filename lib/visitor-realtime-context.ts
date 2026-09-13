@@ -9,6 +9,7 @@ import { AppError } from './errors';
 import { annotationMatches, exploreCommandSchema, exploreResultSchema, exploreSettings } from './explore-model';
 import { validateWorkspace, workspaceBatchSchema, workspaceRecord, referenceKey } from '@thevoice/platform-ui/workspace';
 import { publishedWorkspace } from './visitor-workspace';
+import { visitorTaskViewSchema } from '@thevoice/platform-ui/task-view';
 
 export { visitorScreenSchema, visitorContextSchema, visitorHistorySchema } from './visitor-request';
 export type { VisitorContext, VisitorHistory } from './visitor-request';
@@ -24,11 +25,12 @@ export type VisitorControlUpdate = z.infer<typeof visitorControlSchema>;
 export const visitorControlCapabilitySchema = z.object({ id: z.string().uuid(), token: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict();
 export type VisitorControlCapability = z.infer<typeof visitorControlCapabilitySchema>;
 export const visitorNavigationSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('task'), view: visitorTaskViewSchema }).strict(),
   z.object({ kind: z.literal('workspace'), batch: workspaceBatchSchema }).strict(),
   z.object({ kind: z.literal('explore'), result: exploreResultSchema.optional(), command: exploreCommandSchema.optional() }).strict().refine(value => Boolean(value.result) !== Boolean(value.command), 'Supply one search view or command.'),
   z.object({ kind: z.enum(['open', 'expand', 'spotlight']), id: z.string().min(1).max(100) }).strict(),
   z.object({ kind: z.literal('compare'), ids: z.array(z.string().min(1).max(100)).min(2).max(6) }).strict(),
-  z.object({ kind: z.enum(['home', 'browse', 'back', 'collapse', 'up', 'down', 'next_section', 'previous_section']) }).strict(),
+  z.object({ kind: z.enum(['home', 'browse', 'clear', 'back', 'collapse', 'up', 'down', 'next_section', 'previous_section']) }).strict(),
   z.object({ kind: z.literal('top') }).strict(), z.object({ kind: z.literal('bottom') }).strict(),
   z.object({ kind: z.literal('entity'), id: z.string().min(1).max(100) }).strict(),
   z.object({ kind: z.literal('source'), id: z.string().min(1).max(100) }).strict(),

@@ -9,7 +9,7 @@ export async function readUpload(request: Request): Promise<{ revision: number; 
   const revision = Number(revisionHeader);
   if (!/^[1-9]\d*$/.test(revisionHeader) || !Number.isSafeInteger(revision)) throw new AppError('A valid site revision is required.');
   const mime = request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() || '';
-  const data = Buffer.from(await readLimitedBody(request, ['image/png', 'image/jpeg', 'image/webp'].includes(mime) ? 10 * 1024 * 1024 : 2 * 1024 * 1024));
+  const data = Buffer.from(await readLimitedBody(request, ['image/png', 'image/jpeg', 'image/webp', 'application/pdf'].includes(mime) ? 10 * 1024 * 1024 : 2 * 1024 * 1024));
   let name: string;
   try { name = decodeURIComponent(request.headers.get('x-file-name') || '').replace(/[\\/\x00-\x1f\x7f]/g, '').trim().slice(0, 120); }
   catch { throw new AppError('The file name is not valid.'); }
@@ -21,7 +21,7 @@ export async function readUpload(request: Request): Promise<{ revision: number; 
   const validText = ['text/plain', 'text/csv'].includes(mime) && data.length <= 256 * 1024 && !data.includes(0);
   const validOffice = ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'].includes(mime) && data.length <= 2 * 1024 * 1024;
   const validHtml = ['text/html', 'application/xhtml+xml'].includes(mime) && data.length <= 2 * 1024 * 1024 && !data.includes(0);
-  if (!validImage && !validPdf && !validText && !validOffice && !validHtml) throw new AppError('Use PNG, JPEG or WebP photos up to 10 MB, PDFs, DOCX, XLSX or HTML up to 2 MB, or CSV and text files up to 256 KB.');
+  if (!validImage && !validPdf && !validText && !validOffice && !validHtml) throw new AppError('Use PNG, JPEG or WebP photos and PDFs up to 10 MB, DOCX, XLSX or HTML up to 2 MB, or CSV and text files up to 256 KB.');
   if (validImage) {
     const { display, thumbnail, image } = await processImage(data);
     return { revision, file: { id: randomUUID(), name, mime: 'image/webp', kind: 'image', uploadedAt: new Date().toISOString(),

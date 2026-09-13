@@ -27,7 +27,14 @@ import { emptyWorkspace, applyWorkspaceBatch } from '@thevoice/platform-ui/works
 import { validateMediaLibrary } from '@thevoice/platform-ui/media';
 import { planForIntent } from '@thevoice/platform-ui/interaction';
 import { knowledgeFacts, retrieveKnowledge, projectKnowledgeCatalog } from '@thevoice/platform-ui/knowledge';
+import { adaptV1Catalog } from '@thevoice/platform-ui/collection-space';
+import { querySpecSchema } from '@thevoice/platform-ui/query';
+import { capabilityDescriptorSchema } from '@thevoice/platform-ui/task';
 const catalog = validateCatalog(JSON.parse(readFileSync(new URL('./catalog.json', import.meta.url))));
+const adapted = adaptV1Catalog(catalog, {siteId:'packed-site',revisionId:catalog.id,indexRevision:'packed-index'});
+assert.deepEqual(adapted.legacy, catalog);
+assert.equal(adapted.space.records.length, catalog.entities.length);
+assert.ok(querySpecSchema && capabilityDescriptorSchema);
 const knowledge = retrieveKnowledge(catalog, {revisionId:catalog.id,entityIds:[catalog.entities[0].id],expansion:0});
 assert.equal(knowledge.revisionId, catalog.id);
 assert.equal(knowledge.entities[0].id, catalog.entities[0].id);

@@ -1,6 +1,6 @@
 # FlowPath visitor task system: architecture
 
-Design date: 2026-09-13. Status: proposed architecture, grounded in the current dirty checkout; this document does not implement it. Read with [implementation plan](implementation-plan.md) and [implementation prompt](codex-prompt.md).
+Design date: 2026-09-13. Status: chosen architecture; M0–M6 now have a local implementation. See the [implementation and evidence report](implementation-report.md) for the actual code map, migration, measured limits, technical adjustments and live authorization boundary. Read with [implementation plan](implementation-plan.md) and [implementation prompt](codex-prompt.md).
 
 ## 1. Decision and product contract
 
@@ -220,6 +220,8 @@ QueryResult contains query/revision/publication binding, stable resultSetId, pag
 Default page size 24, maximum 48; provide exact hard-filter counts only after evaluating the whole authorized scope. Compound clauses share consistent query semantics. Facets count under all other hard constraints, with the queried facet's own clause omitted; label unavailable/partial facet counts. Bound this work and cache by canonical query and publication.
 
 Stable ordering ends with an entity ID tiebreaker. Cursors bind query hash, sort, publication, scope and entitlement; validate expiry and reject tampering. A new filter/sort invalidates the old page cursor.
+
+Implementation detail after acceptance review: ongoing viewport observations have their own CAS revision and do not replay completion receipts or increment task revisions. Scroll, resize and layout/visibility changes invalidate the previous scene before a debounced settled update. Visible references and their dependent evidence bind the exact current scene revision; the shared chat/voice bridge includes its bounded IDs and names.
 
 Stable spoken codes belong to a result-set revision, independent of CSS columns. “Third visible card” uses acknowledged scene order; “result 23” uses a stable result-set ordinal. Sorting/filtering announces a new result set; stale codes do not retarget silently. Reflow and pagination do not reuse an existing code for another item. “Select all matching” creates a bounded server selection handle, not an unbounded ID list in a model prompt.
 

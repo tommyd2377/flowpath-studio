@@ -46,6 +46,7 @@ Local interpretation supports CSV and compatible multi-sheet XLSX tables, labele
 | Area | Current behavior |
 | --- | --- |
 | Studio | Multiple sites, chat proposals, branding/content editing, draft and published previews, approval, publication and Undo |
+| Website import | Bounded public HTML/sitemap discovery, selected-page imports, original-quality image downloads, saved knowledge and native design review, mobile preview, separate Apply/Publish; JavaScript execution is not migrated. See [website import](docs/website-import.md). |
 | Knowledge | Bounded multi-format ingestion, private field/fact/relationship evidence, singleton/temporal assertions, identity review, correction history and publication-scoped retrieval |
 | Media | PNG/JPEG/WebP upload, folder albums, optional group context, captions/alt/credit, actual/example connections, covers and lead images |
 | Visitor interface | Controlled cards, conversational filtering, details, comparisons, selections, relationships, explicit links and galleries; typed requests and bounded continuous voice that preserves manual browsing |
@@ -107,7 +108,7 @@ An optional [manual validation workflow example](docs/examples/github-actions-va
 - **Launch billing:** see [the launch offer](docs/launch-offer.md). Usage & billing supports persistent synthetic payments locally. The Stripe integration is test-only and requires separately supplied test configuration; signed confirmations, durable orders and credit reservations are implemented. Test credits cannot fund live AI. Existing unenrolled pilots retain their attempt limits. No real payment, merchant setup or domain connection happens automatically.
 - **Private data:** credentials, environment files, original uploads, local databases, logs and generated artifacts stay out of Git. Never paste credentials or publisher material into issues, prompts, fixtures or logs.
 
-Current pilot limits include 100 photos plus 20 other source files and 100 MB stored per site; 10 MB per photo, 2 MB per PDF and 256 KB per CSV/TXT. PDF extraction is limited to 40 pages and 60,000 characters. Catalogs support up to 100 entities and 24 attributes. See the feature guides for exact limits and failure behavior.
+Current pilot limits include 100 photos plus 20 other source files and 100 MB stored per site; 10 MB per photo or PDF and 256 KB per CSV/TXT. PDF extraction is limited to 40 pages and 60,000 characters. Catalogs support up to 100 entities and 24 attributes. See the feature guides for exact limits and failure behavior.
 
 ## Product direction
 
@@ -133,3 +134,7 @@ See [Product philosophy and direction](docs/product-philosophy.md) for the princ
 Still ahead: larger durable import processing, deployed managed OCR workers, live interpretation evaluations, production payment activation and provider-usage reconciliation, complete funnel/retention analytics, domain routing and self-serve launch onboarding. Visitor-to-publisher commerce will use Stripe Connect by default; that separate integration is not implemented. See [semantic graph architecture](docs/semantic-graph-architecture.md) and the [executable knowledge-to-workspace handoff](docs/semantic-workspace-handoff.md) for implemented behavior, exact limits and verification boundaries.
 
 This repository is private. No open-source license is included; visibility, licensing and redistribution remain owner decisions.
+
+## Visitor task system
+
+Hierarchical publication spaces now support shared records, nested collections, conversational and manual filtering, persistent selections, typed capability composition, editable artifacts and synthetic commerce/scheduling reviews. The v2 path streams and reviews up to 10,000 records without hydrating the public page or model context with the full catalog. Existing v1 publications remain readable. See the [implementation report](docs/visitor-task-system/implementation-report.md) for migration, constraints, offline/browser evidence and separate live acceptance steps.

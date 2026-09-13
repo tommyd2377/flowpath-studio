@@ -1,22 +1,42 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { knowledgeReviewGroups, pendingKnowledgeReviews } from '@/lib/knowledge-review-groups';
 import type { CatalogFact, CatalogRelationship, KnowledgeCatalog } from '@thevoice/platform-ui/contracts';
 import type { KnowledgeCandidate } from '@/lib/knowledge-model';
 import type { AssertionDecision } from '@/lib/knowledge-assertions';
 
-export function AssertionReviews({ candidate, disabled, decide }: { candidate: KnowledgeCandidate; disabled: boolean; decide: (decisions: AssertionDecision[]) => Promise<void> }) {
+export function AssertionReviews({ candidate, disabled, decide, resolvedAssertion }: { candidate: KnowledgeCandidate; disabled: boolean; decide: (decisions: AssertionDecision[]) => Promise<void>; resolvedAssertion?: string }) {
   const reviews = candidate.assertionReviews ?? [];
-  const [open, setOpen] = useState(() => reviews.some(review => review.status === 'approved' || review.status === 'rejected'));
-  const pending = reviews.filter(review => review.support === 'unsupported' && review.status === 'pending');
-  return <details open={open} onToggle={event => setOpen(event.currentTarget.open)}><summary>Assertion review ({pending.length} unsupported; {reviews.length} total)</summary>
+  const [open, setOpen] = useState(() => reviews.some(review => `${review.targetType}/${review.targetId}` === resolvedAssertion)
+    || reviews.some(review => review.support === 'unsupported' && review.status === 'pending') && reviews.some(review => review.status === 'approved' || review.status === 'rejected'));
+  const pending = pendingKnowledgeReviews(candidate);
+  const [acknowledged, setAcknowledged] = useState(false);
+  const groups = knowledgeReviewGroups(candidate);
+  const fieldDetails = useRef<HTMLDetailsElement>(null);
+  const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
+  const visible = selectedGroup ? groups.find(group => group.id === selectedGroup)?.reviews ?? [] : reviews;
+  return <section aria-label="Content review">
+    <h4>{pending.length ? 'Review your website content' : 'Content ready to apply'}</h4>
+    <p className="field-help">{pending.length ? `${pending.length} fields across ${groups.filter(group => group.reviews.some(review => review.support === 'unsupported' && review.status === 'pending')).length} items lack linked source evidence. Review the content below. You can approve it together as your publisher decision, or inspect individual fields.` : 'No unresolved evidence decisions. Apply to draft saves this content; Publish updates your website.'}</p>
+    <div className="knowledge-content-review">{groups.map(group => <article key={group.id}>
+      <strong>{group.name}</strong>{group.summary && <p>{group.summary}</p>}
+      {candidate.catalog.entities.find(entity => entity.id === group.id)?.blocks?.length ? <details><summary>Read section content</summary>{candidate.catalog.entities.find(entity => entity.id === group.id)!.blocks!.map(block => <p key={block.id}>{block.text}</p>)}</details> : null}
+      <button className="text-button" disabled={disabled} onClick={() => { setSelectedGroup(group.id); setOpen(true); fieldDetails.current?.scrollIntoView({ block: 'start' }); fieldDetails.current?.focus(); }}>{group.reviews.filter(review => review.support === 'unsupported' && review.status === 'pending').length} fields need review · Inspect fields</button>
+    </article>)}</div>
+    {pending.length > 0 && <div className="knowledge-review-confirm">
+      <label><input type="checkbox" checked={acknowledged} disabled={disabled} onChange={event => setAcknowledged(event.target.checked)}/> I have reviewed this content and approve the pending fields as my publisher decisions. This does not verify them against the source.</label>
+      <button className="button secondary" disabled={disabled || !acknowledged} onClick={() => void decide(pending.map(review => ({ targetType: review.targetType, targetId: review.targetId, decision: 'approve' })))}>Approve reviewed content ({pending.length} fields)</button>
+    </div>}
+    <details ref={fieldDetails} tabIndex={-1} open={open} onToggle={event => setOpen(event.currentTarget.open)}><summary>Individual fields and source evidence ({pending.length} need review)</summary>
+    {selectedGroup && <button className="text-button" onClick={() => setSelectedGroup(null)}>Show all fields</button>}
     <p className="field-help">A linked excerpt identifies a location, not proof that its text supports the claim. Apply approves visible anchored proposals. Unsupported claims need your explicit decision. Publisher corrections are your decisions, not source evidence. Missing values remain unknown.</p>
-    {open && reviews.map(review => {
+    {open && visible.map(review => {
       const [entityId, field] = review.targetId.split('/');
       const fact = candidate.catalog.facts?.find(fact => review.targetType === 'fact' && fact.id === review.targetId);
       const relation = candidate.catalog.relationships.find(relation => review.targetType === 'relationship' && relation.id === review.targetId);
       const entity = candidate.catalog.entities.find(entity => entity.id === (fact?.entityId ?? relation?.fromEntityId ?? entityId));
-      const value = review.targetId === 'catalog/description' ? candidate.catalog.description : fact?.value ?? (field?.startsWith('attributes.') ? entity?.attributes[field.slice(11)] : entity?.[field as 'name' | 'kind' | 'summary']);
+      const value = review.targetId === 'catalog/description' ? candidate.catalog.description : fact?.value ?? (field?.startsWith('attributes.') ? entity?.attributes[field.slice(11)] : entity?.[field as 'name' | 'kind' | 'summary' | 'aliases' | 'identifiers']);
       const references = candidate.origins?.flatMap(origin => {
         const provenance = origin.provenance;
         const ids = review.targetType === 'field' ? provenance?.fields.find(reference => reference.entityId === entityId && reference.field === field)?.anchorIds
@@ -32,7 +52,8 @@ export function AssertionReviews({ candidate, disabled, decide }: { candidate: K
         <div className="knowledge-update-choices"><button className="button secondary" disabled={disabled || review.status === 'approved'} onClick={() => void decide([{ targetType: review.targetType, targetId: review.targetId, decision: 'approve' }])}>Approve assertion</button><button className="button secondary" disabled={disabled || review.status === 'rejected'} onClick={() => void decide([{ targetType: review.targetType, targetId: review.targetId, decision: 'reject' }])}>Reject assertion</button></div>
       </article>;
     })}
-  </details>;
+  </details>
+  </section>;
 }
 
 function Qualifiers({ value, disabled, change }: { value: CatalogFact | CatalogRelationship; disabled: boolean; change: (patch: Partial<CatalogFact & CatalogRelationship>) => void }) {

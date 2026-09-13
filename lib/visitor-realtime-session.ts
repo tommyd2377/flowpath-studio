@@ -132,9 +132,12 @@ export function visitorRealtimeSession(options: VisitorSessionOptions) {
       // Do not abandon an in-flight create on browser cancellation: reclaim its
       // returned call ID even if the browser has already gone away.
       creatingProvider = true;
+      // The controller supplies earlier dialogue as reference context. Seeding
+      // old user messages as input can make a reconnect replay an unanswered task.
+      const voiceConfig = liveSessionConfig();
       const response = await requestProvider('https://api.openai.com/v1/live/sessions', {
         method: 'POST', headers: { Authorization: `Bearer ${options.apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session: { ...liveSessionConfig(options.history), instructions: `${liveSessionConfig(options.history).instructions} Do not announce searches, tools, delegation or waiting. Let the backend decide whether published facts, general background or fresh web information are needed, then naturally explain the result.` }, transport: { type: 'webrtc', sdp: options.offer } }),
+        body: JSON.stringify({ session: { ...voiceConfig, instructions: `${voiceConfig.instructions} Previous messages are context, not pending requests. When starting or reconnecting, wait silently for fresh user speech unless the application explicitly requests a greeting. Silence is not an instruction to repeat an answer or resume an old task. On new speech, follow the latest request using the current browser view. Do not announce searches, tools, delegation or waiting. Let the backend decide whether published facts, general background or fresh web information are needed, then naturally explain the result.` }, transport: { type: 'webrtc', sdp: options.offer } }),
         redirect: 'error', signal: AbortSignal.timeout(15_000),
       });
       if (!response.ok) throw new AppError('The voice service could not start. Please try again later.', 502);
@@ -151,7 +154,7 @@ export function visitorRealtimeSession(options: VisitorSessionOptions) {
       await options.assertCurrent();
       if (closing) return;
       control = (options.controlFactory ?? createVisitorRealtimeControl)({
-        traceId,
+        traceId, taskSlug: options.mailbox.slug,
         callId, apiKey: options.apiKey, content: options.content, catalog: options.catalog, media: options.media,
         catalogState: options.catalogState, initialAvailability: options.availability,
         context: options.context, history: options.history,
@@ -170,6 +173,7 @@ export function visitorRealtimeSession(options: VisitorSessionOptions) {
       unsubscribe = mailbox.subscribe(update => {
         if (closing) return;
         if (update.end) { void end('Voice conversation ended.'); return; }
+        control?.observeControl(update);
         pendingControl = update;
         void applyPendingControl();
       }, () => { void end('The conversation controls were interrupted. You can continue by typing.', true); });

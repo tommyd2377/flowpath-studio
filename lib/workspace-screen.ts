@@ -2,7 +2,8 @@ import { referenceKey, workspaceRecord, type WorkspaceAuthority, type WorkspaceS
 
 const clamp = (value: number, max = 10000000) => Math.max(0, Math.min(max, Math.round(value)));
 export function workspaceElementVisible(element: HTMLElement) {
-  if (document.visibilityState !== 'visible' || !element.isConnected || document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]')) return false;
+  const modal = document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]');
+  if (document.visibilityState !== 'visible' || !element.isConnected || modal && !modal.contains(element)) return false;
   const rect = element.getBoundingClientRect();
   let top = Math.max(0, rect.top), bottom = Math.min(innerHeight, rect.bottom), left = Math.max(0, rect.left), right = Math.min(innerWidth, rect.right);
   for (let parent: HTMLElement | null = element; parent; parent = parent.parentElement) {

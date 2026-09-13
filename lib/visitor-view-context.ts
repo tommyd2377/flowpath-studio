@@ -1,3 +1,4 @@
+import { workspaceElementVisible } from './workspace-screen';
 import type { VisitorContext } from './visitor-request';
 
 type Screen = NonNullable<VisitorContext['screen']>;
@@ -12,7 +13,7 @@ function scrollSurface(root: HTMLElement) {
 }
 
 function visible(element: Element) {
-  if (element.closest('[inert], [aria-hidden="true"]')) return false;
+  if (element instanceof HTMLElement && !workspaceElementVisible(element)) return false;
   const style = getComputedStyle(element);
   if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
   const rect = element.getBoundingClientRect();
@@ -32,6 +33,9 @@ function visible(element: Element) {
 export function captureVisitorContext(root: HTMLElement | null, base: VisitorContext, entityIds: Set<string>, sourceIds: Set<string>): VisitorContext {
   if (!root) return base;
   const scope = [...root.querySelectorAll<HTMLElement>('[data-entity-id], [data-source-id], [data-platform-slot], [data-visitor-component]')];
+  const owner = root.querySelector<HTMLElement>('[data-workspace-owner]')?.dataset.workspaceOwner;
+  const portals = [...document.querySelectorAll<HTMLElement>('[data-workspace-focused]:not([inert])')].filter(element => !!owner && element.dataset.workspaceOwner === owner);
+  for (const portal of portals) scope.push(portal, ...portal.querySelectorAll<HTMLElement>('[data-entity-id], [data-source-id], [data-platform-slot], [data-visitor-component]'));
   // Media lightboxes are portalled outside the site, but markers still must be published.
   document.querySelectorAll<HTMLElement>('[role="dialog"] [data-source-id]').forEach(element => scope.push(element));
   const seen = scope.filter(visible).sort((a, b) => { const x = a.getBoundingClientRect(), y = b.getBoundingClientRect(); return x.top - y.top || x.left - y.left; });
@@ -41,11 +45,13 @@ export function captureVisitorContext(root: HTMLElement | null, base: VisitorCon
   // A focused surface remains the authoritative UI focus even when a visitor
   // moves focus to the voice control or return anchor inside it.
   const focusMarker = [...root.querySelectorAll<HTMLElement>('[data-focus-surface="true"], [data-voice-focus-bridge="true"]')].find(element => {
-    if (element.closest('[inert], [aria-hidden="true"]')) return false;
+    if (element instanceof HTMLElement && !workspaceElementVisible(element)) return false;
     const kind = element.dataset.focusReferenceKind ?? element.dataset.voiceFocusKind;
     const id = element.dataset.focusReferenceId ?? element.dataset.voiceFocusId;
     return (element.dataset.voiceFocusBridge !== undefined ? element.dataset.voiceFocusOpen === 'true' : true) && !!kind && !!id;
   });
+  const foreground = base.scene?.objects.find(object => object.instanceId === base.scene?.focusedId && ['full', 'partial'].includes(object.visibility));
+  const foregroundRef = foreground?.references[0];
   const markerKind = focusMarker?.dataset.focusReferenceKind ?? focusMarker?.dataset.voiceFocusKind;
   const markerId = focusMarker?.dataset.focusReferenceId ?? focusMarker?.dataset.voiceFocusId;
   const markerEntityId = markerKind === 'entity' && markerId && entityIds.has(markerId) ? markerId : null;
@@ -59,7 +65,7 @@ export function captureVisitorContext(root: HTMLElement | null, base: VisitorCon
     expandedEntityIds: collect(seen.filter(node => node.dataset.expanded === 'true' || node.matches('.platform-detail')), 'data-entity-id', entityIds),
     primaryEntityId: collect([...seen].sort((a, b) => { const coverage = (node: HTMLElement) => { const r = node.getBoundingClientRect(); return Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0)); }; return coverage(b) - coverage(a); }), 'data-entity-id', entityIds)[0] ?? null,
     visibleEntityIds: collect(seen, 'data-entity-id', entityIds), visibleSourceIds: collect(seen, 'data-source-id', sourceIds), visibleComponentTypes, visibleControls,
-    focusedEntityId: markerEntityId ?? focusId('data-entity-id', entityIds), focusedSourceId: markerSourceId && sourceIds.has(markerSourceId) ? markerSourceId : focusId('data-source-id', sourceIds),
+    focusedEntityId: (foregroundRef?.kind === 'entity' && entityIds.has(foregroundRef.id) ? foregroundRef.id : null) ?? markerEntityId ?? focusId('data-entity-id', entityIds), focusedSourceId: foregroundRef?.kind === 'source' && sourceIds.has(foregroundRef.id) ? foregroundRef.id : markerSourceId && sourceIds.has(markerSourceId) ? markerSourceId : focusId('data-source-id', sourceIds),
   } };
 }
 

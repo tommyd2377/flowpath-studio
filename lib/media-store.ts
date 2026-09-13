@@ -179,3 +179,25 @@ export async function getPublishedMedia(siteId: string, revisionId?: string): Pr
   if (library.id !== revisionId) throw new AppError('Published media identity does not match.', 503);
   return library;
 }
+
+/** Prepare migration photos without changing the draft until the combined review is applied. */
+export async function prepareMigrationMedia(user: WorkspaceUser, siteId: string, images: import('./website-migration-model').WebsiteMigration['images']) {
+  const { getSite } = await import('./site-store'); const site = await getSite(user,siteId);
+  const current = site.draft.mediaRevisionId ? await readMediaLibrary(user,siteId,site.draft.mediaRevisionId) : {schemaVersion:1 as const,id:randomUUID(),assets:[],albums:[],associations:[]};
+  const library: MediaLibrary=structuredClone(current); library.id=randomUUID();
+  const ids: string[]=[];
+  for(const item of images.filter(i=>i.status==='imported'&&i.fileId)) {
+    const file=site.files.find(f=>f.id===item.fileId&&f.kind==='image');if(!file?.image)throw new AppError('An imported image was removed. Import it again before applying.');
+    const asset=library.assets.find(a=>a.id===file.id);if(asset){asset.caption=item.caption;asset.alt=item.alt;}else library.assets.push({id:file.id,width:file.image.width,height:file.image.height,caption:item.caption,alt:item.alt});
+    if(item.placement==='logo')continue;
+    ids.push(file.id);
+    const targetType=item.targetEntityId?'entity' as const:'site' as const;
+    if(item.placement==='lead')library.associations=library.associations.map(a=>a.targetType===targetType&&a.targetId===item.targetEntityId&&a.role===item.role?{...a,primary:false}:a);
+    const association=library.associations.find(a=>a.assetId===file.id&&a.targetType===targetType&&a.targetId===item.targetEntityId);if(association){association.role=item.role;association.primary=item.placement==='lead';}else library.associations.push({id:randomUUID(),assetId:file.id,targetType,...(item.targetEntityId?{targetId:item.targetEntityId}:{}),role:item.role,primary:item.placement==='lead'});
+  }
+  const old=library.albums.find(a=>a.title==='Imported website photos');
+  if(old){old.assetIds=[...new Set([...old.assetIds,...ids])];if(old.description==='Reviewed source website photos; original placements retained in the website presentation.')old.description='Reviewed photos imported from the source website.';}else if(ids.length)library.albums.push({id:randomUUID(),title:'Imported website photos',description:'Reviewed photos imported from the source website.',assetIds:[...new Set(ids)]});
+  const catalog=site.draft.knowledgeRevisionId?(await readKnowledgeArtifact(user,siteId,site.draft.knowledgeRevisionId)).catalog:null;
+  validateMediaLibrary(library,{entityIds:catalog?.entities.map(e=>e.id)??[],sectionIds:site.draft.sections.map(s=>s.id)});
+  await writePrivateMedia(user,siteId,library);return library;
+}

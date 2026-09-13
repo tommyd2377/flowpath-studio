@@ -255,6 +255,34 @@ test('reduced motion has no residual transforms or invisible keyboard targets af
   await page.screenshot({ path: info.outputPath('reduced-motion-current-view.png'), fullPage: true });
 });
 
+test('chat exposes delayed readiness and prevents an early request without losing the first ready submission', async ({ page }) => {
+  const slug = `chat-ready-${Date.now()}`, headers = { Origin: 'http://127.0.0.1:3225' };
+  let site: Site = (await (await page.request.post('/api/sites', { headers, data: { name: 'Chat readiness', slug, kind: 'photographer' } })).json()).site;
+  site = (await (await page.request.post(`/api/sites/${site.id}`, { headers, data: { action: 'save', revision: site.revision, content: { ...site.draft, visitor: { ...site.draft.visitor, enabled: true, mode: 'chat' } } } })).json()).site;
+  expect((await page.request.post(`/api/sites/${site.id}`, { headers, data: { action: 'publish', revision: site.revision } })).ok()).toBeTruthy();
+  let release!: () => void;
+  const delayed = new Promise<void>(resolve => { release = resolve; });
+  const availability = { enabled: true, mode: 'chat', live: false, chatRemaining: 24, voiceRemaining: 5, resetsAt: new Date(Date.now() + 86400000).toISOString() };
+  const path = `/api/visitor/${slug}`;
+  await page.route(`**${path}`, async route => {
+    if (route.request().method() === 'GET') { await delayed; await route.fulfill({ json: { availability } }); return; }
+    mockedRequests.push(path);
+    await route.fulfill({ json: { text: 'Here are the published sessions.', presentation: { layout: 'cards', sources: ['section:weddings', 'section:portraits'], status: 'ready' }, availability } });
+  });
+  await page.goto(`/s/${slug}`);
+  const composer = page.getByRole('textbox', { name: 'What would you like to see?', exact: true });
+  await expect(page.getByRole('status').filter({ hasText: 'Getting the assistant ready…' })).toBeVisible();
+  await expect(composer).not.toBeEditable();
+  await composer.focus(); await composer.press('Enter');
+  expect(mockedRequests).toEqual([]);
+  release();
+  await expect(composer).toBeEditable();
+  await expect(page.getByRole('status').filter({ hasText: 'Getting the assistant ready…' })).toHaveCount(0);
+  await composer.fill('Show the published sessions'); await composer.press('Enter');
+  await expect(page.locator('.visitor-workspace .platform-workspace-card')).toHaveCount(2);
+  expect(mockedRequests).toEqual([path]);
+});
+
 test('legacy source plans retain readable objects and scroll across additive plans and symmetric focus', async ({ page }, info) => {
   await page.setViewportSize({ width: 900, height: 700 });
   const slug = `legacy-motion-${Date.now()}`;

@@ -5,9 +5,9 @@ export type VisitorTaskUsage = { inputTokens?: number; outputTokens?: number; to
 export type ToolResult = { data: unknown; silent?: boolean; directText?: string };
 export type VisitorTaskOptions = {
   model: string; channel: 'chat' | 'voice';
-  apiKey: string; instructions: string | (() => string); context: unknown; signal: AbortSignal;
+  apiKey: string; instructions: string | (() => string | Promise<string>); context: unknown; signal: AbortSignal;
   tools: readonly VisitorTaskTool[]; execute: (name: string, args: string, signal: AbortSignal) => Promise<ToolResult>;
-  fetch?: typeof fetch; onUsage?: (usage: VisitorTaskUsage) => void; maxToolRounds?: number;
+  fetch?: typeof fetch; beforeModel?: () => Promise<void>; onUsage?: (usage: VisitorTaskUsage) => void | Promise<void>; maxToolRounds?: number;
 };
 const record = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
 
@@ -19,11 +19,15 @@ export async function runVisitorTask(options: VisitorTaskOptions): Promise<{ tex
   if (!Number.isInteger(maxTools) || maxTools < 0 || maxTools > 4) throw new Error('Invalid backend tool limit.');
   for (let round = 0; round <= maxTools; round++) {
     options.signal.throwIfAborted();
+    await options.beforeModel?.();
+    options.signal.throwIfAborted();
+    const instructions = typeof options.instructions === 'function' ? await options.instructions() : options.instructions;
+    options.signal.throwIfAborted();
     const response = await request('https://api.openai.com/v1/responses', {
       method: 'POST', headers: { Authorization: `Bearer ${options.apiKey}`, 'Content-Type': 'application/json' },
       redirect: 'error', signal: options.signal,
       body: JSON.stringify({ model: options.model, store: false, reasoning: { effort: 'low' },
-        instructions: `${VISITOR_KNOWLEDGE_POLICY}\n${typeof options.instructions === 'function' ? options.instructions() : options.instructions}\n${options.channel === 'voice' ? 'Transcripts may be incomplete or overlapping; use the latest user request and current application state. Return a concise, grounded answer (at most 75 words) for spoken delivery.' : 'Use the latest typed request, conversation and current application state. Return a concise, grounded answer for the website visitor.'} Never claim unconfirmed actions.`,
+        instructions: `${VISITOR_KNOWLEDGE_POLICY}\n${instructions}\n${options.channel === 'voice' ? 'Transcripts may be incomplete or overlapping; use the latest user request and current application state. Return a concise, grounded answer (at most 75 words) for spoken delivery.' : 'Use the latest typed request, conversation and current application state. Return a concise, grounded answer for the website visitor.'} Never claim unconfirmed actions.`,
         include: ['reasoning.encrypted_content'],
         input, tools: round < maxTools ? options.tools.map(tool => ({ ...tool, strict: false })) : [],
         tool_choice: round < maxTools ? 'auto' : 'none', parallel_tool_calls: false, max_output_tokens: round === 0 ? 1200 : 500,
@@ -39,7 +43,7 @@ export async function runVisitorTask(options: VisitorTaskOptions): Promise<{ tex
       const value = usage[source];
       if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 10_000_000) measured[target] = value;
     }
-    if (Object.keys(measured).length) options.onUsage?.(measured);
+    if (Object.keys(measured).length) await options.onUsage?.(measured);
     options.signal.throwIfAborted();
     if (result.status !== 'completed' || !Array.isArray(result.output)) throw new Error('The conversation backend did not finish.');
     const output = result.output.map(record);

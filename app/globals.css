@@ -222,3 +222,28 @@ html[data-theme="dark"] .media-files-heading p{color:#a6b4cf}
   .auth-brand-name{display:inline;font-size:18px;font-weight:500;letter-spacing:-.55px}
 }
 .knowledge-identity-matches,.knowledge-facts{border-top:1px solid var(--studio-border,#e1e6f0);padding:14px 0;margin-top:14px}.knowledge-identity-match,.knowledge-fact{display:flex;flex-direction:column;gap:4px;padding:9px 0;border-bottom:1px solid var(--studio-border,#edf0f7);font-size:12px}.knowledge-identity-match span,.knowledge-fact span{color:var(--studio-muted,#727e92);line-height:1.5}.knowledge-identity-matches summary,.knowledge-facts summary{cursor:pointer;font-size:12px;color:var(--studio-text,#485777)}
+
+/* Website migration stays within Studio's review controls and shared renderer. */
+.website-import, .website-design-review { border: 1px solid var(--border, #393d43); border-radius: 12px; padding: 20px; margin-block: 24px; min-width: 0; }
+.website-import h3 { display: flex; align-items: center; gap: 10px; }
+.website-page-list { list-style: none; padding: 0; max-height: 340px; overflow: auto; }
+.website-page-list li { padding: 12px 0; border-bottom: 1px solid var(--border, #393d43); overflow-wrap: anywhere; }
+.website-page-list label, .website-check { display: flex; gap: 12px; align-items: flex-start; }
+.website-page-list input, .website-check input { flex: 0 0 auto; width: 17px; height: 17px; margin-top: 3px; }
+.website-page-list small { display: block; margin-top: 4px; opacity: .8; }
+.website-check { margin-block: 20px; }
+.website-design-fields { display: grid; gap: 12px; }
+.website-design-preview { container-type: inline-size; background: var(--platform-bg); color: var(--platform-text); margin: 16px auto; border: 1px solid var(--platform-line); max-height: 720px; overflow: auto; width: 100%; }
+.website-design-preview[data-mobile=true] { max-width: 390px; }
+.website-design-preview .platform-website { padding: 20px; }
+.website-preview summary { cursor: pointer; padding-block: 12px; font-weight: 600; }
+.website-preview-detail { padding: 24px; white-space: pre-wrap; border-top: 1px solid var(--platform-line); }
+/* Imported websites keep the assistant invitation behind the explicit Home action. */
+.voice-template[data-website-entry=website]:has(.visitor-workspace[data-browsing=true]) [data-voice-dock] { display: none; }
+
+/* Publisher review reads as content first; detailed evidence remains accessible. */
+.knowledge-content-review { display: grid; gap: 12px; margin: 16px 0; }
+.knowledge-content-review > article { padding: 18px; border: 1px solid var(--border, #343537); border-radius: 12px; overflow-wrap: anywhere; }
+.knowledge-content-review p { line-height: 1.65; white-space: pre-wrap; }
+.knowledge-review-confirm { display: grid; gap: 14px; padding: 18px; margin: 18px 0; border: 1px solid var(--border, #343537); border-radius: 12px; }
+.knowledge-review-confirm label { line-height: 1.6; font-size: 14px; }

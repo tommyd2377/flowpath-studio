@@ -10,6 +10,13 @@
     "./catalog": { "types": "./dist/catalog.d.ts", "import": "./dist/catalog.js" },
     "./knowledge": { "types": "./dist/knowledge.d.ts", "import": "./dist/knowledge.js" },
     "./workspace": { "types": "./dist/workspace.d.ts", "import": "./dist/workspace.js" },
+    "./collection-space": { "types": "./dist/collection-space.d.ts", "import": "./dist/collection-space.js" },
+    "./query": { "types": "./dist/query.d.ts", "import": "./dist/query.js" },
+    "./task": { "types": "./dist/task.d.ts", "import": "./dist/task.js" },
+    "./task-view": { "types": "./dist/task-view.d.ts", "import": "./dist/task-view.js" },
+    "./business": { "types": "./dist/business.d.ts", "import": "./dist/business.js" },
+    "./task-components": { "types": "./dist/TaskComponents.d.ts", "import": "./dist/TaskComponents.js" },
+    "./artifacts": { "types": "./dist/artifacts.d.ts", "import": "./dist/artifacts.js" },
     "./interaction": { "types": "./dist/interaction.d.ts", "import": "./dist/interaction.js" },
     "./media": { "types": "./dist/media.d.ts", "import": "./dist/media.js" },
     "./styles.css": "./dist/styles.css"

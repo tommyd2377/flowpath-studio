@@ -62,6 +62,8 @@ async function ask(page: Page, text: string) {
   const input = page.getByRole('textbox', { name: 'What would you like to see?', exact: true });
   await input.fill(text); await page.getByRole('button', { name: 'Show me', exact: true }).click();
   await expect(input).toHaveValue('');
+  // Input clears at dispatch; wait for the completed request before inspecting its context.
+  await expect(page.getByRole('button', { name: 'Show me', exact: true })).toBeVisible();
   await expect(page.locator('.visitor-workspace [role="alert"]')).toHaveCount(0);
 }
 async function settled(page: Page) { await expect(focus(page)).toHaveAttribute('data-workspace-transition', 'settled'); }
@@ -85,6 +87,10 @@ test('address/email/photo/map objects coexist, return symmetrically, and keyboar
   await ask(page, 'Close the map but keep the photo'); await expect(cards(page)).toHaveCount(4);
   const photo = page.locator('.platform-workspace-card[data-workspace-component="photo"]');
   const opener = photo.getByRole('button', { name: 'Open Reviewed photo 2', exact: true });
+  // Request completion can precede the composer/backdrop exit. Measure the
+  // source position after that transition, before the separate photo motion.
+  await expect(page.locator('.platform-conversation-backdrop')).toHaveCount(0);
+  await expect.poll(() => page.locator('.platform-conversation-surface').evaluate(element => Number(getComputedStyle(element).getPropertyValue('--composer-progress')))).toBe(0);
   await opener.scrollIntoViewIfNeeded();
   const originRect = await photo.boundingBox();
   const scroll = await page.evaluate(() => scrollY);
@@ -298,4 +304,21 @@ test('integration: an oversized detail retains the workspace and permits ordinar
   await directory.getByRole('button', { name: 'Open Long field 0 · Blue Bowl', exact: true }).click(); await settled(page);
   await expect(focus(page)).toContainText('Long approved description.');
   await expect(cards(page)).toHaveCount(2); expect(errors).toEqual([]);
+});
+
+test('explicit v2 migration keeps publisher links and shared photo albums in query browsing', async ({ page }) => {
+  let { site } = await prepare(page, 'studio', graph => { graph.capabilities = [{ id: 'publisher-contact', kind: 'link', label: 'Publisher contact', url: 'https://example.com/contact', entityIds: ['mira'] }]; });
+  const migration = await post(page, `/api/sites/${site.id}/collections`, { action: 'migrate', siteRevision: site.revision });
+  expect(migration.review.metadata.links[0].id).toBe('publisher-contact');
+  site = (await post(page, `/api/sites/${site.id}/collections`, { action: 'apply', reviewId: migration.review.id, revision: migration.review.revision, siteRevision: site.revision })).site;
+  site = (await post(page, `/api/sites/${site.id}`, { action: 'publish', revision: site.revision })).site;
+  await page.goto(`/s/${site.slug}`); await page.getByRole('button', { name: 'Browse and filter collections' }).click();
+  const results = page.getByRole('region', { name: 'Collection results', exact: true });
+  await expect(results.getByRole('link', { name: 'Publisher contact' })).toHaveAttribute('href', 'https://example.com/contact');
+  await results.getByRole('button', { name: 'Published photos', exact: true }).click();
+  await expect(results.getByRole('status')).toHaveText('2 matching records');
+  await expect(results.getByRole('img', { name: 'Synthetic approved item 1', exact: true })).toBeVisible();
+  await expect(results.getByText('Illustrative example', { exact: true })).toBeVisible();
+  await results.getByRole('button', { name: 'Items', exact: true }).click();
+  await expect(results.locator('[data-task-record]')).toHaveCount(2);
 });

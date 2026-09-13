@@ -40,7 +40,7 @@ export function diagnosticError(error: unknown): Pick<VisitorDiagnostic, 'httpSt
   const result: Pick<VisitorDiagnostic, 'httpStatus' | 'reason'> = typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599 ? { httpStatus: status } : {};
   if (error instanceof Error) {
     if (error.name === 'ZodError' || error instanceof SyntaxError) result.reason = 'schema';
-    else if (/capacity|too many|workspace.*full/i.test(error.message)) result.reason = 'capacity';
+    else if (/capacity|too many|workspace.*full|context exceeds/i.test(error.message)) result.reason = 'capacity';
     else if (/publication.*changed|stale|out of order/i.test(error.message)) result.reason = 'stale';
     else if (/reference|not.*published|unknown.*(id|item)/i.test(error.message)) result.reason = 'reference';
     else if (/timeout|timed out/i.test(error.message)) result.reason = 'timeout';

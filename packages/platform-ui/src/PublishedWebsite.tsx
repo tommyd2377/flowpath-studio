@@ -5,8 +5,8 @@ import { motion, useReducedMotion } from 'motion/react';
 import { MediaImage } from './MediaViews.js';
 import { revealTransition } from './motion.js';
 
-export type WebsiteEntry = { id: string; name: string; body?: string; imageAssetId?: string; example?: boolean; eyebrow?: string };
-export type WebsiteSection = { id: string; title: string; description?: string; kind: 'stories' | 'collection' | 'photos'; entries: WebsiteEntry[] };
+export type WebsiteEntry = { id: string; name: string; body?: string; blocks?: { id: string; kind: 'paragraph' | 'heading'; text: string }[]; imageAssetId?: string; example?: boolean; eyebrow?: string };
+export type WebsiteSection = { id: string; title: string; description?: string; kind: 'stories' | 'collection' | 'photos'; entries: WebsiteEntry[]; navigation?: boolean };
 
 /** The same published card appears in the full website, collections, and conversational views. */
 export function ContentCard({ entry, onOpen, highlighted, number }: { entry: WebsiteEntry; onOpen: () => void; highlighted?: boolean; number?: number }) {
@@ -29,27 +29,28 @@ function WebsiteGroup({ section, anchor, onOpen, onInteraction, highlightedId }:
   const limit = section.kind === 'photos' ? 8 : 6;
   const entries = expanded ? section.entries : section.entries.slice(0, limit);
   return <section id={anchor} className="platform-website-section" data-section-kind={section.kind} aria-label={section.title}>
-    <header className="platform-website-section-heading"><div><span className="platform-website-eyebrow">{section.kind === 'photos' ? 'In pictures' : section.kind === 'stories' ? 'Discover' : 'Explore the collection'}</span><h2>{section.title}</h2>{section.description && <p>{section.description}</p>}</div><span className="platform-website-count">{section.entries.length} {section.kind === 'photos' ? section.entries.length === 1 ? 'photo' : 'photos' : section.entries.length === 1 ? 'item' : 'items'}</span></header>
+    <header className="platform-website-section-heading"><div><span className="platform-website-eyebrow">{section.kind === 'photos' ? 'In pictures' : section.kind === 'stories' ? 'Discover' : 'Explore the collection'}</span><h2>{section.title}</h2>{section.description && <p>{section.description}</p>}</div>{section.kind !== 'stories' && <span className="platform-website-count">{section.entries.length} {section.kind === 'photos' ? section.entries.length === 1 ? 'photo' : 'photos' : section.entries.length === 1 ? 'item' : 'items'}</span>}</header>
     {section.kind === 'stories' ? <div className="platform-website-stories">{entries.map(entry => <article key={entry.id} className="platform-website-story">
       {entry.imageAssetId && <button type="button" aria-label={`Explore the photo for ${entry.name}`} onClick={() => onOpen(entry.id)}><MediaImage assetId={entry.imageAssetId} size="display" interactive={false}/></button>}
-      <div><h3>{entry.name}</h3><p>{entry.body}</p>{entry.example && <span className="platform-media-example">Example photo</span>}<button type="button" className="platform-website-text-link" aria-label={`Open ${entry.name}`} data-workspace-content={entry.id} data-workspace-highlighted={highlightedId === entry.id ? entry.id : undefined} onClick={() => onOpen(entry.id)}>Explore {entry.name} <span aria-hidden="true">↗</span></button></div>
+      <div>{(section.entries.length > 1 || entry.name !== section.title) && <h3>{entry.name}</h3>}{entry.blocks?.length ? entry.blocks.map(block => block.kind === 'heading' ? <h4 key={block.id}>{block.text}</h4> : <p key={block.id}>{block.text}</p>) : <p>{entry.body}</p>}{entry.example && <span className="platform-media-example">Example photo</span>}<button type="button" className="platform-website-text-link" aria-label={`Open ${entry.name}`} data-workspace-content={entry.id} data-workspace-highlighted={highlightedId === entry.id ? entry.id : undefined} onClick={() => onOpen(entry.id)}>Explore {entry.name} <span aria-hidden="true">↗</span></button></div>
     </article>)}</div> : <ol className="platform-website-entries" data-with-photos={entries.some(entry => entry.imageAssetId)}>{entries.map((entry, index) => <li key={entry.id}><ContentCard entry={entry} number={index + 1} onOpen={() => onOpen(entry.id)} highlighted={highlightedId === entry.id}/></li>)}</ol>}
     {section.entries.length > limit && <button type="button" className="platform-website-more" aria-expanded={expanded} onClick={() => { onInteraction(); setExpanded(value => !value); }}>{expanded ? 'Show fewer' : `Explore all ${section.entries.length}`} <span aria-hidden="true">{expanded ? '−' : '+'}</span></button>}
   </section>;
 }
 
 /** A controlled, provider-independent website composed only from the host's published snapshot. */
-export function PublishedWebsite({ name, headline, description, logoAssetId, hero, sections, contact, hours, onOpen, onHome, onInteraction, query, onQueryChange, searchResults, highlightedId }: {
-  name: string; headline: string; description: string; logoAssetId?: string | null; hero?: WebsiteEntry; sections: WebsiteSection[];
+export function PublishedWebsite({ name, headline, description, logoAssetId, hero, sections, contact, hours, onOpen, onHome, onInteraction, query, onQueryChange, searchResults, highlightedId, layout = 'balanced' }: {
+  layout?: 'balanced' | 'editorial' | 'compact'; name: string; headline: string; description: string; logoAssetId?: string | null; hero?: WebsiteEntry; sections: WebsiteSection[];
   contact?: string; hours?: string; onOpen: (id: string) => void; onHome: () => void; onInteraction: () => void;
   query: string; onQueryChange: (value: string) => void; searchResults: WebsiteEntry[]; highlightedId?: string;
 }) {
   const prefix = useId().replace(/:/g, '');
   const reduced = useReducedMotion();
   const anchor = (id: string) => `${prefix}-${id}`;
-  return <motion.div className="platform-website" data-published-website="true" role="region" aria-label="Browse approved information" initial={reduced ? false : { opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ ...revealTransition, duration: reduced ? 0 : .5 }}>
+  const navigation = sections.filter(section => section.navigation !== false);
+  return <motion.div className="platform-website" data-published-website="true" data-website-layout={layout} role="region" aria-label="Browse approved information" initial={reduced ? false : { opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ ...revealTransition, duration: reduced ? 0 : .5 }}>
     <header className="platform-website-header"><button className="platform-website-brand" onClick={onHome} type="button" aria-label={`${name} home`}>{logoAssetId && <MediaImage assetId={logoAssetId} fit="contain" interactive={false}/>}<span>{name}</span></button>
-      <nav aria-label="Website navigation">{sections.slice(0, 4).map(section => <a key={section.id} href={`#${anchor(section.id)}`} onClick={onInteraction}>{section.title}</a>)}{sections.length > 4 && <details className="platform-website-nav-more"><summary>More</summary><div>{sections.slice(4).map(section => <a key={section.id} href={`#${anchor(section.id)}`} onClick={event => { onInteraction(); event.currentTarget.closest('details')?.removeAttribute('open'); }}>{section.title}</a>)}</div></details>}{(contact || hours) && <a href={`#${anchor('contact')}`} onClick={onInteraction}>Contact</a>}</nav>
+      <nav aria-label="Website navigation">{navigation.slice(0, 4).map(section => <a key={section.id} href={`#${anchor(section.id)}`} onClick={onInteraction}>{section.title}</a>)}{navigation.length > 4 && <details className="platform-website-nav-more"><summary>More</summary><div>{navigation.slice(4).map(section => <a key={section.id} href={`#${anchor(section.id)}`} onClick={event => { onInteraction(); event.currentTarget.closest('details')?.removeAttribute('open'); }}>{section.title}</a>)}</div></details>}{(contact || hours) && <a href={`#${anchor('contact')}`} onClick={onInteraction}>Contact</a>}</nav>
     </header>
     <div className="platform-website-hero" data-has-image={Boolean(hero?.imageAssetId)}><div className="platform-website-hero-copy"><span className="platform-website-eyebrow">{name}</span><h1>{headline}</h1><p>{description}</p>
       <div className="platform-website-hero-actions">{sections[0] && <a href={`#${anchor(sections[0].id)}`} onClick={onInteraction}>Start exploring <span aria-hidden="true">↘</span></a>}<button type="button" onClick={onHome}>Ask the assistant <span aria-hidden="true">↗</span></button></div>

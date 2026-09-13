@@ -33,15 +33,24 @@ export const contentSchema = z.object({
   logoAssetId: z.string().uuid().nullable(),
   welcomeMessage: z.string().trim().max(WELCOME_MESSAGE_MAX_LENGTH).optional(),
   greetingPoints: z.array(greetingPointSchema.nullable()).length(3).optional(),
-  style: z.object({ layout: z.enum(['balanced', 'editorial', 'compact']), palette: z.enum(['midnight', 'forest', 'parchment']) }).strict().optional(),
+  style: z.object({ layout: z.enum(['balanced', 'editorial', 'compact']), palette: z.enum(['midnight', 'forest', 'parchment']), entry: z.enum(['assistant', 'website']).optional() }).strict().optional(),
   visitorSpeaksFirst: z.boolean().optional(),
   visitor: visitorSettingsSchema.optional(),
   explore: exploreSettingsSchema.optional(),
   knowledgeRevisionId: z.string().uuid().optional(),
+  catalogPublicationId: z.string().uuid().optional(),
   mediaRevisionId: z.string().uuid().optional(),
   opening: openingSchema.optional(),
   sections: z.array(sectionSchema).max(12).refine(sections => new Set(sections.map(section => section.id)).size === sections.length, 'Each content section must have a unique ID.'),
 }).strict();
+
+/** Retire obsolete source-renderer references when reading or editing older snapshots. */
+export function nativeWebsiteContent<T>(content: T): T {
+  if (!content || typeof content !== 'object' || Array.isArray(content)) return content;
+  const native = { ...content } as T & { websiteLayoutRevisionId?: unknown; websiteReadingRevisionId?: unknown };
+  delete native.websiteLayoutRevisionId; delete native.websiteReadingRevisionId;
+  return native;
+}
 
 export type SiteContent = z.infer<typeof contentSchema>;
 export type SiteFile = { id: string; name: string; mime: string; size: number; uploadedAt: string; kind: 'image' | 'text' | 'pdf';
@@ -71,7 +80,7 @@ export function summarize(site: Site): SiteSummary {
 export function describeChanges(before: SiteContent, after: SiteContent): Change[] {
   const labels: Record<Exclude<keyof SiteContent, 'sections'>, string> = { name: 'Site name', headline: 'Headline', description: 'Introduction',
     hours: 'Opening hours', contact: 'Contact', accent: 'Brand color', logoAssetId: 'Logo',
-    welcomeMessage: 'Welcome message', greetingPoints: 'Spoken greeting points', style: 'Visitor style', visitorSpeaksFirst: 'Conversation opening', visitor: 'Visitor conversations', explore: 'Search and explore', knowledgeRevisionId: 'Knowledge revision', mediaRevisionId: 'Photos and albums', opening: 'Opening experience' };
+    welcomeMessage: 'Welcome message', greetingPoints: 'Spoken greeting points', style: 'Visitor style', visitorSpeaksFirst: 'Conversation opening', visitor: 'Visitor conversations', explore: 'Search and explore', knowledgeRevisionId: 'Knowledge revision', catalogPublicationId: 'Collection publication', mediaRevisionId: 'Photos and albums', opening: 'Opening experience' };
   const display = (content: SiteContent, key: keyof typeof labels) => key === 'visitor'
     ? content.visitor?.enabled ? `${content.visitor.mode} · ${content.visitor.voiceTier} voice · ${content.visitor.chatDailyLimit} chat messages / ${content.visitor.voiceDailyLimit} voice tasks per day · ${content.visitor.voiceIdleTimeoutSeconds ?? 60}s idle close · Purpose: ${content.visitor.assistantPurpose || 'Help visitors explore published information'}` : 'Off'
     : key === 'explore' ? content.explore?.enabled ? `On · ${content.explore.dailyLimit} searches/day · ${content.explore.images ? 'images on' : 'images off'} · ${content.explore.maps ? 'maps on' : 'maps off'} · ${content.explore.annotations ? 'web additions on' : 'web additions off'} · ${content.explore.allowedDomains.join(', ') || 'wider web'}` : 'Off'

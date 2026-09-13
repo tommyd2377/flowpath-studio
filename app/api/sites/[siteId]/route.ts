@@ -10,6 +10,7 @@ import { pruneGreetingSources, validateGreeting } from '@/lib/site-greeting';
 import { recordPlatformEvent } from '@/lib/platform-events';
 import { readMediaLibrary, reconcileSectionAssociations, stagePublicMedia } from '@/lib/media-store';
 import { validateMediaLibrary } from '@thevoice/platform-ui/media';
+import { CatalogRepository } from '@/lib/catalog-repository';
 import { assertLaunchPublication } from '@/lib/launch-billing';
 
 export const runtime = 'nodejs';
@@ -43,6 +44,7 @@ export async function POST(request: Request, { params }: Context) {
       const media = current.draft.mediaRevisionId ? await readMediaLibrary(user, siteId, current.draft.mediaRevisionId) : null;
       validateOpeningWithMedia(current.draft, catalog, media);
       validateGreeting(current.draft, catalog);
+      if (current.draft.catalogPublicationId) await new CatalogRepository().verify(siteId, current.draft.catalogPublicationId);
       if (current.draft.knowledgeRevisionId) await stagePublicKnowledge(user, siteId, current.draft.knowledgeRevisionId);
       if (media) {
         validateMediaLibrary(media, { entityIds: catalog?.entities.map(item => item.id) ?? [], sectionIds: current.draft.sections.map(item => item.id) });

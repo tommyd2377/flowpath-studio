@@ -93,7 +93,7 @@ export function AdaptiveWorkspace({ objects, focusedId, authority, onOperation, 
       const dock = site.querySelector('.platform-conversation-dock');
       // The composer can still be traveling home when a visitor opens a card.
       // Reserve its actual surface too, not only the smaller sticky placeholder.
-      for (const control of [dock, dock?.querySelector('.platform-conversation-surface')]) {
+      for (const control of [dock, dock?.querySelector('.platform-conversation-surface'), site.querySelector('[data-visitor-conversation-controls]')]) {
         const rect = control?.getBoundingClientRect();
         if (rect && rect.bottom > bounds.top && rect.top < bounds.bottom) bounds.top = Math.max(bounds.top, rect.bottom + 12);
       }
@@ -120,9 +120,14 @@ export function AdaptiveWorkspace({ objects, focusedId, authority, onOperation, 
     setTraveling(ids => ids.includes(focusedId) ? ids : [...ids, focusedId]);
     returnTarget.current = anchor?.querySelector('button') ?? root.current.querySelector('button');
     const resize = new ResizeObserver(measure);
-    for (const control of node.closest('[data-visitor-site]')?.querySelectorAll('.platform-conversation-dock, .platform-conversation-surface') ?? []) resize.observe(control);
-    measure(); window.addEventListener('resize', measure); window.visualViewport?.addEventListener('resize', measure);
-    return () => { resize.disconnect(); window.removeEventListener('resize', measure); window.visualViewport?.removeEventListener('resize', measure); };
+    // Layout animations move controls without resizing them. Keep the available
+    // focus area current when an immediate result arrives during that movement.
+    const movement = new MutationObserver(measure);
+    for (const control of node.closest('[data-visitor-site]')?.querySelectorAll('.platform-conversation-dock, .platform-conversation-surface, [data-visitor-conversation-controls]') ?? []) {
+      resize.observe(control); movement.observe(control, { attributes: true, attributeFilter: ['style'] });
+    }
+    measure(); window.addEventListener('resize', measure); window.addEventListener('scroll', measure, true); window.visualViewport?.addEventListener('resize', measure); window.visualViewport?.addEventListener('scroll', measure);
+    return () => { resize.disconnect(); movement.disconnect(); window.removeEventListener('resize', measure); window.removeEventListener('scroll', measure, true); window.visualViewport?.removeEventListener('resize', measure); window.visualViewport?.removeEventListener('scroll', measure); };
   }, [focusedId, focused, objects, owner, focusKeyboard]);
   const dispatch = (operations: WorkspaceOperation[]) => {
     const scrollNode = document.querySelector<HTMLElement>(`[data-workspace-owner="${CSS.escape(owner)}"][data-workspace-focused] [data-workspace-scroll]`);

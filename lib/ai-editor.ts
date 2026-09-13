@@ -2,7 +2,7 @@ import 'server-only';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AppError } from './errors';
-import { contentSchema, describeChanges, type ChatMessage } from './site-model';
+import { nativeWebsiteContent, contentSchema, describeChanges, type ChatMessage } from './site-model';
 import type { StoredSite } from './local-store';
 
 // Null means unchanged. A nested logo permits explicitly clearing the current logo.
@@ -56,7 +56,7 @@ export function parseEditorReply(payload: unknown, site: StoredSite): ChatMessag
   try { parsed = aiReplySchema.parse(JSON.parse(chunks.join(''))); }
   catch { throw new AppError('AI returned a proposal that could not be validated. Your draft is unchanged.', 502); }
   const { logo, ...fields } = parsed.patch;
-  const content = contentSchema.parse({ ...site.draft, ...Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== null)),
+  const content = contentSchema.parse({ ...nativeWebsiteContent(site.draft), ...Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== null)),
     ...(logo === null ? {} : { logoAssetId: logo.assetId }) });
   if (content.logoAssetId && !site.files.some(file => file.id === content.logoAssetId && file.kind === 'image')) {
     throw new AppError('AI selected an unavailable logo. Your draft is unchanged.', 502);

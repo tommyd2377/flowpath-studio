@@ -32,13 +32,29 @@ function harness(overrides: Partial<VisitorSessionOptions> = {}) {
     },
     controlFactory: value => {
       controlOptions = value;
-      return { ready: Promise.resolve(), start() {}, async applyControl(update) { updates.push(update); value.emit({type:'control_applied', seq:update.seq, interactionRevision:update.interactionRevision, revision:update.interactionRevision, ready:update.ready}); }, async close() { stopped++; return { finalized: false }; }, closed: Promise.resolve({ finalized: false }) };
+      return { ready: Promise.resolve(), start() {}, observeControl() {}, async applyControl(update) { updates.push(update); value.emit({type:'control_applied', seq:update.seq, interactionRevision:update.interactionRevision, revision:update.interactionRevision, ready:update.ready}); }, async close() { stopped++; return { finalized: false }; }, closed: Promise.resolve({ finalized: false }) };
     },
     ...overrides,
   };
   return { options, controller, calls, updates, deliver: (update: VisitorControlUpdate) => deliver(update), mailboxClosed: () => mailboxClosed, metrics: () => ({ blocked, released, stopped }), get control() { return controlOptions!; } };
 }
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));
+
+test('owner forwards cancellation hints while an earlier apply is blocked', async t => {
+  let release!: () => void;
+  const observed: number[] = [], applied: number[] = [];
+  const h = harness({ controlFactory: () => ({ ready: Promise.resolve(), start() {},
+    observeControl(update) { observed.push(update.seq); },
+    async applyControl(update) { applied.push(update.seq); if (update.seq === 1) await new Promise<void>(resolve => { release = resolve; }); },
+    async close() { return { finalized: true }; }, closed: Promise.resolve({ finalized: true }),
+  }) });
+  const response = visitorRealtimeSession(h.options); t.after(() => { h.controller.abort(); return response.body!.cancel(); });
+  await flush();
+  h.deliver({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: {} });
+  h.deliver({ seq: 2, interactionRevision: 1, viewRevision: 0, ready: true, context: {} });
+  assert.deepEqual(observed, [1, 2]); assert.deepEqual(applied, [1]);
+  release(); await flush(); assert.deepEqual(applied, [1, 2]);
+});
 
 test('only an audio media section is accepted; control channels cannot be smuggled into SDP', () => {
   assert.equal(validateVisitorOffer(offer), offer);
@@ -64,6 +80,25 @@ test('session streams only public setup, and cancelling the body closes and hang
   h.controller.abort(); await flush();
   assert.equal(h.calls.filter(url => url.endsWith('/hangup')).length, 1);
   assert.deepEqual(h.metrics(), { blocked: 0, released: 1, stopped: 1 });
+});
+
+test('restarting does not resubmit an unfinished question as fresh voice input', async () => {
+  const history = [{ role: 'user' as const, text: 'Earlier unfinished request.' }];
+  const h = harness({ history });
+  const original = h.options.fetch!;
+  h.options.fetch = async (input, init) => {
+    if (!String(input).endsWith('/hangup')) {
+      const { session } = JSON.parse(String(init?.body));
+      assert.deepEqual(session.input, [], 'Previous questions must not be replayed as live input');
+    }
+    return original(input, init);
+  };
+  const response = visitorRealtimeSession(h.options);
+  const reader = response.body!.getReader();
+  const first = JSON.parse(new TextDecoder().decode((await reader.read()).value));
+  assert.equal(first.protectOpening, false);
+  assert.deepEqual(h.control.history, history, 'The backend still receives conversation context');
+  await reader.cancel(); h.controller.abort(); await flush();
 });
 
 test('aborting during call creation reclaims the eventual call ID rather than abandoning it', async () => {
@@ -209,7 +244,7 @@ test('audio SDP is delivered while sideband connects, but ready waits for sideba
   let release!: () => void;
   let starts = 0;
   const ready = new Promise<void>(resolve => { release = resolve; });
-  const h = harness({ controlFactory: () => ({ ready, start() { starts++; }, async applyControl() {}, async close() { return { finalized: false }; }, closed: Promise.resolve({ finalized: false }) }) });
+  const h = harness({ controlFactory: () => ({ ready, start() { starts++; }, observeControl() {}, async applyControl() {}, async close() { return { finalized: false }; }, closed: Promise.resolve({ finalized: false }) }) });
   const reader = visitorRealtimeSession(h.options).body!.getReader();
   try {
     const first = await Promise.race([reader.read(), new Promise<never>((_, reject) => { const timer = setTimeout(() => reject(new Error('SDP blocked by sideband')), 1000); timer.unref(); })]);

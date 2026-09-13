@@ -14,6 +14,7 @@ import { AppError } from './errors';
 import { hashValue, validateGraphCorrections, validateGraphUpdates, validateKnowledgeUpdates, validateKnowledgeUpdateContext, updateAnchorsSchema, sourceIdentityMatchSchema, type KnowledgeArtifact, type KnowledgeLedger } from './knowledge-model';
 import { validateCatalog, type KnowledgeCatalog } from '@thevoice/platform-ui/contracts';
 import { validateSourceProvenance } from './source-provenance';
+import { websiteProposalSchema } from './website-import-model';
 
 const uuid = z.string().uuid();
 const queues = globalThis as typeof globalThis & { knowledgeQueue?: Promise<unknown> };
@@ -35,7 +36,7 @@ function validateArtifact(value: unknown): KnowledgeArtifact {
     origins: z.array(z.object({ key: z.string().min(1).max(255), fileId: uuid, name: z.string().min(1).max(255), hash: z.string().max(128),
       entityIds: z.array(z.string().min(1).max(80)).max(100), entityMap: z.record(z.string().min(1).max(80), z.string().min(1).max(80)).optional(), baseline: z.unknown(), provenance: z.unknown().optional(),
   }).strict()).max(50), notes: z.array(z.string().max(2000)).max(5000), updates: z.unknown().optional(), updateAnchors: z.unknown().optional(), updateContext: z.unknown().optional(), identityMatches: z.unknown().optional(), graphUpdates: z.unknown().optional(), correctionHistory: z.unknown().optional(),
-    identityRemaps: z.record(z.string().min(1).max(80), z.string().min(1).max(80)).optional(), assertionReviews: z.unknown().optional(),
+    identityRemaps: z.record(z.string().min(1).max(80), z.string().min(1).max(80)).optional(), assertionReviews: z.unknown().optional(), website: websiteProposalSchema.optional(),
   }).strict().parse(value);
   const catalog = validateCatalog(parsed.catalog);
   if (catalog.id !== parsed.id) throw new AppError('Knowledge revision identity does not match.');
@@ -79,7 +80,7 @@ async function atomicWrite(path: string, value: unknown) {
 function ledger(value: unknown): KnowledgeLedger {
   if (value === undefined) return emptyLedger();
   const result = z.object({ schemaVersion: z.literal(1), jobs: z.array(z.object({
-    id: uuid, fileId: uuid.optional(), sourceUrl: z.string().url().max(2048).optional(), operation: z.enum(['source', 'review']).optional(), sourceName: z.string(), sourceHash: z.string(), baseDraftHash: z.string(), baseRevision: z.number().int().positive(),
+    id: uuid, fileId: uuid.optional(), sourceUrl: z.string().url().max(2048).optional(), operation: z.enum(['source', 'review', 'website']).optional(), sourceName: z.string(), sourceHash: z.string(), baseDraftHash: z.string(), baseRevision: z.number().int().positive(),
     status: z.enum(['running', 'needs_review', 'applied', 'discarded', 'failed', 'interrupted']), stage: z.enum(['extracting', 'interpreting', 'review']),
     claim: uuid, startedAt: z.number(), updatedAt: z.number(), message: z.string(), candidateRevisionId: uuid.optional(), appliedRevisionId: uuid.optional(), paidAttempt: z.boolean().optional(),
   }).strict()).max(50) }).strict().safeParse(value);

@@ -24,6 +24,7 @@ export const visitorScreenSchema = z.object({
   focusedEntityId: z.string().min(1).max(100).nullable(), focusedSourceId: z.string().min(1).max(100).nullable(),
 }).strict();
 export const visitorContextSchema = z.object({
+  taskSession: z.object({ sessionId: z.string().uuid(), revision: z.number().int().nonnegative(), generation: z.number().int().nonnegative() }).strict().optional(),
   workspace: workspaceStateSchema.optional(), scene: workspaceSceneSchema.optional(), externalResults: z.array(exploreContextSchema).max(6).optional(),
   explore: exploreContextSchema.optional(),
   catalogState: visitorCatalogStateSchema.optional(), catalogPlan: presentationPlanSchema.optional(), presentation: presentationSchema.optional(),

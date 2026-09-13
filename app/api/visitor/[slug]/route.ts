@@ -60,7 +60,7 @@ export async function POST(request: Request, { params }: Context) {
     if (request.signal.aborted) throw new AppError('Request cancelled.', 499);
     // Validate client state against the published snapshot before reserving an attempt.
     const preview = await visitorAccess(slug);
-    const catalog = await getPublishedKnowledgeSnapshot(preview.siteId, preview.content.knowledgeRevisionId);
+    const catalog = preview.content.catalogPublicationId ? null : await getPublishedKnowledgeSnapshot(preview.siteId, preview.content.knowledgeRevisionId);
     const media = await getPublishedMedia(preview.siteId, preview.content.mediaRevisionId);
     input.context = visitorRequestContext(preview.content, input, catalog ?? undefined, media ?? undefined);
     input.catalogState = input.context.catalogState;

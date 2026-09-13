@@ -16,6 +16,7 @@ export const commandSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('discard'), revision, messageId: z.string().uuid() }).strict(),
   z.object({ action: z.literal('publish'), revision }).strict(),
   z.object({ action: z.literal('undo'), revision }).strict(),
+  z.object({ action: z.literal('clear-history'), revision }).strict(),
   z.object({ action: z.literal('remove-file'), revision, fileId: z.string().uuid() }).strict(),
   z.object({ action: z.literal('use-logo'), revision, fileId: z.string().uuid() }).strict(),
 ]);
@@ -23,6 +24,7 @@ export const commandSchema = z.discriminatedUnion('action', [
 export function applyCommand(site: StoredSite, command: z.infer<typeof commandSchema>) {
   switch (command.action) {
     case 'save':
+      if (command.content.catalogPublicationId !== site.draft.catalogPublicationId) throw new AppError('Use Collection review to change this draft.');
       if (command.content.knowledgeRevisionId !== site.draft.knowledgeRevisionId) throw new AppError('Use Knowledge review to change the catalog in this draft.');
       if (command.content.mediaRevisionId !== site.draft.mediaRevisionId) throw new AppError('Use Photos review to change the media library in this draft.');
       // Source removals prune only source selections here; graph refs are checked by the host.
@@ -40,6 +42,7 @@ export function applyCommand(site: StoredSite, command: z.infer<typeof commandSc
       if (!proposal || proposal.status !== 'pending') throw new AppError('That proposal is no longer available.');
       if (command.action === 'apply') {
         if (proposal.baseContent !== JSON.stringify(site.draft)) throw new AppError('Your draft has changed since this proposal. Ask for a fresh edit.', 409);
+        if (proposal.content.catalogPublicationId !== site.draft.catalogPublicationId) throw new AppError('Use Collection review to change this draft.');
         if (proposal.content.mediaRevisionId !== site.draft.mediaRevisionId) throw new AppError('Use Photos review to change the media library in this draft.');
         updateDraft(site, pruneGreetingSources(proposal.content));
       }
@@ -47,6 +50,7 @@ export function applyCommand(site: StoredSite, command: z.infer<typeof commandSc
       break;
     }
     case 'publish': site.published = structuredClone(publicationContent(site.draft)); site.publishedAt = new Date().toISOString(); break;
+    case 'clear-history': site.history = []; break;
     case 'undo': {
       const previous = site.history.pop();
       if (!previous) throw new AppError('There are no draft changes to undo.');

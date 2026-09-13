@@ -54,7 +54,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
     if (!preview.availability.live) throw new AppError('Continuous voice is unavailable in the demo preview.', 503);
     await assertNoStripeTestPaidAi(preview.siteId);
     const [catalog, media] = await Promise.all([
-      getPublishedKnowledgeSnapshot(preview.siteId, preview.content.knowledgeRevisionId),
+      preview.content.catalogPublicationId ? Promise.resolve(null) : getPublishedKnowledgeSnapshot(preview.siteId, preview.content.knowledgeRevisionId),
       getPublishedMedia(preview.siteId, preview.content.mediaRevisionId),
     ]);
     const context = validateVisitorContext(input.context ?? (input.catalogState ? { catalogState: input.catalogState } : {}), preview.content, catalog ?? undefined, media ?? undefined);

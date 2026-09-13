@@ -65,6 +65,8 @@ export default function MediaPanel({ site, blocked, connected, upload, onBusyCha
     return () => controller.abort();
   }, [site.id, site.draft.knowledgeRevisionId]);
 
+  const websiteUploads = unorganized.filter(file => file.name.startsWith('website-'));
+
   function update(next: MediaLibrary) { setLibrary(next); setError(''); }
   function toggle(id: string) { setSelected(current => current.includes(id) ? current.filter(value => value !== id) : [...current, id]); }
   function addUploaded(result: PhotoUploadResult) {
@@ -186,7 +188,7 @@ export default function MediaPanel({ site, blocked, connected, upload, onBusyCha
     {error && <p className="form-error" role="alert">{error}</p>}
     {!library && !error && <LoadingIndicator label="Loading photos…"/>}
     {library && <>
-      {unorganized.length > 0 && <details className="media-existing" open={existing} onToggle={event => setExisting(event.currentTarget.open)}><summary>Add from uploaded files ({unorganized.length})</summary><div className="media-existing-grid">{unorganized.map(file => <button key={file.id} disabled={disabled} onClick={() => addUploaded({ site, uploaded: [{ fileId: file.id, name: file.name, relativePath: '' }] })}><Image unoptimized src={`/api/files/${site.id}/${file.id}?size=thumb`} width={96} height={72} alt=""/><span><Plus size={14}/>{file.name}</span></button>)}</div></details>}
+      {unorganized.length > 0 && <details className="media-existing" open={existing} onToggle={event => setExisting(event.currentTarget.open)}><summary>Add from uploaded files ({unorganized.length})</summary>{websiteUploads.length > 0 && <button type="button" className="button secondary" disabled={disabled || !library} onClick={() => addUploaded({ site, uploaded: websiteUploads.map(file => ({ fileId: file.id, name: file.name, relativePath: `Imported website photos/${file.name}` })) })}>Add {websiteUploads.length} website images to Photos</button>}<div className="media-existing-grid">{unorganized.map(file => <button key={file.id} disabled={disabled} onClick={() => addUploaded({ site, uploaded: [{ fileId: file.id, name: file.name, relativePath: '' }] })}><Image unoptimized src={`/api/files/${site.id}/${file.id}?size=thumb`} width={96} height={72} alt=""/><span><Plus size={14}/>{file.name}</span></button>)}</div></details>}
       {library.assets.length > 0 ? <>
         <nav className="media-albums" aria-label="Photo albums"><button disabled={disabled} aria-pressed={!album} onClick={() => { setAlbumId(''); setSelected([]); }}>All photos</button>{library.albums.map(item => <button key={item.id} disabled={disabled} aria-pressed={album?.id === item.id} onClick={() => { setAlbumId(item.id); setSelected([]); }}>{item.title}<span>{item.assetIds.length}</span></button>)}</nav>
         {album && <div className="media-album-fields"><label className="field">Album title<input value={album.title} maxLength={120} disabled={disabled} onChange={event => changeAlbum({ title: event.target.value })}/></label><label className="field">Album description<textarea value={album.description} rows={2} maxLength={1000} disabled={disabled} onChange={event => changeAlbum({ description: event.target.value })}/></label></div>}
