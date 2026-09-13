@@ -1,3 +1,4 @@
+import { visitorChatTask } from '@/lib/visitor-chat-task';
 import { ZodError } from 'zod';
 import { AppError } from '@/lib/errors';
 import { readLimitedBody } from '@/lib/http';
@@ -11,11 +12,12 @@ import { demoVisitorReply, MAX_PCM_BYTES } from '@/lib/visitor-model';
 import { getWelcomeMessage } from '@/lib/site-greeting';
 import { demoPresentation, presentationSummary } from '@/lib/site-presentation';
 import { getPublishedMedia } from '@/lib/media-store';
-import { getPublishedKnowledge } from '@/lib/knowledge-store';
+import { getPublishedKnowledgeSnapshot } from '@/lib/knowledge-store';
 import { recordPlatformEvent } from '@/lib/platform-events';
 import { planForIntent } from '@thevoice/platform-ui/interaction';
 import { meterDemoUsage } from '@/lib/billing-store';
 import { assertNoStripeTestPaidAi } from '@/lib/billing-ai-guard';
+import { planWorkspaceIntent, publishedWorkspace } from '@/lib/visitor-workspace';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,7 +29,7 @@ function guard(request: Request) {
   if (++globals.visitorTraffic.count > 120) throw new AppError('Too many requests. Please wait a minute.', 429);
 }
 async function respond(operation: () => Promise<object>) {
-  try { return Response.json(await operation(), { headers: { 'Cache-Control': 'no-store' } }); }
+  try { const result = await operation(); return result instanceof Response ? result : Response.json(result, { headers: { 'Cache-Control': 'no-store' } }); }
   catch (error) {
     const status = error instanceof AppError ? error.status : error instanceof ZodError ? 400 : 502;
     return Response.json({ error: error instanceof AppError ? error.message : error instanceof ZodError ? 'Check the message or recording and try again.' : 'The assistant is temporarily unavailable.',
@@ -58,7 +60,7 @@ export async function POST(request: Request, { params }: Context) {
     if (request.signal.aborted) throw new AppError('Request cancelled.', 499);
     // Validate client state against the published snapshot before reserving an attempt.
     const preview = await visitorAccess(slug);
-    const catalog = await getPublishedKnowledge(preview.siteId, preview.content.knowledgeRevisionId);
+    const catalog = await getPublishedKnowledgeSnapshot(preview.siteId, preview.content.knowledgeRevisionId);
     const media = await getPublishedMedia(preview.siteId, preview.content.mediaRevisionId);
     input.context = visitorRequestContext(preview.content, input, catalog ?? undefined, media ?? undefined);
     input.catalogState = input.context.catalogState;
@@ -66,11 +68,15 @@ export async function POST(request: Request, { params }: Context) {
     const { content, siteId, availability } = await visitorAccess(slug, { requestId: input.requestId, kind: input.kind === 'chat' ? 'chat' : 'voice', greeting: input.kind === 'greeting' });
     const observed = { surface: 'public' as const, requestId: input.requestId, snapshotId: content.knowledgeRevisionId, kind: input.kind === 'chat' ? 'chat' as const : 'voice' as const };
     try {
-      if (content.knowledgeRevisionId !== preview.content.knowledgeRevisionId || content.mediaRevisionId !== preview.content.mediaRevisionId) throw new AppError('The published catalog changed during this request. Reload to continue.', 409);
+      if (JSON.stringify(content) !== JSON.stringify(preview.content)) throw new AppError('The publication changed during this request. Reload to continue.', 409);
       await recordPlatformEvent(siteId, { ...observed, type: 'visitor_intent', status: 'started' }).catch(() => undefined);
       if (!availability.live) {
         await meterDemoUsage(siteId, input.kind === 'chat' ? 'chat' : 'voice', input.requestId);
-        if (input.kind === 'greeting') return { text: getWelcomeMessage(content), demo: true, availability };
+        if (input.kind === 'greeting') return { text: getWelcomeMessage(content, catalog), demo: true, availability };
+        if (input.context.workspace) {
+          const reply = planWorkspaceIntent(input.kind === 'chat' ? input.text : '', input.context.workspace, publishedWorkspace(content, catalog, media, input.context.externalResults), input.context.scene, catalog, media);
+          return { text: reply.message, ...(reply.batch ? { workspaceBatch: reply.batch } : {}), demo: true, availability };
+        }
         if (catalog) return { text: 'Explore the published items below.', catalogPlan: planForIntent(catalog, input.kind === 'chat' ? input.text : '', input.catalogState, media ?? undefined), demo: true, availability };
         const history = input.context.presentation
           ? [...input.history.slice(-7), { role: 'assistant' as const, text: presentationSummary(input.context.presentation, content, media).slice(0, 2000) }]
@@ -79,7 +85,12 @@ export async function POST(request: Request, { params }: Context) {
         return { text: input.kind === 'chat' ? presentationSummary(presentation, content, media) : demoVisitorReply(content, ''), presentation, demo: true, availability };
       }
       await recordPlatformEvent(siteId, { ...observed, type: 'provider_usage', status: 'reserved', count: 1 }).catch(() => undefined);
+      if (input.kind === 'chat' && input.context.workspace) return visitorChatTask({ slug, siteId, content, catalog: catalog ?? undefined, media: media ?? undefined, request: input, availability, signal: request.signal,
+        onUsage: usage => { void recordPlatformEvent(siteId, { ...observed, requestId: `${input.requestId}-${crypto.randomUUID()}`, type: 'provider_usage', status: 'confirmed', count: 1, usage }).catch(() => undefined); },
+      });
       const reply = input.kind === 'chat' ? await visitorTextReply(content, input, request.signal, catalog ?? undefined, media ?? undefined) : await visitorVoiceReply(content, input, request.signal, catalog ?? undefined, media ?? undefined);
+      if (request.signal.aborted) throw new AppError('Request cancelled.', 499);
+      if (JSON.stringify((await visitorAccess(slug)).content) !== JSON.stringify(content)) throw new AppError('The publication changed during this request. Reload to continue.', 409);
       await recordPlatformEvent(siteId, { ...observed, type: 'provider_usage', status: 'confirmed', count: 1, usage: reply.usage }).catch(() => undefined);
       const { usage, ...publicReply } = reply;
       void usage;

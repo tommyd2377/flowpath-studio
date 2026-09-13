@@ -50,31 +50,40 @@ for (const fixture of ['classes', 'bookstore']) test(`${fixture}: contextual car
   });
   const { site, catalog, ids, library } = await prepare(page, fixture);
   await page.goto(`/s/${site.slug}`);
-  const explorer = page.locator('.platform-explorer');
-  const firstCard = explorer.locator(`[data-entity-id="${catalog.entities[0].id}"]`);
+  await expect(page.getByRole('button', { name: 'Browse published content', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Browse published content', exact: true }).click();
+  const explorer = page.getByRole('region', { name: 'Browse approved information' });
+  const firstCard = explorer.getByRole('button', { name: `Open ${catalog.entities[0].name}`, exact: true });
   await expect(firstCard.locator('img')).toHaveCount(1);
   await expect(firstCard.locator('img')).toHaveAttribute('src', new RegExp(ids[0]));
-  await expect(explorer.locator(`[data-entity-id="${catalog.entities[1].id}"] img`)).toHaveAttribute('src', new RegExp(ids[1]));
-  await expect(explorer.locator(`[data-entity-id="${catalog.entities[2].id}"] img`)).toHaveCount(0);
+  await expect(explorer.getByRole('button', { name: `Open ${catalog.entities[1].name}`, exact: true }).locator('img')).toHaveAttribute('src', new RegExp(ids[1]));
+  await expect(explorer.getByRole('button', { name: `Open ${catalog.entities[2].name}`, exact: true }).locator('img')).toHaveCount(0);
   const imageLoaded = await firstCard.locator('img').evaluate(async (image: HTMLImageElement) => { await image.decode(); return image.naturalWidth > 0; });
   expect(imageLoaded).toBe(true);
+  await expect(firstCard).not.toContainText('Take a closer look');
   await page.screenshot({ path: info.outputPath(`${fixture}-photo-cards.png`), fullPage: true });
-  await explorer.getByRole('button', { name: catalog.entities[0].name, exact: true }).click();
-  await expect(explorer.locator('[data-platform-slot="detail"] .platform-entity-media img')).toHaveCount(2);
-  await expect(explorer.locator('[data-platform-slot="detail"]')).toContainText('Example photo');
+  await firstCard.click();
+  const focused = page.locator('[data-workspace-focused]:not([inert])');
+  await expect(focused.locator('img')).toHaveCount(2);
+  await expect(focused).toContainText('Example photo');
+  await focused.getByRole('button', { name: 'Back to workspace', exact: true }).click();
+  await expect(focused).toHaveCount(0);
 
   const input = page.getByRole('textbox', { name: 'What would you like to see?', exact: true });
   await input.fill(`Show me photos of ${catalog.entities[0].name}`);
   await page.getByRole('button', { name: 'Show me', exact: true }).click();
-  await expect(explorer.locator('[data-platform-slot="gallery"]')).toBeVisible();
-  await expect(explorer.locator('[data-platform-slot="gallery"] .platform-media-card')).toHaveCount(2);
-  await expect(explorer.locator('[data-platform-slot="gallery"]')).toContainText('Example photo');
-  await expect(explorer.locator('[data-platform-slot="gallery"] .platform-media-card img').nth(1)).toHaveAttribute('src', new RegExp(ids[2]));
+  const photos = page.locator('.platform-workspace-card[data-workspace-component="photo"]');
+  await expect(photos).toHaveCount(2);
+  await expect(photos.nth(1)).toContainText('Example photo');
+  await expect(photos.nth(1).locator('img')).toHaveAttribute('src', new RegExp(ids[2]));
+  await expect(page.locator('.platform-workspace-card[data-workspace-component="detail"]')).toHaveCount(1);
 
   await page.emulateMedia({ reducedMotion: 'reduce' }); await page.setViewportSize({ width: 390, height: 844 });
-  const open = explorer.getByRole('button', { name: `Open photo: ${fixture} illustrative example`, exact: true });
-  await open.click(); const viewer = page.locator('.platform-photo-detail');
+  const open = photos.nth(1).getByRole('button', { name: `Open ${fixture} illustrative example`, exact: true });
+  await open.click(); const viewer = focused;
   await expect(viewer).toBeVisible();
+  await expect(page.locator('.platform-workspace [data-voice-focus-open="true"]')).toHaveAttribute('data-voice-focus-kind', 'photo');
+  await expect(page.locator('.platform-workspace [data-voice-focus-open="true"]')).toHaveAttribute('data-voice-focus-id', ids[2]);
   await expect(viewer.locator('img')).toHaveAttribute('src', new RegExp(ids[2]));
   const displayedPhoto = await viewer.locator('img').evaluate(async (image: HTMLImageElement) => {
     await image.decode(); const bounds = image.getBoundingClientRect();
@@ -84,14 +93,15 @@ for (const fixture of ['classes', 'bookstore']) test(`${fixture}: contextual car
   expect(displayedPhoto.width).toBeGreaterThan(100);
   expect(displayedPhoto.height).toBeGreaterThan(100);
   await expect(viewer).toContainText('Example photo');
-  await expect.poll(() => viewer.evaluate(element => { const rect = element.getBoundingClientRect(); return rect.top >= -2 && rect.top < 200; })).toBe(true);
+  await expect.poll(() => viewer.evaluate(element => { const rect = element.getBoundingClientRect(); return rect.top >= -2 && rect.bottom <= innerHeight; })).toBe(true);
   await page.screenshot({ path: info.outputPath(`${fixture}-photo-mobile.png`) });
+  // An observation follows the settled browser acknowledgment, not an intent.
+  await expect.poll(async () => { const activity = await page.request.get(`/api/sites/${site.id}/events`); return (await activity.json()).activity.events.some((event: { kind?: string; assetId?: string; snapshotId?: string }) => event.kind === 'photo_view' && event.assetId === ids[2] && event.snapshotId === library.id); }).toBeTruthy();
   await page.keyboard.press('Escape'); await expect(viewer).not.toBeVisible(); await expect(open).toBeFocused();
   // Check during the retained exit, then after it settles. A desktop exit may
   // keep its old width, but must never enlarge the mobile page's scroll area.
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   await expect(explorer.locator('[inert]')).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
-  await expect.poll(async () => { const activity = await page.request.get(`/api/sites/${site.id}/events`); return (await activity.json()).activity.events.some((event: { kind?: string; assetId?: string; snapshotId?: string }) => event.kind === 'photo_view' && event.assetId === ids[2] && event.snapshotId === library.id); }).toBeTruthy();
   expect(external).toEqual([]); expect(errors).toEqual([]);
 });

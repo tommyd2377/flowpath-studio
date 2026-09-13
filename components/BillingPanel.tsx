@@ -1,4 +1,5 @@
 'use client';
+import LoadingIndicator from './LoadingIndicator';
 
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowUpRight, Check, CircleHelp, RefreshCw, ShieldCheck, Wallet } from 'lucide-react';
@@ -141,9 +142,9 @@ export default function BillingPanel({ siteId, siteName }: { siteId: string; sit
     {view && <div className={styles.banner}><ShieldCheck size={19} aria-hidden="true"/><div><strong>{stripeCheckout ? 'Stripe test billing — no real charges' : preview ? 'Billing preview — no real charges' : 'Checkout is not available yet'}</strong><p>{stripeCheckout ? 'Subscriptions and top-ups open Stripe test checkout. Credit is added after the payment is verified. Public hosting and custom-domain setup are separate.' : preview ? 'Try the plan and credit controls with a local test balance. Stripe checkout, public hosting and custom-domain setup are not connected.' : 'This launch offer is ready to preview. Real subscriptions and credit purchases will be available when Stripe payment processing is connected.'}</p></div></div>}
     <div className={styles.feedback}>
       {error && <p className={styles.error} role="alert">{error}</p>}
-      <p ref={status} tabIndex={-1} role="status" className={styles.status}>{pending ? pending === 'refresh' ? 'Refreshing balances…' : 'Saving your preview…' : notice}</p>
+      <p ref={status} tabIndex={-1} role="status" className={styles.status}>{pending ? <LoadingIndicator label={pending === 'refresh' ? 'Refreshing balances…' : 'Saving your preview…'}/> : notice}</p>
       {(!view && error || needsRefresh) && <button className="button secondary" disabled={!!pending} onClick={() => void refresh()}><RefreshCw size={15} aria-hidden="true"/>Refresh billing</button>}
-      {!view && !error && <p role="status">Loading your plan…</p>}
+      {!view && !error && <LoadingIndicator label="Loading your plan…"/>}
     </div>
     {view && offer && <>
       {savedCheckout && <section className={styles.card} aria-label="Pending Stripe checkout">

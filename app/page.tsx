@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
 export default async function Page({ searchParams }: { searchParams: Promise<{ [key: string]: string | string[] | undefined }> }) {
   const setup = getFirebaseSetupStatus();
   const host = (await headers()).get('host') || '';
-  if (setup.mode === 'demo' && !/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host)) return <main className="standalone-notice">This local prototype is not configured for public hosting.</main>;
+  if (setup.mode === 'demo' && !/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host)) return <main className="standalone-notice"><span className="sr-only">FlowPath Studio</span>This local FlowPath Studio prototype is not configured for public hosting.</main>;
   if (setup.mode === 'firebase' && !setup.enabled) return <SignIn/>;
   const user = await getWorkspaceUser();
   if (!user) redirect('/sign-in');

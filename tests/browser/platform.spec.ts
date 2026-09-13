@@ -11,8 +11,8 @@ const visitorPosts: string[] = [];
 let externalRequests: string[] = [];
 
 async function screenshot(page: Page, path: string) {
-  await page.waitForFunction(() => !document.querySelector('.platform-explorer [inert]')
-    && [...document.querySelectorAll('.platform-slot')].every(element => Number(getComputedStyle(element).opacity) >= 0.999)
+  await page.waitForFunction(() => !document.querySelector('.platform-slot[inert]')
+    && [...document.querySelectorAll('.platform-slot:not([inert])')].every(element => Number(getComputedStyle(element).opacity) >= 0.999)
     && document.getAnimations().every(animation => animation.effect?.getComputedTiming().iterations === Infinity || animation.playState !== 'running'));
   await page.screenshot({ path, fullPage: true });
 }
@@ -39,7 +39,7 @@ async function isolate(context: BrowserContext) {
 
 async function openWorkspace(page: Page) {
   await page.goto('/');
-  await expect(page.getByRole('navigation', { name: 'Workspace' })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Workspace', exact: true })).toBeVisible();
   if (siteId) {
     const picker = page.getByRole('combobox', { name: 'Current site', exact: true });
     if (await picker.inputValue() !== siteId) {
@@ -53,7 +53,7 @@ async function openWorkspace(page: Page) {
 }
 
 async function panel(page: Page, name: string) {
-  await page.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name, exact: true }).click();
+  await page.getByRole('navigation', { name: 'Workspace', exact: true }).getByRole('button', { name, exact: true }).click();
 }
 
 async function knowledgeAction(page: Page, name: string) {
@@ -79,25 +79,28 @@ async function publicCatalog(page: Page): Promise<KnowledgeCatalog> {
 }
 
 async function manualProof(page: Page, firstName: string, secondName: string) {
-  const explorer = page.locator('.platform-explorer');
+  const browse = page.getByRole('button', { name: 'Browse published content', exact: true });
+  if (await browse.count()) await browse.click();
   const before = visitorPosts.length;
-  await expect(explorer.getByRole('button', { name: 'Back', exact: true })).toHaveCount(0);
-  await expect(explorer.getByRole('region', { name: 'Refine the collection' })).toHaveCount(0);
-  await expect(explorer.locator('.platform-item')).toHaveCount(4);
-  await explorer.getByRole('button', { name: `Select ${firstName} for comparison`, exact: true }).click();
-  await explorer.getByRole('button', { name: `Select ${secondName} for comparison`, exact: true }).click();
-  await explorer.getByRole('button', { name: 'Compare selections', exact: true }).click();
-  await expect(explorer.getByRole('region', { name: 'Compare published attributes' })).toBeVisible();
-  await expect(explorer.getByRole('row', { name: /Price/ })).toContainText('$39.00');
-  await explorer.getByRole('table').getByRole('button', { name: firstName, exact: true }).click();
-  await expect(explorer.getByRole('region', { name: `Details of ${firstName}`, exact: true })).toBeVisible();
-  await explorer.getByRole('button', { name: 'Back', exact: true }).click();
-  await expect(explorer.getByRole('region', { name: 'Compare published attributes' })).toBeVisible();
-  await explorer.getByRole('button', { name: 'Back', exact: true }).click();
-  await expect(explorer.locator('.platform-item')).toHaveCount(4);
-  await expect(explorer.getByRole('region', { name: 'Selected for comparison' })).toContainText('2/6');
-  await explorer.getByRole('button', { name: 'All items', exact: true }).first().click();
-  await expect(explorer.getByRole('button', { name: 'Back', exact: true })).toHaveCount(0);
+  const directory = page.getByRole('region', {name:'Browse approved information'});
+  await expect(directory.locator('[data-workspace-content^="entity:"]')).toHaveCount(4);
+  for (const name of [firstName, secondName]) {
+    await directory.getByRole('button',{name:`Open ${name}`,exact:true}).click();
+    await page.getByRole('button',{name:'Back to workspace',exact:true}).click();
+    await expect(page.locator('[data-workspace-focused]')).toHaveCount(0);
+    await page.getByRole('button',{name:'Hide browser',exact:true}).click();
+    await page.locator('.platform-workspace-card').filter({has:page.getByRole('heading',{name,exact:true})}).getByRole('button',{name:'Select',exact:true}).click();
+    if (name === firstName) await page.getByRole('button',{name:'Browse published content',exact:true}).click();
+  }
+  await page.getByRole('button',{name:'Compare selected',exact:true}).click();
+  const comparison = page.locator('.platform-workspace-card[data-workspace-component="comparison"]');
+  await expect(comparison.getByRole('region',{name:'Compare published attributes'})).toBeVisible();
+  await expect(comparison.getByRole('row',{name:/Price/})).toContainText('$39.00');
+  await comparison.getByRole('table').getByRole('button',{name:firstName,exact:true}).click();
+  await expect(page.locator('[data-workspace-focused]:not([inert])')).toContainText(firstName);
+  await page.getByRole('button',{name:'Back to workspace',exact:true}).click();
+  await expect(page.locator('[data-workspace-focused]')).toHaveCount(0);
+  await expect(comparison).toBeVisible(); await expect(page.locator('.platform-workspace-card')).toHaveCount(3);
   expect(visitorPosts.length).toBe(before);
 }
 
@@ -141,16 +144,19 @@ test.describe.serial('offline publisher-to-visitor proof', () => {
     await expect(proposal.locator('.knowledge-item > summary', { hasText: 'Example Reposado Selected' })).toBeVisible();
     await screenshot(page, info.outputPath('publisher-correction.png'));
     await knowledgeAction(page, 'Apply to draft');
-    await expect(page.getByRole('region', { name: 'Website preview' }).locator('.platform-explorer')).toBeVisible();
+    const previewBrowse = page.getByRole('button', { name: 'Browse published content', exact: true });
+    if (await previewBrowse.count()) await previewBrowse.click();
+    await expect(page.getByRole('region', { name: 'Website preview' }).locator('.visitor-workspace')).toBeVisible();
     await page.getByRole('button', { name: 'Publish', exact: true }).click();
     const published = page.waitForResponse(response => response.url().endsWith(`/api/sites/${siteId}`) && response.request().method() === 'POST');
     await page.getByRole('button', { name: 'Publish locally', exact: true }).click();
     expect((await published).ok()).toBeTruthy();
     originalSnapshot = (await currentSite(page)).published.knowledgeRevisionId;
     await page.goto(`/s/${slug}`);
-    await expect(page.locator('.platform-explorer')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Browse published content', exact: true })).toBeVisible();
     await expect(page.getByRole('textbox', { name: 'What would you like to see?', exact: true })).toHaveCount(0);
-    await expect(page.getByRole('group', { name: 'Conversation mode' })).toHaveCount(0);
+    await expect(page.getByRole('group', { name: 'Conversation mode' }).getByRole('button', { name: 'Voice', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByRole('group', { name: 'Conversation mode' }).getByRole('button', { name: 'Chat', exact: true })).toBeEnabled();
     await manualProof(page, 'Example Blanco Reviewed', 'Example Reposado Selected');
     await screenshot(page, info.outputPath('published-filter-shortlist.png'));
     expect(await page.evaluate(() => (window as typeof window & { __microphoneAttempts: number }).__microphoneAttempts)).toBe(0);
@@ -168,9 +174,11 @@ test.describe.serial('offline publisher-to-visitor proof', () => {
     expect(site.draft.knowledgeRevisionId).not.toBe(originalSnapshot);
     expect(site.published.knowledgeRevisionId).toBe(originalSnapshot);
     await page.goto(`/s/${slug}`);
-    await expect(page.locator('.platform-explorer')).toHaveAttribute('data-platform-catalog', originalSnapshot);
-    await expect(page.getByRole('button', { name: 'Example Blanco Reviewed', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Draft-only Blanco', exact: true })).toHaveCount(0);
+    await manualProof(page, 'Example Blanco Reviewed', 'Example Reposado Selected');
+    await page.getByRole('button', { name: 'Browse published content', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Browse approved information' }).locator(`[data-workspace-content^="entity:${originalSnapshot}:"]`)).toHaveCount(4);
+    await expect(page.getByRole('button', { name: 'Open Example Blanco Reviewed', exact: true }).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Open Draft-only Blanco', exact: true })).toHaveCount(0);
     await screenshot(page, info.outputPath('published-snapshot-preserved.png'));
   });
 
@@ -202,25 +210,27 @@ test.describe.serial('offline publisher-to-visitor proof', () => {
       await route.fulfill({ json: { text: 'Offline mocked plan.', catalogPlan: plan, availability } }).catch(() => {});
     });
     await page.goto(`/s/${slug}`);
+    await expect(page.getByRole('button', { name: 'Browse published content', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Browse published content', exact: true }).click();
     const composer = page.getByRole('textbox', { name: 'What would you like to see?', exact: true });
     await expect(composer).toBeEnabled();
     for (const kind of ['malformed', 'stale'] as const) {
       scenario = kind;
       await composer.fill(`Test ${kind} response`);
       await page.getByRole('button', { name: 'Show me', exact: true }).click();
-      await expect(page.getByRole('alert').filter({ hasText: 'current view is still available' })).toBeVisible();
-      await expect(page.locator('.platform-item')).toHaveCount(4);
+      await expect(page.getByRole('alert').filter({ hasText: 'workspace remains available' })).toBeVisible();
+      await expect(page.locator('[data-workspace-content^="entity:"]')).toHaveCount(4);
     }
     scenario = 'late';
     const started = new Promise<void>(resolve => { observed = resolve; });
-    await composer.fill('Show first item');
+    await composer.fill('Test late response');
     await page.getByRole('button', { name: 'Show me', exact: true }).click();
     await started;
-    await page.locator('.platform-explorer').getByRole('button', { name: second.name, exact: true }).click();
-    await expect(page.getByRole('region', { name: `Details of ${second.name}`, exact: true })).toBeVisible();
+    await page.getByRole('region', { name: 'Browse approved information' }).getByRole('button', { name: `Open ${second.name}`, exact: true }).click();
+    await expect(page.locator('[data-workspace-focused]:not([inert])')).toContainText(second.name);
     release?.();
     await expect(page.getByRole('button', { name: 'Show me', exact: true })).toBeVisible();
-    await expect(page.getByRole('region', { name: `Details of ${first.name}`, exact: true })).toHaveCount(0);
+    await expect(page.locator('[data-workspace-focused]:not([inert])')).not.toContainText(first.name);
     await screenshot(page, info.outputPath('late-plan-preserves-manual-view.png'));
     expect(await page.evaluate(() => (window as typeof window & { __microphoneAttempts: number }).__microphoneAttempts)).toBe(0);
   });
@@ -230,16 +240,37 @@ test.describe.serial('offline publisher-to-visitor proof', () => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     const before = visitorPosts.length;
     await page.goto(`/s/${slug}`);
-    const explorer = page.locator('.platform-explorer');
-    await expect(explorer.locator('.platform-item')).toHaveCount(4);
-    await expect(explorer.getByRole('region', { name: 'Refine the collection' })).toHaveCount(0);
-    await explorer.locator('.platform-item-open').first().click();
-    await expect(explorer.locator('.platform-detail')).toBeVisible();
-    await explorer.getByRole('button', { name: 'Back', exact: true }).click();
-    await expect(explorer.locator('.platform-item')).toHaveCount(4);
+    await expect(page.getByRole('button', { name: 'Browse published content', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Browse published content', exact: true }).click();
+    const directory = page.getByRole('region', { name: 'Browse approved information' });
+    await expect(directory.locator('[data-workspace-content^="entity:"]')).toHaveCount(4);
+    await directory.locator('[data-workspace-content^="entity:"]').first().click();
+    await expect(page.locator('[data-workspace-focused]:not([inert])')).toBeVisible();
+    await page.getByRole('button', { name: 'Back to workspace', exact: true }).click();
+    await expect(directory.locator('[data-workspace-content^="entity:"]')).toHaveCount(4);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBeTruthy();
     expect(visitorPosts.length).toBe(before);
     await screenshot(page, info.outputPath('mobile-reduced-motion.png'));
+  });
+
+  test('intro-only opening keeps the catalog dormant and returns keyboard focus without a modal trap', async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 760 }); await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto(`/s/${slug}`);
+    await expect(page.locator('.site-opening')).toBeVisible(); await expect(page.locator('.platform-workspace-card')).toHaveCount(0);
+    const browse = page.getByRole('button',{name:'Browse published content',exact:true});
+    await browse.focus(); await browse.press('Enter');
+    const directory = page.getByRole('region',{name:'Browse approved information'});
+    await expect(directory.locator('[data-workspace-content^="entity:"]')).toHaveCount(4);
+    const opener = directory.locator('[data-workspace-content^="entity:"]').first();
+    const firstId = (await opener.getAttribute('data-workspace-content'))!.split(':').at(-1)!;
+    await opener.press('Enter');
+    const focused = page.locator('[data-workspace-focused]:not([inert])');
+    await expect(focused).toBeVisible(); await expect(focused.locator('[data-focus-surface]')).toHaveAttribute('data-focus-reference-id',firstId);
+    await expect(page.locator('[data-voice-focus-open="true"]')).toHaveAttribute('data-voice-focus-id',firstId);
+    await expect(directory).not.toHaveAttribute('inert','');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    const geometry = (await focused.boundingBox())!; expect(geometry.y).toBeGreaterThan(0); expect(geometry.y+geometry.height).toBeLessThanOrEqual(760);
+    await expect(focused.locator('.platform-disclosure-stack')).toHaveAttribute('data-disclosure-stack','true');
+    await page.keyboard.press('Escape'); await expect(focused).toHaveCount(0); await expect(opener).toBeFocused();
   });
 
   test('three structurally different galleries render and expose useful attribute and relationship views', async ({ page }, info) => {
@@ -259,6 +290,8 @@ test.describe.serial('offline publisher-to-visitor proof', () => {
     await page.getByRole('button', { name: 'The Imaginary Harbor — hardcover', exact: true }).click();
     await expect(page.locator('.platform-related')).toContainText('Written by');
     await screenshot(page, info.outputPath('gallery-bookstore-relationships.png'));
+    await page.getByRole('button', { name: 'Back to results', exact: true }).click();
+    await expect(page.locator('.platform-focus-surface')).toHaveCount(0);
     await page.getByRole('button', { name: 'Classes & experiences', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Example Learning Studio', exact: true })).toBeVisible();
     const request = page.getByRole('textbox', { name: 'What are you looking for?', exact: true });
@@ -326,6 +359,7 @@ test.describe.serial('offline publisher-to-visitor proof', () => {
     await opening.getByRole('textbox', { name: 'Introduction', exact: true }).fill('Browse our carefully selected examples.');
     await opening.getByLabel(/^Highlights/).fill('Start with our two featured examples.\nCompare the published details at your own pace.');
     await opening.getByRole('combobox', { name: 'Tone', exact: true }).selectOption('direct');
+    await opening.getByRole('combobox', { name: 'Opening visibility', exact: true }).selectOption('publisher-selected');
     await opening.getByRole('checkbox', { name: 'Draft-only Blanco', exact: true }).check();
     await opening.getByRole('checkbox', { name: 'Example Reposado Selected', exact: true }).check();
     await opening.getByRole('checkbox', { name: 'Example information page', exact: true }).check();
@@ -345,13 +379,13 @@ test.describe.serial('offline publisher-to-visitor proof', () => {
     await expect(page.locator('.site-opening-highlights')).toContainText('Start with our two featured examples.');
     await expect(page.locator('.site-opening h1')).toHaveText('Find your next favorite');
     await expect(page.locator('.site-opening > p')).toHaveText('Browse our carefully selected examples.');
-    await expect(page.locator('.platform-item')).toHaveCount(2);
-    await expect(page.locator('.platform-explorer').getByRole('link', { name: 'Example information page' })).toHaveAttribute('href', 'https://example.com/offline-catalog');
+    await expect(page.locator('.platform-workspace-card [data-workspace-content^="entity:"]')).toHaveCount(2);
+    await expect(page.locator('.visitor-workspace').getByRole('link', { name: 'Example information page' })).toHaveAttribute('href', 'https://example.com/offline-catalog');
     await screenshot(page, info.outputPath('configured-opening-and-publisher-link.png'));
     await expect(page.getByRole('button', { name: 'Explore the site', exact: true })).toHaveCount(0);
-    await expect(page.locator('.platform-explorer')).toBeVisible();
-    await page.locator('.platform-view-toolbar').getByRole('button', { name: 'All items', exact: true }).click();
-    await expect(page.locator('.platform-item')).toHaveCount(4);
+    await expect(page.locator('.visitor-workspace')).toBeVisible();
+    await page.getByRole('button', { name: 'Browse published content' }).click();
+    await expect(page.getByRole('region', { name: 'Browse approved information' }).locator('[data-workspace-content^="entity:"]')).toHaveCount(4);
     expect(visitorPosts.length).toBe(before);
   });
 });

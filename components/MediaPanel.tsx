@@ -1,4 +1,5 @@
 'use client';
+import LoadingIndicator from './LoadingIndicator';
 
 import Image from 'next/image';
 import { useEffect, useRef, useState } from 'react';
@@ -174,7 +175,8 @@ export default function MediaPanel({ site, blocked, connected, upload, onBusyCha
   }
   function editAsset(patch: Partial<Asset>) { if (library && editor) update({ ...library, assets: library.assets.map(asset => asset.id === editor.id ? { ...asset, ...patch } : asset) }); }
 
-  return <section className="media-panel" aria-label="Photo library">
+  return <section className="media-panel" aria-label="Photo library" aria-busy={busy}>
+    {busy && <LoadingIndicator label="Processing photos…"/>}
     <div className="section-heading"><div><span className="eyebrow">Show what makes it yours</span><h3>Photos</h3></div><span>{library?.assets.length ?? 0} / 100</span></div>
     <p>Bring in a few photos or an entire folder. Organize them together, then apply the collection to your draft.</p>
     <div className="media-upload-actions"><button className="button primary" disabled={disabled || !library} onClick={() => input.current?.click()}><Upload size={16}/>Add photos</button><button className="button secondary" disabled={disabled || !library} onClick={() => folder.current?.click()}><FolderOpen size={16}/>Add a folder</button></div>
@@ -182,7 +184,7 @@ export default function MediaPanel({ site, blocked, connected, upload, onBusyCha
     <input hidden aria-label="Upload a photo folder" ref={folder} type="file" multiple accept="image/png,image/jpeg,image/webp" onChange={event => { void addFiles(event.target.files); event.target.value = ''; }}/>
     <p className="field-help">PNG, JPEG, or WebP · up to 10 MB each. Folder names become editable albums. Uploads stay private. Selected photos appear on your site after you apply and publish.</p>
     {error && <p className="form-error" role="alert">{error}</p>}
-    {!library && !error && <p role="status">Loading photos…</p>}
+    {!library && !error && <LoadingIndicator label="Loading photos…"/>}
     {library && <>
       {unorganized.length > 0 && <details className="media-existing" open={existing} onToggle={event => setExisting(event.currentTarget.open)}><summary>Add from uploaded files ({unorganized.length})</summary><div className="media-existing-grid">{unorganized.map(file => <button key={file.id} disabled={disabled} onClick={() => addUploaded({ site, uploaded: [{ fileId: file.id, name: file.name, relativePath: '' }] })}><Image unoptimized src={`/api/files/${site.id}/${file.id}?size=thumb`} width={96} height={72} alt=""/><span><Plus size={14}/>{file.name}</span></button>)}</div></details>}
       {library.assets.length > 0 ? <>

@@ -57,16 +57,41 @@ test('image URLs come from hosted results, filtered by source, with stable IDs a
   assert.equal(result.images.length, 1); assert.equal(result.images[0].id, `image-${result.id}-1`);
   assert.equal(result.images[0].sourceUrl, 'https://www.nps.gov/');
   assert.equal(result.citations.length, 1); assert.equal(result.sources.length, 1);
-  assert.equal(parseExploreResponse(raw, 'Parks', 'web', settings).images.length, 0);
+  assert.equal(parseExploreResponse(raw, 'Parks', 'web', settings).images.length, 1);
   assert.throws(() => parseExploreResponse({ ...raw, status: 'incomplete' }, 'Parks', 'web', settings));
   assert.throws(() => parseExploreResponse({ ...raw, output: [raw.output[0], ...raw.output] }, 'Parks', 'web', settings));
   assert.throws(() => exploreResultSchema.parse({ ...result, images: [{ ...result.images[0], url: '/explore-demo.svg' }] }));
 });
 
+test('image searches explain when no displayable image survived validation', () => {
+  const raw = payload(); raw.output[0].results = [];
+  assert.equal(parseExploreResponse(raw, 'Park images', 'images', settings).answer, 'No displayable image results were returned. Try a more specific image search.');
+  raw.output[0].results = [{ type: 'image_result', image_url: 'https://images.nps.gov/view.jpg', source_website_url: 'https://outsider.org/', caption: 'Out of scope' }];
+  assert.equal(parseExploreResponse(raw, 'Park images', 'images', settings).answer, 'Image search found image results, but none matched this site’s allowed websites. Try a different search or widen the allowed websites.');
+});
+
+test('web source cards use citation titles and collapse tracking variants without merging distinct queries', () => {
+  const raw = payload();
+  raw.output[0].results = [];
+  raw.output[0].action!.sources = [
+    { type: 'url', title: '', url: 'https://www.nps.gov/history?page=1' },
+    { type: 'url', title: '', url: 'https://www.nps.gov/history?utm_source=search&page=1#overview' },
+    { type: 'url', title: 'Another page', url: 'https://www.nps.gov/history?page=2' },
+  ];
+  const part = raw.output[1].content![0];
+  part.annotations = [{ type: 'url_citation', title: 'History of the park', url: 'https://www.nps.gov/history?page=1&utm_source=openai', start_index: 19, end_index: part.text.length }];
+  const result = parseExploreResponse(raw, 'History', 'web', settings);
+  assert.deepEqual(result.sources, [
+    { title: 'History of the park', url: 'https://www.nps.gov/history?page=1' },
+    { title: 'Another page', url: 'https://www.nps.gov/history?page=2' },
+  ]);
+  assert.equal(result.citations[0].url, part.annotations[0].url, 'original citation links remain intact');
+});
+
 test('uncited synthesis is replaced by neutral source navigation', () => {
   const raw = payload(); raw.output[1].content![0].annotations = [];
   raw.output[1].content![0].text = 'Invented business promise';
-  assert.equal(parseExploreResponse(raw, 'Parks', 'web', settings).answer, 'Explore the sources below.');
+  assert.equal(parseExploreResponse(raw, 'Parks', 'web', settings).answer, 'Open an image to explore it, or visit its source.');
 });
 
 test('provider request is single-call, bounded and uses the existing OpenAI transport', async () => {
@@ -79,10 +104,15 @@ test('provider request is single-call, bounded and uses the existing OpenAI tran
       assert.equal(request.model, 'gpt-5.6-luna'); assert.equal(request.store, false);
       assert.equal(request.max_tool_calls, 1); assert.equal(request.tool_choice, 'required');
       assert.deepEqual(request.tools[0].filters.allowed_domains, ['nps.gov']);
-      assert.deepEqual(request.tools[0].search_content_types, ['image', 'text']);
+      assert.deepEqual(request.tools[0].search_content_types, ['image']);
+      assert.match(request.instructions, /Find actual web image results/);
+      assert.match(request.instructions, /not a text-only web search/);
+      assert.equal(request.input[0].content, 'West Point');
+      assert.ok(request.include.includes('web_search_call.results'));
+      assert.equal(request.tools[0].image_settings.max_results, 24);
       return Response.json(payload());
     };
-    await searchExplore('parks', 'images', settings, new AbortController().signal, { fetch: transport });
+    await searchExplore('West Point', 'images', settings, new AbortController().signal, { fetch: transport });
     assert.equal(calls, 1);
     await assert.rejects(searchExplore('parks', 'images', { ...settings, images: false }, new AbortController().signal, { fetch: transport }));
     assert.equal(calls, 1);
@@ -103,6 +133,9 @@ test('known map overviews need no provider call and never generate arbitrary emb
   assert.equal(demoExploreResult('unknown town', 'map').map, null);
   assert.equal(mapForQuery('Show us a map of France'), null);
   assert.equal(mapForQuery('Map of South America'), null);
+  for (const query of ['United States Military Academy', 'United States Holocaust Memorial Museum', 'World Trade Center', 'Earth City, Missouri']) {
+    assert.equal(mapForQuery(query), null, 'a place name must not resolve to a country or world preset');
+  }
 });
 
 test('search quotas share replay protection and do not consume chat or voice allowances', () => {

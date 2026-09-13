@@ -4,7 +4,13 @@ import { galleryAssetIds, validateMediaLibrary, type MediaLibrary } from './medi
 const id = z.string().min(1).max(80).regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/);
 const label = z.string().trim().min(1).max(160);
 const ids = (limit = 100) => z.array(id).max(limit);
+export const temporalDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?$/).refine(value => {
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value.slice(0, 10);
+}, 'Use a real calendar date or UTC timestamp.');
+const temporalDate = temporalDateSchema;
 export const catalogValueSchema = z.union([z.string().max(1000), z.number().finite(), z.boolean(), z.null()]);
+export const assertionQualifierSchema = z.object({ predicate: id, value: catalogValueSchema }).strict();
 export type CatalogValue = z.infer<typeof catalogValueSchema>;
 
 export const attributeDefinitionSchema = z.object({
@@ -15,10 +21,39 @@ export const attributeDefinitionSchema = z.object({
 export const catalogEntitySchema = z.object({
   id, kind: z.string().trim().min(1).max(64), name: label,
   summary: z.string().max(1600), attributes: z.record(id, catalogValueSchema),
+  /** Alternate labels are retained for deterministic cross-source identity matching. */
+  aliases: z.array(label).max(12).optional(),
+  /** Scoped source identifiers, not executable destinations or identity proof on their own. */
+  identifiers: z.array(z.object({ scheme: id, value: z.string().trim().min(1).max(200) }).strict()).max(8).optional(),
 }).strict();
 export const catalogCollectionSchema = z.object({ id, name: label, entityIds: ids() }).strict();
-export const catalogRelationshipSchema = z.object({ id, fromEntityId: id, toEntityId: id, label }).strict();
+export const catalogRelationshipSchema = z.object({ id, fromEntityId: id, toEntityId: id, label,
+  kind: z.string().trim().min(1).max(80).optional(), inverseLabel: label.optional(),
+  confidence: z.number().finite().min(0).max(1).optional(), validFrom: temporalDate.optional(), validTo: temporalDate.optional(),
+  observedAt: temporalDate.optional(), polarity: z.enum(['affirmed', 'denied']).optional(),
+  qualifiers: z.array(assertionQualifierSchema).max(8).optional(),
+}).strict().superRefine((relationship, context) => {
+  if (relationship.validFrom && relationship.validTo && Date.parse(relationship.validTo) < Date.parse(relationship.validFrom)) context.addIssue({ code: 'custom', message: 'Relationship validity ranges must be ordered.' });
+});
 export const catalogJobSchema = z.object({ id, label, attributeIds: ids(24) }).strict();
+export const catalogFieldSchema = z.string().regex(/^(?:name|kind|summary|(?:attributes|properties)\.[A-Za-z0-9][A-Za-z0-9_-]{0,79})$/);
+/**
+ * A bounded assertion about a catalog field. The entity's attributes remain the
+ * current approved projection; facts retain uncertainty and time without
+ * making the visitor runtime reason over unapproved source material.
+ */
+export const catalogFactSchema = z.object({ id, entityId: id, field: catalogFieldSchema, value: catalogValueSchema,
+  confidence: z.number().finite().min(0).max(1).optional(), validFrom: temporalDate.optional(), validTo: temporalDate.optional(),
+  observedAt: temporalDate.optional(), polarity: z.enum(['affirmed', 'denied']).optional(),
+  qualifiers: z.array(assertionQualifierSchema).max(8).optional(),
+  /** Singleton/domain predicates carry their own definition; they need not be card columns. */
+  definition: attributeDefinitionSchema.optional(),
+  /** Unevaluated expressions never supply a computed value. */
+  expression: z.string().min(1).max(1000).optional(),
+}).strict().superRefine((fact, context) => {
+  if (fact.validFrom && fact.validTo && Date.parse(fact.validTo) < Date.parse(fact.validFrom)) context.addIssue({ code: 'custom', message: 'Fact validity ranges must be ordered.' });
+  if (fact.expression && fact.value !== null) context.addIssue({ code: 'custom', message: 'An unevaluated expression must have an unknown value.' });
+});
 
 /** Navigation destinations are registered by the publisher/backend, never generated in a display plan. */
 export function isSafeCapabilityUrl(value: string): boolean {
@@ -45,6 +80,7 @@ export const knowledgeCatalogSchema = z.object({
   entities: z.array(catalogEntitySchema).min(1).max(100),
   collections: z.array(catalogCollectionSchema).max(24),
   relationships: z.array(catalogRelationshipSchema).max(200),
+  facts: z.array(catalogFactSchema).max(2000).optional(),
   jobs: z.array(catalogJobSchema).max(12),
   capabilities: z.array(capabilityDefinitionSchema).max(20).optional(),
 }).strict();
@@ -53,6 +89,7 @@ export type AttributeDefinition = z.infer<typeof attributeDefinitionSchema>;
 export type CatalogEntity = z.infer<typeof catalogEntitySchema>;
 export type CatalogCollection = z.infer<typeof catalogCollectionSchema>;
 export type CatalogRelationship = z.infer<typeof catalogRelationshipSchema>;
+export type CatalogFact = z.infer<typeof catalogFactSchema>;
 export type CatalogJob = z.infer<typeof catalogJobSchema>;
 export type CapabilityDefinition = z.infer<typeof capabilityDefinitionSchema>;
 export type KnowledgeCatalog = z.infer<typeof knowledgeCatalogSchema>;
@@ -70,7 +107,7 @@ export const presentationComponentSchema = z.object({
 }).strict();
 export const semanticTransitionSchema = z.object({
   type: z.enum(['none', 'focus', 'reveal', 'replace', 'expand', 'workspace-shift', 'restore']),
-  targetComponentId: z.enum(componentTypes).optional(),
+  targetComponentId: id.optional(),
 }).strict();
 export const catalogFilterSchema = z.object({
   attributeId: id, operator: z.enum(['eq', 'contains', 'lt', 'lte', 'gt', 'gte']), value: catalogValueSchema,
@@ -78,6 +115,7 @@ export const catalogFilterSchema = z.object({
 export type CatalogFilter = z.infer<typeof catalogFilterSchema>;
 export const presentationPlanSchema = z.object({
   schemaVersion: z.literal(1), snapshotId: id,
+  identityMode: z.literal('instances').optional(),
   operation: z.enum(['discover', 'understand', 'narrow', 'compare', 'decide', 'act']),
   components: z.array(presentationComponentSchema).min(1).max(8), transition: semanticTransitionSchema,
   stateUpdate: z.object({ filters: z.array(catalogFilterSchema).max(24) }).strict().optional(),
@@ -150,7 +188,7 @@ export function validateCatalog(input: unknown): KnowledgeCatalog {
   boundPayload(input);
   const catalog = knowledgeCatalogSchema.parse(input);
   for (const [name, items] of Object.entries({ attributes: catalog.attributes, entities: catalog.entities,
-    collections: catalog.collections, relationships: catalog.relationships, jobs: catalog.jobs, capabilities: catalog.capabilities ?? [] })) {
+    collections: catalog.collections, relationships: catalog.relationships, facts: catalog.facts ?? [], jobs: catalog.jobs, capabilities: catalog.capabilities ?? [] })) {
     unique(items.map(item => item.id), name);
   }
   const attributes = new Map(catalog.attributes.map(attribute => [attribute.id, attribute]));
@@ -163,6 +201,10 @@ export function validateCatalog(input: unknown): KnowledgeCatalog {
   }
   for (const entity of catalog.entities) {
     references(Object.keys(entity.attributes), attributeIds, `attributes of ${entity.id}`);
+    if (entity.aliases) {
+      const normalized = entity.aliases.map(alias => alias.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim());
+      if (new Set(normalized).size !== normalized.length || normalized.includes(entity.name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim())) invalid(`Aliases of ${entity.id} must be distinct from its name.`);
+    }
     for (const [attributeId, value] of Object.entries(entity.attributes)) {
       if (!isCatalogValue(value, attributes.get(attributeId)!)) invalid(`Invalid typed value for ${attributeId} on ${entity.id}.`);
     }
@@ -171,6 +213,18 @@ export function validateCatalog(input: unknown): KnowledgeCatalog {
   for (const relationship of catalog.relationships) {
     if (!entityIds.has(relationship.fromEntityId) || !entityIds.has(relationship.toEntityId)) invalid('Unknown relationship entity.');
     if (relationship.fromEntityId === relationship.toEntityId) invalid('A relationship requires two distinct entities.');
+  }
+  for (const fact of catalog.facts ?? []) {
+    if (!entityIds.has(fact.entityId)) invalid('Unknown fact entity.');
+    const attribute = fact.field.startsWith('attributes.') ? attributes.get(fact.field.slice(11)) : fact.definition;
+    if (fact.field.startsWith('attributes.') && !attribute) invalid('Fact references an unavailable attribute.');
+    if (fact.field.startsWith('properties.')) {
+      if (!attribute || attribute.id !== fact.field.slice(11)) invalid('A domain fact requires its matching typed definition.');
+      if (attribute.type === 'money' && !attribute.currency || attribute.type !== 'money' && attribute.currency || attribute.unit && !['number', 'money'].includes(attribute.type)) invalid('Invalid domain fact unit or currency.');
+    } else if (fact.definition) invalid('Inline definitions belong only to domain properties.');
+    if (attribute && !isCatalogValue(fact.value, attribute)) invalid('Fact has an invalid typed value.');
+    if (!attribute && fact.field !== 'name' && fact.field !== 'kind' && fact.field !== 'summary') invalid('Fact field is unsupported.');
+    if (!attribute && fact.value !== null && typeof fact.value !== 'string') invalid('Entity facts require text for name, type and summary.');
   }
   for (const job of catalog.jobs) references(job.attributeIds, attributeIds, `job ${job.id}`);
   for (const capability of catalog.capabilities ?? []) references(capability.entityIds, entityIds, `capability ${capability.id}`);
@@ -191,7 +245,7 @@ export function validatePlan(input: unknown, catalog: KnowledgeCatalog, snapshot
   const library = media ? validateMediaLibrary(media, { entityIds: [...entityIds] }) : null;
   unique(plan.components.map(component => component.id), 'presentation components');
   for (const component of plan.components) {
-    if (component.id !== component.type) invalid('Component identity must equal its registered type.');
+    if (!plan.identityMode && component.id !== component.type) invalid('Component identity must equal its registered type in a legacy plan.');
     if (!(componentVariants[component.type] as readonly string[]).includes(component.variant)) invalid('Unsupported component variant.');
     references(component.entityIds, entityIds, 'component entities');
     references(component.attributeIds, attributeIds, 'component attributes');

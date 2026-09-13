@@ -1,4 +1,5 @@
 'use client';
+import LoadingIndicator from './LoadingIndicator';
 
 import { useEffect, useState } from 'react';
 import type { KnowledgeCatalog } from '@thevoice/platform-ui/contracts';
@@ -32,5 +33,5 @@ export default function KnowledgePreview({ content, siteId }: { content: SiteCon
       .catch(error => { if (!controller.signal.aborted) setMediaError(error.message); });
     return () => controller.abort();
   }, [mediaRevision, siteId]);
-  return <>{revisionId && !catalog && <p className="knowledge-preview-status" role="status">{error || 'Loading knowledge preview…'}</p>}{mediaRevision && !media && <p className="knowledge-preview-status" role="status">{mediaError || 'Loading photo preview…'}</p>}<SiteExperience siteId={siteId} content={content} catalog={catalog} media={media}/></>;
+  return <>{revisionId && !catalog && <p className="knowledge-preview-status" role="status">{error || <LoadingIndicator label="Loading knowledge preview…"/>}</p>}{mediaRevision && !media && <p className="knowledge-preview-status" role="status">{mediaError || <LoadingIndicator label="Loading photo preview…"/>}</p>}<SiteExperience siteId={siteId} content={content} catalog={catalog} media={media}/></>;
 }

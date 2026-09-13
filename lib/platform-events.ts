@@ -19,7 +19,7 @@ export const platformEventInputSchema = z.object({
   kind: z.enum(['txt', 'pdf', 'csv', 'text', 'chat', 'voice', 'display', 'selection', 'link_click', 'photo_view']).optional(),
   durationMs: z.number().int().min(0).max(3600000).optional(),
   count: z.number().int().min(0).max(10000).optional(),
-  usage: z.object({ inputTokens: z.number().int().min(0).max(10000000).optional(), outputTokens: z.number().int().min(0).max(10000000).optional(), totalTokens: z.number().int().min(0).max(20000000).optional() }).strict().refine(usage => Object.keys(usage).length > 0, 'Token usage requires a measured value.').optional(),
+  usage: z.object({ voiceSeconds: z.number().nonnegative().max(3600).optional(), finalized: z.boolean().optional(), inputTokens: z.number().int().min(0).max(10000000).optional(), outputTokens: z.number().int().min(0).max(10000000).optional(), totalTokens: z.number().int().min(0).max(20000000).optional() }).strict().refine(usage => Object.keys(usage).length > 0, 'Token usage requires a measured value.').optional(),
 }).strict();
 export type PlatformEventInput = z.infer<typeof platformEventInputSchema>;
 export const platformEventBatchSchema = z.object({ events: z.array(platformEventInputSchema).min(1).max(10) }).strict();

@@ -196,3 +196,29 @@ html[data-theme="dark"] .media-files-heading p{color:#a6b4cf}
 .voice-template .platform-items:not([data-variant=list]) .platform-item[data-layout=feature] .platform-item-attributes { margin-top: 16px !important; padding: 10px 0; }
 
 .voice-template .platform-items:not([data-variant=list]) .platform-item-open h4 { font: 400 18px/1.4 Arial, Helvetica, sans-serif; }
+
+/* Give the full sidebar mark a lighter Studio label without touching the existing logo asset. */
+.studio-brand::after { content: 'Studio'; display: block; align-self: center; width: 200px; color: #8f9be0; font: 300 12px/1.2 Arial, Helvetica, sans-serif; letter-spacing: 2px; text-align: center; }
+@media(max-width:1050px) { .studio-brand::after { display: none; } }
+
+/* FlowPath Studio brand surfaces keep the product mark present without changing the editor's interaction model. */
+.studio-brand{position:relative;flex-direction:column;align-items:flex-start;gap:0;padding:0 8px 22px}
+.studio-brand .brand-logo-full{display:block;width:200px;height:133px;margin:-22px 0 -21px;object-fit:contain;object-position:center}
+.studio-brand .brand-logo-square,.studio-brand .brand-name{display:none}
+.auth-brand-full{display:block;width:200px;height:133px;margin:-22px 0 -22px;object-fit:contain;object-position:center}
+.auth-brand-square,.auth-brand-name{display:none}
+.standalone-notice{text-align:center}
+.standalone-brand{display:flex;align-items:center;justify-content:center;width:220px;height:96px;margin:0 auto 14px;overflow:hidden}
+.standalone-brand img{display:block;width:220px;height:147px;margin:-25px 0 -26px;object-fit:contain;opacity:.92}
+@media(max-width:1050px){
+  .studio-brand{flex-direction:row;align-items:center;gap:10px;padding:0 8px 25px}
+  .studio-brand .brand-logo-full{display:none}
+  .studio-brand .brand-logo-square{display:block;width:40px;height:40px;object-fit:contain}
+  .studio-brand .brand-name{display:block;color:#f5f6fb;font-size:17px;font-weight:500;letter-spacing:-.35px}
+}
+@media(max-width:600px){
+  .auth-brand-full{display:none}
+  .auth-brand-square{display:block;width:36px;height:36px;object-fit:contain}
+  .auth-brand-name{display:inline;font-size:18px;font-weight:500;letter-spacing:-.55px}
+}
+.knowledge-identity-matches,.knowledge-facts{border-top:1px solid var(--studio-border,#e1e6f0);padding:14px 0;margin-top:14px}.knowledge-identity-match,.knowledge-fact{display:flex;flex-direction:column;gap:4px;padding:9px 0;border-bottom:1px solid var(--studio-border,#edf0f7);font-size:12px}.knowledge-identity-match span,.knowledge-fact span{color:var(--studio-muted,#727e92);line-height:1.5}.knowledge-identity-matches summary,.knowledge-facts summary{cursor:pointer;font-size:12px;color:var(--studio-text,#485777)}

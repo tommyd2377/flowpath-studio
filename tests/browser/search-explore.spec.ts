@@ -4,7 +4,7 @@ import type { Site } from '../../lib/site-model';
 import { DEFAULT_EXPLORE_SETTINGS, demoExploreResult } from '../../lib/explore-model';
 
 const origin = 'http://127.0.0.1:3225';
-async function createSite(page: Page, enabled = true, mode: 'chat' | 'voice' = 'chat') {
+async function createSite(page: Page, enabled = true, mode: 'chat' | 'voice' = 'chat', annotations = false) {
   async function post(path: string, data: unknown) {
     const response = await page.request.post(path, { headers: { Origin: origin }, data });
     expect(response.ok(), await response.text()).toBeTruthy(); return response.json();
@@ -12,7 +12,7 @@ async function createSite(page: Page, enabled = true, mode: 'chat' | 'voice' = '
   let site: Site = (await post('/api/sites', { name: 'Search explorer', slug: `explore-${randomUUID().slice(0, 12)}`, kind: 'photographer' })).site;
   site = (await post(`/api/sites/${site.id}`, { action: 'save', revision: site.revision, content: { ...site.draft,
     visitor: { enabled: true, mode, voiceTier: 'standard', chatDailyLimit: 25, voiceDailyLimit: 5 },
-    explore: { ...DEFAULT_EXPLORE_SETTINGS, enabled },
+    explore: { ...DEFAULT_EXPLORE_SETTINGS, enabled, annotations },
   } })).site;
   return (await post(`/api/sites/${site.id}`, { action: 'publish', revision: site.revision })).site as Site;
 }
@@ -35,6 +35,8 @@ test('published images, keyboard viewer, typed follow-up, maps and history work 
   const search = page.getByRole('region', { name: 'Search results', exact: true });
   await expect(search).toHaveCount(0);
   await expect(page.getByRole('textbox', { name: 'Search the web, images or maps' })).toHaveCount(0);
+  await ask(page, 'Show Wedding stories');
+  await expect(page.locator('.platform-workspace-card[data-workspace-component="information"]')).toHaveCount(1);
   await ask(page, 'Find park images online');
   const image = search.getByRole('button', { name: /Open image 2:/ });
   await expect(image).toBeVisible(); await image.click();
@@ -49,7 +51,7 @@ test('published images, keyboard viewer, typed follow-up, maps and history work 
   await expect(search.getByRole('heading', { name: 'United States overview' })).toBeVisible();
   await search.getByRole('button', { name: 'Zoom in', exact: true }).click();
   await expect(search.getByText('Overview zoom 4', { exact: true })).toBeVisible(); expect(requests).toBe(2);
-  await search.getByRole('button', { name: 'Back', exact: true }).click(); await expect(image).toBeVisible();
+  await search.filter({ has: page.getByRole('heading', { name: 'United States overview', exact: true }) }).getByRole('button', { name: 'Back', exact: true }).click(); await expect(image).toBeVisible();
   await page.screenshot({ path: info.outputPath('search-images-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(image).toBeVisible();
@@ -57,6 +59,7 @@ test('published images, keyboard viewer, typed follow-up, maps and history work 
   await page.screenshot({ path: info.outputPath('search-images-mobile.png'), fullPage: true });
   await search.getByRole('button', { name: 'Back', exact: true }).click();
   await expect(search).toHaveCount(0);
+  await expect(page.locator('.platform-workspace-card[data-workspace-component="information"]')).toHaveCount(1);
   expect(external).toEqual([]); expect(errors).toEqual([]);
 });
 
@@ -104,7 +107,8 @@ test('cancelled and failed searches retain the accepted view; map embeds use a f
   await page.getByRole('button', { name: 'Stop request', exact: true }).click(); release();
   await expect(search.getByRole('heading', { name: 'Search the web: First search' })).toBeVisible();
   await page.unroute(`**/api/visitor/${site.slug}/explore`);
-  const result = { ...demoExploreResult('United States map', 'map'), demo: false };
+  const result = { ...demoExploreResult('Map of the United States', 'map'), demo: false };
+  expect(result.map).not.toBeNull();
   await page.route(`**/api/visitor/${site.slug}/explore`, route => route.fulfill({ json: { result } }));
   await page.route('https://www.openstreetmap.org/export/embed.html?**', route => route.fulfill({ contentType: 'text/html', body: '<html><body style="background:#dce6e1;font-family:sans-serif"><p>Mocked interactive map transport</p></body></html>' }));
   await ask(page, 'United States map');
@@ -114,7 +118,7 @@ test('cancelled and failed searches retain the accepted view; map embeds use a f
   await page.screenshot({ path: info.outputPath('search-map-mocked.png'), fullPage: true });
 });
 
-declare global { interface Window { __searchVoice: { emit: (event: unknown) => void; controls: { navigationAck?: { id: string; status: string }; context?: { explore?: { selectedImageId: string | null } } }[] } } }
+declare global { interface Window { __searchVoice: { emit: (event: unknown) => void; controls: { interactionRevision?: number; navigationAck?: { id: string; status: string }; context?: { explore?: { selectedImageId: string | null }; scene?: { highlightedReference?: { kind: string; id: string } | null } } }[] } } }
 test('voice applies search views and image commands through acknowledged navigation', async ({ page }) => {
   const site = await createSite(page, true, 'voice');
   await page.addInitScript(() => {
@@ -122,13 +126,13 @@ test('voice applies search views and image commands through acknowledged navigat
     let sink: ReadableStreamDefaultController<Uint8Array> | undefined;
     let revision = 0;
     window.__searchVoice = { controls: [], emit(event) { const frame = event as { revision?: number }; revision = Math.max(revision, frame.revision ?? 0); sink?.enqueue(new TextEncoder().encode(`${JSON.stringify(event)}\n`)); } };
-    class Track { enabled = true; onended: (() => void) | null = null; stop() {} }
+    class Track { clone() { return new Track(); } enabled = true; onended: (() => void) | null = null; stop() {} }
     class Stream { track = new Track(); getTracks() { return [this.track]; } getAudioTracks() { return [this.track]; } }
-    class AudioNode { fftSize = 2048; gain = { value: 1 }; connect() { return this; } getFloatTimeDomainData(array: Float32Array) { array.fill(0); } }
+    class AudioNode { fftSize = 2048; gain = { value: 1 }; connect() { return this; } getByteTimeDomainData(array: Uint8Array) { array.fill(128); } getFloatTimeDomainData(array: Float32Array) { array.fill(0); } }
     class Context { state = 'running'; destination = new AudioNode(); resume() { return Promise.resolve(); } close() { this.state = 'closed'; return Promise.resolve(); } createAnalyser() { return new AudioNode(); } createGain() { return new AudioNode(); } createMediaStreamSource() { return new AudioNode(); } }
     class Audio { srcObject: unknown; muted = false; setAttribute() {} play() { return Promise.resolve(); } pause() {} }
     class Peer {
-      connectionState = 'new'; ontrack?: (event: unknown) => void; onconnectionstatechange?: () => void;
+      iceGatheringState = 'complete'; connectionState = 'new'; ontrack?: (event: unknown) => void; onconnectionstatechange?: () => void;
       addTrack() {} createOffer() { return Promise.resolve({ type: 'offer', sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n' }); }
       setLocalDescription() { return Promise.resolve(); }
       setRemoteDescription() { this.connectionState = 'connected'; this.onconnectionstatechange?.(); this.ontrack?.({ streams: [new Stream()] }); return Promise.resolve(); }
@@ -163,13 +167,152 @@ test('voice applies search views and image commands through acknowledged navigat
   }, result);
   await expect(page.getByRole('button', { name: /Open image 2:/ })).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.__searchVoice.controls.some(update => update.navigationAck?.id === 'search-view' && update.navigationAck.status === 'applied'))).toBe(true);
+  await expect(page.locator('[data-workspace-focused]:not([inert])')).toHaveAttribute('data-workspace-transition', 'settled');
   await page.evaluate(id => {
-    window.__searchVoice.emit({ type: 'response_started', revision: 2, interactionRevision: 0 });
-    window.__searchVoice.emit({ type: 'navigation', id: 'open-photo', revision: 2, interactionRevision: 0, target: { kind: 'explore', command: { kind: 'open_image', id } } });
+    const interactionRevision = window.__searchVoice.controls.at(-1)?.interactionRevision ?? 0;
+    window.__searchVoice.emit({ type: 'response_started', revision: 2, interactionRevision });
+    window.__searchVoice.emit({ type: 'navigation', id: 'open-photo', revision: 2, interactionRevision, target: { kind: 'explore', command: { kind: 'open_image', id } } });
   }, result.images[1].id);
   await expect(page.getByRole('dialog', { name: 'Web image viewer' })).toContainText('Landscape illustration 2');
   await expect.poll(() => page.evaluate(() => window.__searchVoice.controls.some(update => update.navigationAck?.id === 'open-photo' && update.navigationAck.status === 'applied'))).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.__searchVoice.controls.at(-1)?.context?.explore?.selectedImageId)).toBe(result.images[1].id);
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog', { name: 'Web image viewer' })).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => window.__searchVoice.controls.at(-1)?.context?.explore?.selectedImageId)).toBe(null);
+  const beforeReturn = await page.evaluate(() => window.__searchVoice.controls.at(-1)?.interactionRevision ?? 0);
+  await page.getByRole('button', { name: 'Back to workspace', exact: true }).click();
+  await expect(page.locator('[data-workspace-focused]:not([inert])')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => window.__searchVoice.controls.at(-1)?.interactionRevision ?? 0)).toBeGreaterThan(beforeReturn);
+  const beforeBrowse = await page.evaluate(() => window.__searchVoice.controls.at(-1)?.interactionRevision ?? 0);
+  await page.getByRole('button', { name: 'Browse published content' }).click();
+  await expect.poll(() => page.evaluate(() => window.__searchVoice.controls.at(-1)?.interactionRevision ?? 0)).toBeGreaterThan(beforeBrowse);
+  const tile = page.getByRole('region', { name: 'Browse approved information' }).getByRole('button', { name: 'Open Wedding stories', exact: true });
+  await tile.scrollIntoViewIfNeeded();
+  async function navigate(kind: 'spotlight' | 'open', revision: number) {
+    const id = `${kind}-${revision}`;
+    await page.evaluate(({ kind, revision, id }) => {
+      const interactionRevision = window.__searchVoice.controls.at(-1)?.interactionRevision ?? 0;
+      window.__searchVoice.emit({ type: 'response_started', revision, interactionRevision });
+      window.__searchVoice.emit({ type: 'navigation', id, revision, interactionRevision, target: { kind, id: 'source:section:weddings' } });
+    }, { kind, revision, id });
+    await expect.poll(() => page.evaluate(id => window.__searchVoice.controls.find(update => update.navigationAck?.id === id)?.navigationAck?.status, id)).toBe('applied');
+  }
+  await navigate('spotlight', 3); await expect(tile).toHaveAttribute('data-workspace-highlighted');
+  await expect(page.locator('[data-workspace-focused]:not([inert])')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => window.__searchVoice.controls.at(-1)?.context?.scene?.highlightedReference?.id)).toBe('section:weddings');
+  await navigate('open', 4);
+  const focused = page.locator('[data-workspace-focused]:not([inert])');
+  await expect(focused).toHaveAttribute('data-workspace-transition', 'settled');
+  await navigate('spotlight', 5); await expect(focused).toHaveAttribute('data-workspace-highlighted');
+  await page.evaluate(() => {
+    const interactionRevision = window.__searchVoice.controls.at(-1)?.interactionRevision ?? 0;
+    window.__searchVoice.emit({ type: 'response_started', revision: 6, interactionRevision });
+    window.__searchVoice.emit({ type: 'navigation', id: 'voice-home', revision: 6, interactionRevision, target: { kind: 'home' } });
+  });
+  await expect.poll(() => page.evaluate(() => window.__searchVoice.controls.find(update => update.navigationAck?.id === 'voice-home')?.navigationAck?.status)).toBe('applied');
+  await expect(focused).toHaveCount(0); await expect(page.locator('.platform-workspace-card')).toHaveCount(0);
+  await expect(page.locator('[data-published-website]')).toHaveCount(0);
   await page.getByRole('button', { name: 'End voice conversation', exact: true }).click();
+});
+
+test('24-image grids use stable labels and expand web sources without another provider request', async ({ page }, info) => {
+  const site = await createSite(page);
+  const images = demoExploreResult('Current visual references', 'images');
+  images.images = Array.from({ length: 24 }, (_, index) => ({ ...images.images[0], id: `synthetic-image-${index + 1}`, caption: `Synthetic visual reference ${index + 1}` }));
+  let calls = 0;
+  await page.route(`**/api/visitor/${site.slug}/explore`, async route => { calls++; await route.fulfill({ json: { result: images } }); });
+  await page.goto(`/s/${site.slug}`); await ask(page, 'Find visual reference images online');
+  const focus = page.locator('[data-workspace-focused]:not([inert])');
+  await expect(focus).toHaveAttribute('data-workspace-transition', 'settled');
+  await expect(focus.locator('[data-external-item^="synthetic-image-"]')).toHaveCount(24);
+  await ask(page, 'Expand B4');
+  const viewer = page.getByRole('dialog', { name: 'Web image viewer' });
+  await expect(viewer).toContainText('Synthetic visual reference 8');
+  await page.keyboard.press('Escape'); await expect(viewer).toHaveCount(0);
+  await ask(page, 'Expand image 23'); await expect(viewer).toContainText('Synthetic visual reference 23');
+  await viewer.getByRole('img').click(); await expect(viewer).toHaveCount(0); expect(calls).toBe(1);
+  await ask(page, 'Expand image 23'); await expect(viewer).toContainText('Synthetic visual reference 23');
+  await page.mouse.click(8, 8); await expect(viewer).toHaveCount(0); expect(calls).toBe(1);
+  await page.screenshot({ path: info.outputPath('web-images-labeled-desktop.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(focus.locator('[data-external-item="synthetic-image-8"]')).toHaveAttribute('data-external-label', 'B4');
+  await expect.poll(async () => { const box = await focus.boundingBox(); return !!box && box.x >= 0 && box.x + box.width <= 390.5; }).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath('web-images-labeled-mobile.png') });
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await expect.poll(async () => (await focus.boundingBox())?.width).toBe(900);
+  await page.unroute(`**/api/visitor/${site.slug}/explore`);
+  const web = { ...images, id: randomUUID(), kind: 'web' as const, query: 'Cited web sources', images: images.images.slice(0, 4), sources: Array.from({ length: 8 }, (_, i) => ({ title: `Reference source ${i + 1}`, url: `https://www.nps.gov/reference-${i + 1}` })) };
+  await page.route(`**/api/visitor/${site.slug}/explore`, async route => { calls++; await route.fulfill({ json: { result: web } }); });
+  await ask(page, 'Search the web for reference sources'); await expect(focus).toContainText('Cited web sources');
+  await ask(page, 'Expand result B4');
+  const source = page.getByRole('dialog', { name: 'Web result viewer' });
+  await expect(source.getByRole('heading', { name: 'Reference source 8' })).toBeVisible(); expect(calls).toBe(2);
+  await source.getByRole('heading', { name: 'Reference source 8' }).click(); await expect(source).toHaveCount(0);
+  await expect(focus.locator('.platform-external')).toHaveCSS('opacity', '1');
+  await expect(focus.locator('.platform-external-sources article').first()).toHaveCSS('opacity', '1');
+  await page.screenshot({ path: info.outputPath('web-sources-desktop.png') });
+});
+
+test('whole-card clicks, background return, hover, highlight and optional web additions preserve published content', async ({ page }, info) => {
+  const site = await createSite(page, true, 'chat', true);
+  await page.goto(`/s/${site.slug}`);
+  await page.getByRole('button', { name: 'Browse published content' }).click();
+  const tile = page.getByRole('region', { name: 'Browse approved information' }).getByRole('button', { name: 'Open Wedding stories', exact: true });
+  await tile.hover(); await expect(tile).not.toHaveCSS('box-shadow', 'none');
+  await ask(page, 'Highlight Wedding stories'); await expect(tile).toHaveAttribute('data-workspace-highlighted');
+  const focus = page.locator('[data-workspace-focused]:not([inert])');
+  await expect(focus).toHaveCount(0);
+  await tile.click(); await expect(focus).toHaveAttribute('data-workspace-transition', 'settled');
+  await focus.locator('.platform-workspace-copy > p').click(); await expect(focus).toHaveCount(0);
+  await page.getByRole('button', { name: 'Hide browser', exact: true }).click();
+  // The retained card can be opened from its body, not only its header button.
+  const card = page.locator('.platform-workspace-card[data-workspace-component="information"]');
+  await card.locator('.platform-workspace-copy > p').click(); await expect(focus).toHaveAttribute('data-workspace-transition', 'settled');
+  const bounds = await focus.boundingBox();
+  await page.mouse.click(Math.max(4, bounds!.x - 12), bounds!.y + 100); await expect(focus).toHaveCount(0);
+  await ask(page, 'Pull up Wedding stories'); await expect(focus).toHaveAttribute('data-workspace-transition', 'settled');
+  let calls = 0; page.on('request', request => { if (request.method() === 'POST' && request.url().endsWith('/explore')) calls++; });
+  await focus.getByRole('button', { name: 'Add web context', exact: true }).click();
+  const additions = focus.getByRole('region', { name: 'Web additions' });
+  await expect(additions.getByRole('button', { name: 'Remove web context' })).toBeVisible();
+  await expect(additions).toContainText('Synthetic preview'); expect(calls).toBe(1);
+  await expect(additions.locator('.platform-external')).toHaveCSS('opacity', '1');
+  await expect(additions.locator('.platform-external-sources article').first()).toHaveCSS('opacity', '1');
+  expect((await (await page.request.get(`/api/sites/${site.id}`)).json()).site.published).toEqual(site.published);
+  await page.screenshot({ path: info.outputPath('card-web-addition.png') });
+  await additions.getByRole('button', { name: 'Remove web context' }).click(); await expect(additions.getByRole('region', { name: 'Search results' })).toHaveCount(0);
+  let release!: () => void;
+  await page.route(`**/api/visitor/${site.slug}/explore`, async route => {
+    const { annotationTarget } = route.request().postDataJSON();
+    await new Promise<void>(resolve => { release = resolve; });
+    await route.fulfill({ json: { result: { ...demoExploreResult('Late addition', 'web'), annotationTarget } } }).catch(() => undefined);
+  });
+  await focus.getByRole('button', { name: 'Add web context' }).click();
+  await expect.poll(() => Boolean(release)).toBe(true);
+  await expect(additions).toHaveAttribute('aria-busy', 'true');
+  await expect(additions.getByRole('status')).toHaveText('Finding web context…');
+  await expect(additions.getByRole('button', { name: 'Add web context' })).toBeDisabled();
+  await expect(page.getByRole('status').filter({ hasText: /^Searching the web…$/ })).toBeVisible();
+  await focus.getByRole('button', { name: 'Close Wedding stories', exact: true }).click(); release();
+  await expect(focus).toHaveCount(0); await expect(card).toHaveCount(0);
+  await expect(page.getByText('Late addition', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('status').filter({ hasText: /^Searching the web…$/ })).toHaveCount(0);
+});
+
+test('explicit clear releases retained external results without restoring stale search context', async ({ page }) => {
+  const site = await createSite(page); await page.goto(`/s/${site.slug}`);
+  for (let index = 0; index < 6; index++) {
+    await ask(page, `Search the web: Synthetic set ${index + 1}`);
+    await expect(page.locator('.platform-workspace-card[data-workspace-component="external"]')).toHaveCount(index + 1);
+  }
+  await page.getByRole('button', { name: 'Close External web results', exact: true }).first().click();
+  await expect(page.locator('.platform-workspace-card[data-workspace-component="external"]')).toHaveCount(5);
+  await ask(page, 'Search the web: Replacement for closed result');
+  await expect(page.locator('.platform-workspace-card[data-workspace-component="external"]')).toHaveCount(6);
+  await page.getByRole('button', { name: 'Clear workspace', exact: true }).click();
+  await expect(page.locator('.platform-workspace-card')).toHaveCount(0);
+  await ask(page, 'Search the web: Fresh results');
+  await expect(page.locator('.platform-workspace-card[data-workspace-component="external"]')).toHaveCount(1);
+  await expect(page.getByRole('heading', { name: 'Search the web: Fresh results', exact: true })).toBeVisible();
 });

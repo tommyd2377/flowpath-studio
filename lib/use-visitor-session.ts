@@ -1,19 +1,27 @@
 'use client';
 
+import { createStartupAudioGuard, needsStartupAudioGuard, monitorLiveAudio, waitForIce } from './gpt-live/browser';
+import { createLiveIdleTimer, DEFAULT_LIVE_IDLE_TIMEOUT_MS, liveIdleMessage } from './gpt-live/idle';
+import type { LiveAudioState } from './gpt-live/protocol';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { VoicePhase } from '@/components/Waveform';
 import type { VisitorAvailability } from './visitor-model';
 import type { VisitorContext, VisitorHistory, VisitorControlCapability, VisitorControlUpdate } from './visitor-realtime-context';
 import { readVisitorRealtimeEvents, visitorAvailabilitySchema, VISITOR_SESSION_MS, type VisitorRealtimeEvent } from './visitor-realtime';
+import { visitorDiagnostic, diagnosticError, type VisitorDiagnostic } from './visitor-diagnostics';
 
 type Options = {
   slug: string; context: VisitorContext; history: VisitorHistory; getContext: () => VisitorContext;
   onAvailability: (value: VisitorAvailability) => void;
-  onPlan: (event: Extract<VisitorRealtimeEvent, { type: 'plan' }>) => void;
+  onPlan: (event: Extract<VisitorRealtimeEvent, { type: 'plan' }>, signal: AbortSignal) => void | Promise<void>;
   onTranscript: (event: Extract<VisitorRealtimeEvent, { type: 'transcript' }>) => void;
-  onNavigate: (event: Extract<VisitorRealtimeEvent, { type: 'navigation' }>, signal: AbortSignal) => Promise<'applied' | 'unavailable'>;
+  onGreetingProgress?: (text: string) => void;
+  onGreetingInterrupted?: () => void;
+  onAudioActivity?: (state: LiveAudioState) => void;
+  onNavigate: (event: Extract<VisitorRealtimeEvent, { type: 'navigation' }>, signal: AbortSignal) => Promise<'applied' | 'unavailable' | 'failed' | 'cancelled'>;
 };
 type Session = {
+  traceId: string; startedAt: number; diagnosticStage: VisitorDiagnostic['stage'];
   controller: AbortController; peer?: RTCPeerConnection; stream?: MediaStream; context?: AudioContext; audio?: HTMLAudioElement;
   setupTimer?: ReturnType<typeof setTimeout>; sessionTimer?: ReturnType<typeof setTimeout>; disconnectTimer?: ReturnType<typeof setTimeout>;
   updateTimer?: ReturnType<typeof setTimeout>; updateAt?: number; ackTimer?: ReturnType<typeof setTimeout>; frames: Set<number>;
@@ -21,8 +29,12 @@ type Session = {
   speaking: boolean; thinking: boolean; userSpeaking: boolean; revision: number; planRevision: number; playingId?: string;
   interactionRevision: number; appliedInteractionRevision: number; viewRevision: number; seq: number; ackSeq: number; control?: VisitorControlCapability;
   snapshot: VisitorContext; lastSent: string; sending: boolean; dirty: boolean;
-  sent: Map<number, { interactionRevision: number; ready: boolean; time: number }>; transcripts: Set<string>;
-  navigation?: AbortController; navigationAck?: VisitorControlUpdate['navigationAck'];
+  sent: Map<number, { interactionRevision: number; ready: boolean; time: number }>; transcripts: Map<string, string>;
+  navigation?: AbortController; navigationAck?: VisitorControlUpdate['navigationAck']; planAck?: VisitorControlUpdate['planAck'];
+  protectOpening?: boolean;
+  startup?: ReturnType<typeof createStartupAudioGuard>; stopMonitor?: () => void; audioState?: LiveAudioState; resumeAfterQuiet?: boolean;
+  idle?: ReturnType<typeof createLiveIdleTimer>;
+  finish?: () => void;
   queue: (immediate?: boolean) => void;
 };
 
@@ -40,39 +52,52 @@ export function useVisitorSession() {
   const stop = useCallback((notice = '') => {
     const session = current.current; current.current = null;
     if (session) {
-      // Cancelling this body terminates the server/provider session as well.
-      session.end(); session.controller.abort(); session.navigation?.abort();
+      visitorDiagnostic({ traceId: session.traceId, channel: 'browser', stage: 'stop', status: 'cancelled', durationMs: performance.now() - session.startedAt });
+      // Ask the server to finalize while media stays negotiated. Mute immediately.
+      session.startup?.setInputEnabled(false);
+      if (session.audio) session.audio.muted = true;
+      session.end(); session.navigation?.abort();
+      const timeout = setTimeout(() => session.finish?.(), 6500);
+      let released = false;
+      session.finish = () => {
+      if (released) return;
+      released = true;
+      clearTimeout(timeout); session.controller.abort(); session.stopMonitor?.(); session.startup?.dispose();
       clearTimeout(session.setupTimer); clearTimeout(session.sessionTimer); clearTimeout(session.disconnectTimer);
       clearTimeout(session.updateTimer); session.updateTimer = undefined; session.updateAt = undefined;
       clearTimeout(session.ackTimer); session.frames.forEach(cancelAnimationFrame);
+      session.idle?.close();
       if (session.peer) { session.peer.ontrack = null; session.peer.onconnectionstatechange = null; session.peer.close(); }
       session.stream?.getTracks().forEach(track => { track.onended = null; track.stop(); });
       if (session.audio) { session.audio.pause(); session.audio.srcObject = null; }
       if (session.context?.state !== 'closed') void session.context?.close().catch(() => undefined);
+      };
+      if (!session.sdpReady) session.finish();
     }
     setActivity(''); setActive(false); setUpdating(false); setPhase('idle'); setMessage(notice); setInputAnalyser(null); setOutputAnalyser(null);
   }, []);
   const fail = useCallback((session: Session, notice: string) => {
     if (current.current !== session) return;
+    visitorDiagnostic({ traceId: session.traceId, channel: 'browser', stage: session.diagnosticStage, status: 'failed', durationMs: performance.now() - session.startedAt, revision: session.revision, interactionRevision: session.interactionRevision });
     stop(notice); setPhase('error');
   }, [stop]);
   useEffect(() => {
     const hide = () => { if (document.hidden) stop(); };
     const leave = () => stop();
-    const key = (event: KeyboardEvent) => { if (event.key === 'Escape' && current.current) { event.preventDefault(); stop(); } };
+    const key = (event: KeyboardEvent) => { if (event.key === 'Escape' && !event.defaultPrevented && current.current) { event.preventDefault(); stop(); } };
     document.addEventListener('visibilitychange', hide); window.addEventListener('pagehide', leave); window.addEventListener('keydown', key);
     return () => { document.removeEventListener('visibilitychange', hide); window.removeEventListener('pagehide', leave); window.removeEventListener('keydown', key); stop(); };
   }, [stop]);
 
-  const updateContext = useCallback((context: VisitorContext) => {
+  const updateContext = useCallback((context: VisitorContext, immediate = false) => {
     const session = current.current; if (!session) return;
-    session.snapshot = context; session.queue();
+    session.snapshot = context; session.queue(immediate);
   }, []);
   const manualInterrupt = useCallback(() => {
     const session = current.current; if (!session) return;
     setActivity(''); session.interactionRevision++; session.navigation?.abort();
     // Keep the peer open; pause input until the owner accepts the manual context.
-    session.stream?.getAudioTracks().forEach(track => { track.enabled = false; });
+    session.startup?.setInputEnabled(false); session.resumeAfterQuiet = true;
     setUpdating(true); setPhase('connecting');
     if (session.audio) session.audio.muted = true;
     session.playingId = undefined; session.speaking = false; session.thinking = false;
@@ -86,18 +111,32 @@ export function useVisitorSession() {
       setPhase('error'); setMessage('This browser cannot start a voice conversation. You can still browse this site.'); return;
     }
     const session: Session = {
+      traceId: crypto.randomUUID(), startedAt: performance.now(), diagnosticStage: 'start',
       controller: new AbortController(), frames: new Set(), sdpReady: false, serverReady: false, connected: false, remoteAttached: false, audioPrepared: false, readyAcknowledged: false, readySent: false, lastPostedAt: 0, end() {},
       speaking: false, thinking: false, userSpeaking: false, revision: 0, planRevision: -1, interactionRevision: 0, appliedInteractionRevision: -1, viewRevision: 0,
-      seq: 0, ackSeq: 0, snapshot: options.context, lastSent: '', sending: false, dirty: false, sent: new Map(), transcripts: new Set(), queue() {},
+      seq: 0, ackSeq: 0, snapshot: options.context, lastSent: '', sending: false, dirty: false, sent: new Map(), transcripts: new Map(), queue() {},
     };
     current.current = session; setActive(true); setPhase('connecting');
+    const diagnostic = (stage: VisitorDiagnostic['stage'], status: VisitorDiagnostic['status'] = 'succeeded') => {
+      session.diagnosticStage = stage;
+      visitorDiagnostic({ traceId: session.traceId, channel: 'browser', stage, status, durationMs: performance.now() - session.startedAt, revision: session.revision, interactionRevision: session.interactionRevision });
+    };
+    diagnostic('start', 'started');
+    let reportedReady = false, reportedAudio = false;
     const alive = () => current.current === session;
+    session.idle = createLiveIdleTimer({
+      timeoutMs: 0,
+      onIdle: () => { if (alive()) stop(liveIdleMessage(session.idle?.timeoutMs ?? DEFAULT_LIVE_IDLE_TIMEOUT_MS)); },
+    });
     const ready = () => session.sdpReady && session.serverReady && session.connected && session.remoteAttached && session.audioPrepared;
     const restingPhase = () => {
       if (!alive()) return;
       if (!ready() || !session.readyAcknowledged || session.appliedInteractionRevision !== session.interactionRevision) { setPhase('connecting'); return; }
       clearTimeout(session.setupTimer);
+      if (!reportedReady) { reportedReady = true; diagnostic('ready'); }
       setPhase(session.userSpeaking ? 'listening' : session.speaking ? 'speaking' : session.thinking ? 'thinking' : 'listening');
+      session.idle?.observeBusy(session.thinking);
+      session.idle?.start();
     };
     const afterLayout = (callback: () => void) => {
       const frame = requestAnimationFrame(() => { session.frames.delete(frame); if (!alive()) return;
@@ -135,10 +174,11 @@ export function useVisitorSession() {
       session.dirty = false;
       try {
         session.snapshot = options.getContext();
-        const payload = { interactionRevision: session.interactionRevision, viewRevision: session.viewRevision, ready: session.readySent || ready(), context: session.snapshot, ...(session.navigationAck ? { navigationAck: session.navigationAck } : {}) };
+        const payload = { audio: session.audioState, interactionRevision: session.interactionRevision, viewRevision: session.viewRevision, ready: session.readySent || ready(), context: session.snapshot, ...(session.navigationAck ? { navigationAck: session.navigationAck } : {}), ...(session.planAck ? { planAck: session.planAck } : {}) };
         const serialized = JSON.stringify(payload);
         if (serialized === session.lastSent) return;
         if (session.seq >= 299) throw new Error('This conversation has reached its view-update limit. You can continue by typing.');
+        if (payload.ready && !session.readySent && session.protectOpening) session.startup?.start();
         const seq = ++session.seq; session.lastSent = serialized; session.sending = true; session.lastPostedAt = Date.now(); session.readySent = payload.ready;
         session.sent.set(seq, { interactionRevision: payload.interactionRevision, ready: payload.ready, time: Date.now() }); armAckDeadline();
         const response = await fetch(`/api/visitor/${encodeURIComponent(options.slug)}/session/control`, {
@@ -159,12 +199,16 @@ export function useVisitorSession() {
       const context = new AudioContext(); session.context = context;
       session.setupTimer = setTimeout(() => fail(session, 'The voice connection took too long. Tap the wave to try again.'), 30_000);
       await context.resume(); session.audioPrepared = context.state === 'running';
+      diagnostic('audio');
       if (!session.audioPrepared) throw new Error('Audio could not start. You can continue by typing.');
       if (!alive()) return;
+      diagnostic('microphone', 'started');
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       if (!alive()) { stream.getTracks().forEach(track => track.stop()); return; }
+      diagnostic('microphone');
       session.stream = stream;
-      stream.getAudioTracks().forEach(track => { track.enabled = false; });
+      session.startup = createStartupAudioGuard({ stream, enabled: needsStartupAudioGuard(navigator) });
+      session.startup.setInputEnabled(false);
       for (const track of stream.getAudioTracks()) track.onended = () => fail(session, 'Microphone access ended. Tap the wave to start again.');
       const input = context.createAnalyser(); input.fftSize = 2048;
       context.createMediaStreamSource(stream).connect(input); setInputAnalyser(input);
@@ -177,6 +221,20 @@ export function useVisitorSession() {
         const output = context.createAnalyser(); output.fftSize = 2048;
         const silent = context.createGain(); silent.gain.value = 0;
         context.createMediaStreamSource(remote).connect(output); output.connect(silent).connect(context.destination); setOutputAnalyser(output);
+        session.stopMonitor = monitorLiveAudio(input, output, state => {
+          if (!alive()) return;
+          const firstPlayback = state.outputActive && !session.audioState?.outputActive;
+          state = { ...state, inputActive: state.inputActive && Boolean(session.startup?.tracks.some(track => track.enabled)) };
+          session.audioState = state;
+          session.idle?.observeAudio(state);
+          if (firstPlayback) { session.startup?.playbackStarted(); if (!reportedAudio) { reportedAudio = true; diagnostic('first_audio'); } }
+          if (!state.outputActive && session.resumeAfterQuiet && session.appliedInteractionRevision === session.interactionRevision) { session.resumeAfterQuiet = false; audio.muted = false; }
+          session.speaking = state.outputActive && !audio.muted;
+          session.userSpeaking = state.inputActive;
+          options.onAudioActivity?.({ inputActive: state.inputActive, outputActive: session.speaking });
+          if (state.outputActive) { session.thinking = false; setActivity(''); }
+          restingPhase(); session.queue();
+        });
         session.remoteAttached = true; readinessChanged();
         void audio.play().catch(() => fail(session, 'Audio playback was blocked. You can continue by typing.'));
       };
@@ -189,12 +247,14 @@ export function useVisitorSession() {
         } else if (session.connected) { clearTimeout(session.disconnectTimer); readinessChanged(); }
       };
       // No provider data channel: visitors cannot send session/tool commands.
-      stream.getAudioTracks().forEach(track => peer.addTrack(track, stream));
+      session.startup.tracks.forEach(track => peer.addTrack(track, stream));
       const offer = await peer.createOffer(); if (!alive()) return;
       await peer.setLocalDescription(offer); if (!alive()) return;
+      await waitForIce(peer, session.controller.signal); if (!alive()) return;
+      diagnostic('offer'); diagnostic('session_request', 'started');
       const response = await fetch(`/api/visitor/${encodeURIComponent(options.slug)}/session`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, signal: session.controller.signal,
-        body: JSON.stringify({ requestId: crypto.randomUUID(), sdp: offer.sdp, context: options.getContext(), history: options.history }),
+        body: JSON.stringify({ requestId: session.traceId, sdp: peer.localDescription?.sdp ?? offer.sdp, context: options.getContext(), history: options.history }),
       });
       if (!alive()) { await response.body?.cancel().catch(() => undefined); return; }
       if (!response.ok) {
@@ -204,21 +264,22 @@ export function useVisitorSession() {
       }
       if (!response.body || !response.headers.get('content-type')?.includes('application/x-ndjson')) throw new Error('The voice connection returned an invalid response.');
       await readVisitorRealtimeEvents(response.body, session.controller.signal, async event => {
-        if (!alive()) return;
-        if (event.type === 'session') {
+        if (!alive()) { if (event.type === 'ended' || event.type === 'error') session.finish?.(); return; }
+          if (event.type === 'session') {
           if (session.sdpReady) throw new Error('The voice connection returned a duplicate session.');
-          options.onAvailability(event.availability); session.control = event.control;
+          options.onAvailability(event.availability); session.control = event.control; session.protectOpening = event.protectOpening;
+          session.idle?.setTimeoutMs(event.idleTimeoutMs ?? DEFAULT_LIVE_IDLE_TIMEOUT_MS);
           const remaining = Math.min(VISITOR_SESSION_MS, event.expiresAt - Date.now());
           if (remaining <= 0) throw new Error('This voice session expired. Tap the wave to start again.');
           session.sessionTimer = setTimeout(() => { if (alive()) stop('Conversation paused. Tap the wave to start again.'); }, remaining);
           await peer.setRemoteDescription({ type: 'answer', sdp: event.sdp }); if (!alive()) return;
-          session.sdpReady = true; readinessChanged(); return;
+          session.sdpReady = true; diagnostic('session_answer'); readinessChanged(); return;
         }
-        if (event.type === 'error') { if (event.availability) options.onAvailability(event.availability); fail(session, event.message); return; }
-        if (event.type === 'ended') { stop(event.message); return; }
+        if (event.type === 'error') { if (event.availability) options.onAvailability(event.availability); fail(session, event.message); session.finish?.(); return; }
+        if (event.type === 'ended') { stop(event.message); session.finish?.(); return; }
         if (event.type === 'ping') return;
         if (!session.sdpReady) throw new Error('The voice connection was not ready.');
-        if (event.type === 'ready') { session.serverReady = true; readinessChanged(); }
+        if (event.type === 'ready') { diagnostic('control_ready'); session.serverReady = true; readinessChanged(); }
         else if (event.type === 'control_applied') {
           if (event.seq <= session.ackSeq) return;
           const sent = session.sent.get(event.seq);
@@ -229,24 +290,34 @@ export function useVisitorSession() {
           session.appliedInteractionRevision = event.interactionRevision;
           if (event.ready) session.readyAcknowledged = true;
           if (event.ready && event.interactionRevision === session.interactionRevision) {
-            stream.getAudioTracks().forEach(track => { track.enabled = true; }); setUpdating(false);
+            session.startup?.setInputEnabled(true); setUpdating(false);
+            if (!session.audioState?.outputActive && session.resumeAfterQuiet) { session.resumeAfterQuiet = false; audio.muted = false; }
           }
           restingPhase();
         } else if (event.type === 'availability') options.onAvailability(event.availability);
         else if (event.type === 'transcript') {
           // An accepted user utterance remains history even if they then browse.
-          if (session.transcripts.has(event.id) || event.role === 'assistant' && event.interactionRevision !== session.interactionRevision) return;
-          session.transcripts.add(event.id); options.onTranscript(event);
+          if (session.transcripts.get(event.id) === event.text || event.role === 'assistant' && event.interactionRevision !== session.interactionRevision) return;
+          session.transcripts.set(event.id, event.text); options.onTranscript(event);
+        } else if (event.type === 'greeting_progress') {
+          if (event.revision === 0 && session.revision === 0 && event.interactionRevision === session.interactionRevision) options.onGreetingProgress?.(event.text);
         } else if (event.type === 'activity') {
           if (event.revision === session.revision && event.interactionRevision === session.interactionRevision) setActivity(event.activity === 'images' ? 'Finding images…' : event.activity === 'map' ? 'Preparing the map…' : 'Searching the web…');
         } else if (event.type === 'speech_started') {
           if (session.appliedInteractionRevision !== session.interactionRevision) return;
-          session.revision = Math.max(session.revision, event.revision); session.navigation?.abort();
+          options.onGreetingInterrupted?.();
+          session.revision = Math.max(session.revision, event.revision); session.navigation?.abort(); setMessage('');
           setActivity(''); session.userSpeaking = true; session.speaking = false; session.thinking = false; session.playingId = undefined; restingPhase();
         } else if (event.type === 'speech_stopped') { if (session.appliedInteractionRevision !== session.interactionRevision) return; session.userSpeaking = false; session.thinking = true; restingPhase(); }
+        else if (event.type === 'backend_idle') { if (event.interactionRevision === session.interactionRevision && event.revision === session.revision) { session.thinking = false; restingPhase(); } }
+        else if (event.type === 'task_error') {
+          if (event.interactionRevision !== session.interactionRevision || event.revision !== session.revision) return;
+          setActivity(''); setMessage(event.message); session.thinking = false; restingPhase();
+          visitorDiagnostic({ traceId: session.traceId, channel: 'browser', stage: 'backend', status: 'failed', sessionElapsedMs: performance.now() - session.startedAt, revision: session.revision, interactionRevision: session.interactionRevision, ...diagnosticError(new Error(event.message)) });
+        }
         else if (event.type === 'response_started') {
           if (event.interactionRevision !== session.interactionRevision || event.revision < session.revision) return;
-          setActivity(''); session.revision = event.revision; session.thinking = true; restingPhase();
+          setActivity(''); setMessage(''); session.revision = event.revision; session.thinking = true; restingPhase();
         } else if (event.type === 'playback_started') {
           if (event.interactionRevision !== session.interactionRevision) return;
           setActivity(''); audio.muted = false; session.playingId = event.responseId; session.speaking = true; session.thinking = false; restingPhase();
@@ -255,13 +326,27 @@ export function useVisitorSession() {
           session.playingId = undefined; session.speaking = false; session.thinking = false; restingPhase();
         } else if (event.type === 'plan') {
           if (event.interactionRevision !== session.interactionRevision || event.revision !== session.revision || event.revision <= session.planRevision) return;
-          options.onPlan(event); session.planRevision = event.revision; session.viewRevision = event.revision; session.queue(true);
+          // Do not block the event reader during motion: speech, quotas and End
+          // must still be processed while the browser is acknowledging a view.
+          session.planRevision = event.revision;
+          session.navigation?.abort(); const navigation = new AbortController(); session.navigation = navigation;
+          void Promise.resolve().then(() => options.onPlan(event, navigation.signal)).then(() => {
+            if (!alive()) return;
+            const cancelled = navigation.signal.aborted || event.interactionRevision !== session.interactionRevision || event.revision !== session.revision;
+            if (!cancelled) session.viewRevision = event.revision;
+            session.planAck = { revision: event.revision, status: cancelled ? 'cancelled' : 'applied' }; session.queue(true);
+          }).catch(() => { if (alive()) {
+            session.planAck = { revision: event.revision, status: navigation.signal.aborted ? 'cancelled' : 'failed' }; session.queue(true);
+            if (!navigation.signal.aborted) setMessage('The browser could not apply that view. Your current workspace is still available.');
+          } });
         } else if (event.type === 'navigation') {
           if (event.interactionRevision !== session.interactionRevision || event.revision !== session.revision) return;
           setActivity(''); session.navigation?.abort(); const navigation = new AbortController(); session.navigation = navigation;
+          diagnostic('navigation', 'started');
           void options.onNavigate(event, navigation.signal).then(status => {
             if (!alive() || navigation.signal.aborted || event.interactionRevision !== session.interactionRevision) return;
             session.navigationAck = { id: event.id, status }; session.queue(true);
+            diagnostic('navigation', status === 'applied' ? 'succeeded' : status === 'cancelled' ? 'cancelled' : 'failed');
           }).catch(() => { if (alive() && !navigation.signal.aborted) { session.navigationAck = { id: event.id, status: 'unavailable' }; session.queue(true); } });
         }
       });

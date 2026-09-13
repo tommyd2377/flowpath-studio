@@ -38,6 +38,18 @@ export function captureVisitorContext(root: HTMLElement | null, base: VisitorCon
   const collect = (nodes: HTMLElement[], key: string, allowed: Set<string>) => [...new Set(nodes.map(node => node.getAttribute(key)).filter((id): id is string => !!id && allowed.has(id)))].slice(0, 100);
   const focused = document.activeElement instanceof Element ? document.activeElement : null;
   const focusId = (key: string, allowed: Set<string>) => { const id = focused?.closest(`[${key}]`)?.getAttribute(key); return id && allowed.has(id) ? id : null; };
+  // A focused surface remains the authoritative UI focus even when a visitor
+  // moves focus to the voice control or return anchor inside it.
+  const focusMarker = [...root.querySelectorAll<HTMLElement>('[data-focus-surface="true"], [data-voice-focus-bridge="true"]')].find(element => {
+    if (element.closest('[inert], [aria-hidden="true"]')) return false;
+    const kind = element.dataset.focusReferenceKind ?? element.dataset.voiceFocusKind;
+    const id = element.dataset.focusReferenceId ?? element.dataset.voiceFocusId;
+    return (element.dataset.voiceFocusBridge !== undefined ? element.dataset.voiceFocusOpen === 'true' : true) && !!kind && !!id;
+  });
+  const markerKind = focusMarker?.dataset.focusReferenceKind ?? focusMarker?.dataset.voiceFocusKind;
+  const markerId = focusMarker?.dataset.focusReferenceId ?? focusMarker?.dataset.voiceFocusId;
+  const markerEntityId = markerKind === 'entity' && markerId && entityIds.has(markerId) ? markerId : null;
+  const markerSourceId = markerKind === 'photo' && markerId ? `photo:${markerId}` : null;
   const visibleComponentTypes = [...new Set(seen.map(node => node.getAttribute('data-platform-slot') || node.getAttribute('data-visitor-component')).filter((kind): kind is Screen['visibleComponentTypes'][number] => components.has(kind as Screen['visibleComponentTypes'][number])))].slice(0, 8);
   const visibleControls = [...new Set([...root.querySelectorAll<HTMLElement>('button, a[href]')].filter(visible).map(node => (node.getAttribute('aria-label') || node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim()).filter(label => label.length > 0 && label.length <= 160))].slice(0, 60);
   const surface = scrollSurface(root);
@@ -47,7 +59,7 @@ export function captureVisitorContext(root: HTMLElement | null, base: VisitorCon
     expandedEntityIds: collect(seen.filter(node => node.dataset.expanded === 'true' || node.matches('.platform-detail')), 'data-entity-id', entityIds),
     primaryEntityId: collect([...seen].sort((a, b) => { const coverage = (node: HTMLElement) => { const r = node.getBoundingClientRect(); return Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0)); }; return coverage(b) - coverage(a); }), 'data-entity-id', entityIds)[0] ?? null,
     visibleEntityIds: collect(seen, 'data-entity-id', entityIds), visibleSourceIds: collect(seen, 'data-source-id', sourceIds), visibleComponentTypes, visibleControls,
-    focusedEntityId: focusId('data-entity-id', entityIds), focusedSourceId: focusId('data-source-id', sourceIds),
+    focusedEntityId: markerEntityId ?? focusId('data-entity-id', entityIds), focusedSourceId: markerSourceId && sourceIds.has(markerSourceId) ? markerSourceId : focusId('data-source-id', sourceIds),
   } };
 }
 
@@ -67,6 +79,11 @@ export async function navigateVisitorView(root: HTMLElement | null, target: Navi
     element = target.kind === 'next_section' ? sections.find(node => node.getBoundingClientRect().top > edge) : sections.filter(node => node.getBoundingClientRect().top < edge - 32).at(-1);
     if (!element) return 'unavailable';
   }
+  // FocusStage owns placement for an open entity or photo. Its fixed surface
+  // is already the destination; scrolling the document would undo the shared
+  // card choreography and make the voice acknowledgement describe the wrong
+  // page position.
+  if (element?.closest('[data-focus-layer="true"]')) return signal.aborted ? 'unavailable' : 'applied';
   const surface = scrollSurface(root);
   const position = () => surface?.scrollTop ?? scrollY;
   const height = () => surface?.scrollHeight ?? document.documentElement.scrollHeight;

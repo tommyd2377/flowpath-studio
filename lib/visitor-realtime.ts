@@ -2,7 +2,6 @@ import { z } from 'zod';
 import { visitorControlCapabilitySchema, visitorNavigationSchema } from './visitor-realtime-context';
 
 export const VISITOR_SESSION_MS = 120_000;
-export const VISITOR_IDLE_MS = 20_000;
 export const VISITOR_MAX_SPEECH_MS = 20_000;
 export const VISITOR_MAX_PLAYBACK_MS = 30_000;
 
@@ -14,14 +13,17 @@ export const visitorAvailabilitySchema = z.object({
 const revision = z.number().int().nonnegative();
 const responseId = z.string().min(1).max(200);
 export const visitorRealtimeEventSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('session'), sdp: z.string().min(1).max(65536), availability: visitorAvailabilitySchema, expiresAt: z.number().int().positive(), control: visitorControlCapabilitySchema }).strict(),
+  z.object({ type: z.literal('session'), protectOpening: z.boolean().optional(), sdp: z.string().min(1).max(65536), availability: visitorAvailabilitySchema, expiresAt: z.number().int().positive(), idleTimeoutMs: z.number().int().nonnegative().max(VISITOR_SESSION_MS).optional(), control: visitorControlCapabilitySchema }).strict(),
   z.object({ type: z.literal('ready') }).strict(),
   z.object({ type: z.literal('control_applied'), seq: revision, interactionRevision: revision, revision, ready: z.boolean() }).strict(),
   z.object({ type: z.literal('transcript'), id: responseId, role: z.enum(['user', 'assistant']), text: z.string().min(1).max(2000), revision, interactionRevision: revision }).strict(),
+  z.object({ type: z.literal('greeting_progress'), text: z.string().min(1).max(2000), revision, interactionRevision: revision }).strict(),
   z.object({ type: z.literal('navigation'), id: responseId, revision, interactionRevision: revision, target: visitorNavigationSchema }).strict(),
   z.object({ type: z.literal('speech_started'), revision }).strict(),
   z.object({ type: z.literal('speech_stopped') }).strict(),
   z.object({ type: z.literal('activity'), revision, interactionRevision: revision, activity: z.enum(['web', 'images', 'map']) }).strict(),
+  z.object({ type: z.literal('backend_idle'), revision, interactionRevision: revision }).strict(),
+  z.object({ type: z.literal('task_error'), revision, interactionRevision: revision, message: z.string().min(1).max(500) }).strict(),
   z.object({ type: z.literal('response_started'), revision, interactionRevision: revision }).strict(),
   z.object({ type: z.literal('playback_started'), responseId, interactionRevision: revision }).strict(),
   z.object({ type: z.enum(['playback_stopped', 'playback_cleared']), responseId: responseId.optional() }).strict(),

@@ -68,7 +68,7 @@ test('stage claims prevent overlap/replay and fence late completion after interr
   assert.throws(() => claimKnowledgeJob(ledger, { ...input(), id: first.id }, 123000), /already received/);
 });
 
-test('reimport removes absent unedited source groups/edges and retains publisher-edited edges', () => {
+test('reimport removes unedited groups but retains missing edges as reviewable alternatives', () => {
   const first = interpretStructuredSource('catalog.csv', { format: 'csv', text: 'ID,Name\none,One\ntwo,Two' })!;
   first.relationships = [{ id: 'related', fromEntityId: 'one', toEntityId: 'two', label: 'Related to' }, { id: 'custom', fromEntityId: 'two', toEntityId: 'one', label: 'Source relationship' }];
   first.collections.push({ id: 'extra', name: 'Source grouping', entityIds: ['one'] });
@@ -76,10 +76,10 @@ test('reimport removes absent unedited source groups/edges and retains publisher
   artifact.catalog.relationships[1].label = 'Publisher relationship';
   const next = { ...first, relationships: [], collections: first.collections.slice(0, 1) };
   const merged = mergeKnowledge(artifact, next, { fileId: randomUUID(), name: 'catalog.csv', hash: 'new' });
-  assert.equal(merged.catalog.relationships.length, 1);
-  assert.equal(merged.catalog.relationships[0].label, 'Publisher relationship');
+  assert.equal(merged.catalog.relationships.length, 2);
+  assert.equal(merged.catalog.relationships[1].label, 'Publisher relationship');
   assert.equal(merged.catalog.collections.length, 1);
-  assert.ok(merged.notes.some(note => note.includes('Removed the unchanged source relationship')));
+  assert.equal(merged.graphUpdates?.filter(update => update.kind === 'relationship_missing').length, 2);
   assert.ok(merged.notes.some(note => note.includes('Removed the unchanged source collection')));
 });
 

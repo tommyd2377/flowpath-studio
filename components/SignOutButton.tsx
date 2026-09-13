@@ -1,4 +1,5 @@
 'use client';
+import LoadingIndicator from './LoadingIndicator';
 
 import { useRef, useState } from 'react';
 import { LogOut } from 'lucide-react';
@@ -23,7 +24,7 @@ export default function SignOutButton({ disabled = false, onBusyChange }: { disa
   }
 
   return <div className="sign-out-control">
-    <button type="button" className="icon-button" disabled={disabled || busy} aria-label={busy ? 'Signing out' : 'Sign out'} title={disabled ? 'Save or clear pending edits before signing out' : 'Sign out'} onClick={() => void leaveWorkspace()}><LogOut size={17}/></button>
+    <button type="button" className="icon-button" disabled={disabled || busy} aria-label={busy ? 'Signing out' : 'Sign out'} title={disabled ? 'Save or clear pending edits before signing out' : 'Sign out'} onClick={() => void leaveWorkspace()}><>{busy ? <LoadingIndicator label="Signing out…"/> : <LogOut size={17}/>}</></button>
     {error && <p className="auth-error" role="alert">{error}</p>}
   </div>;
 }

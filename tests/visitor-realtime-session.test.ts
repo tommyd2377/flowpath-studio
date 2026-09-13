@@ -25,16 +25,14 @@ function harness(overrides: Partial<VisitorSessionOptions> = {}) {
       const url = String(input); calls.push(url);
       assert.equal((init?.headers as Record<string, string>).Authorization, 'Bearer offline-placeholder');
       if (url.endsWith('/hangup')) return new Response(null, { status: 200 });
-      const config = JSON.parse(String((init?.body as FormData).get('session')));
-      assert.equal(config.model, 'gpt-realtime-2.1');
-      assert.equal(config.audio.input.turn_detection.create_response, false);
-      assert.equal(config.audio.input.turn_detection.interrupt_response, true);
-      assert.deepEqual(config.tools, []);
-      return new Response(offer, { headers: { Location: '/v1/realtime/calls/rtc_offline' } });
+      const { session: config, transport } = JSON.parse(String(init?.body));
+      assert.equal(config.model, 'gpt-live-1'); assert.deepEqual(config.delegation, { type: 'client' });
+      assert.equal(transport.sdp, offer); assert.equal('tools' in config, false);
+      return Response.json({ session: { id: 'live_offline' }, transport: { type: 'webrtc', sdp: offer } });
     },
     controlFactory: value => {
       controlOptions = value;
-      return { ready: Promise.resolve(), start() {}, async applyControl(update) { updates.push(update); value.emit({type:'control_applied', seq:update.seq, interactionRevision:update.interactionRevision, revision:update.interactionRevision, ready:update.ready}); }, close() { stopped++; }, closed: Promise.resolve() };
+      return { ready: Promise.resolve(), start() {}, async applyControl(update) { updates.push(update); value.emit({type:'control_applied', seq:update.seq, interactionRevision:update.interactionRevision, revision:update.interactionRevision, ready:update.ready}); }, async close() { stopped++; return { finalized: false }; }, closed: Promise.resolve({ finalized: false }) };
     },
     ...overrides,
   };
@@ -58,8 +56,9 @@ test('session streams only public setup, and cancelling the body closes and hang
   const reader = response.body!.getReader();
   const first = new TextDecoder().decode((await reader.read()).value);
   assert.equal(JSON.parse(first).type, 'session');
+  assert.equal(JSON.parse(first).idleTimeoutMs, 60_000);
   assert.ok(!first.includes('offline-placeholder'));
-  assert.ok(!first.includes('rtc_offline'));
+  assert.ok(!first.includes('live_offline'));
   assert.equal(JSON.parse(new TextDecoder().decode((await reader.read()).value)).type, 'ready');
   await reader.cancel();
   h.controller.abort(); await flush();
@@ -74,9 +73,9 @@ test('aborting during call creation reclaims the eventual call ID rather than ab
   h.options.fetch = async (input, init) => String(input).endsWith('/hangup') ? original(input, init) : new Promise<Response>(resolve => { finish = resolve; });
   const response = visitorRealtimeSession(h.options);
   await flush(); h.controller.abort();
-  finish(new Response(offer, { headers: { Location: '/v1/realtime/calls/rtc_offline' } }));
+  finish(Response.json({ session: { id: 'live_offline' }, transport: { type: 'webrtc', sdp: offer } }));
   await response.text(); await flush();
-  assert.deepEqual(h.calls, ['https://api.openai.com/v1/realtime/calls/rtc_offline/hangup']);
+  assert.deepEqual(h.calls, ['https://api.openai.com/v1/live/sessions/live_offline/hangup']);
   assert.deepEqual(h.metrics(), { blocked: 0, released: 1, stopped: 0 });
 });
 
@@ -93,7 +92,7 @@ test('invalid provider SDP and publication changes are cleaned up before client 
     const original = h.options.fetch!;
     if (changed) h.options.assertCurrent = async () => { throw new Error('changed'); };
     else h.options.fetch = async (input, init) => String(input).endsWith('/hangup') ? original(input, init)
-      : new Response(offer + 'm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n', { headers: { Location: '/v1/realtime/calls/rtc_offline' } });
+      : Response.json({ session: { id: 'live_offline' }, transport: { type: 'webrtc', sdp: offer + 'm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n' } });
     const text = await visitorRealtimeSession(h.options).text(); await flush();
     assert.equal(JSON.parse(text).type, 'error');
     assert.equal(h.calls.filter(url => url.endsWith('/hangup')).length, 1);
@@ -103,7 +102,7 @@ test('invalid provider SDP and publication changes are cleaned up before client 
 
 test('unsafe or missing call IDs fail closed without following an attacker-controlled cleanup URL', async () => {
   for (const location of ['', 'https://attacker.example/v1/realtime/calls/rtc_bad', '/v1/realtime/calls/rtc_bad?token=x']) {
-    const h = harness({ fetch: async () => new Response(offer, { headers: { Location: location } }) });
+    const h = harness({ fetch: async () => Response.json({ session: { id: location }, transport: { type: 'webrtc', sdp: offer } }) });
     const text = await visitorRealtimeSession(h.options).text();
     assert.equal(JSON.parse(text).type, 'error');
     assert.equal(h.metrics().blocked, 1);
@@ -160,9 +159,8 @@ test('natural termination retains the request until bounded provider cleanup com
   const reader = visitorRealtimeSession(h.options).body!.getReader();
   await reader.read(); await reader.read();
   h.control.onFatal('Conversation complete.');
-  assert.equal(JSON.parse(new TextDecoder().decode((await reader.read()).value)).type, 'ended');
   let completed = false;
-  const endOfStream = reader.read().then(result => { completed = result.done; });
+  const endOfStream = reader.read().then(async result => { assert.equal(JSON.parse(new TextDecoder().decode(result.value)).type, 'ended'); completed = Boolean((await reader.read()).done); });
   await flush();
   assert.equal(completed, false);
   assert.equal(h.metrics().released, 0);
@@ -205,4 +203,22 @@ test('missing client readiness times out and reclaims both provider and mailbox'
   assert.equal(h.mailboxClosed(), 1);
   assert.equal(h.calls.filter(url => url.endsWith('/hangup')).length, 1);
   assert.deepEqual(h.updates, []);
+});
+
+test('audio SDP is delivered while sideband connects, but ready waits for sideband', async () => {
+  let release!: () => void;
+  let starts = 0;
+  const ready = new Promise<void>(resolve => { release = resolve; });
+  const h = harness({ controlFactory: () => ({ ready, start() { starts++; }, async applyControl() {}, async close() { return { finalized: false }; }, closed: Promise.resolve({ finalized: false }) }) });
+  const reader = visitorRealtimeSession(h.options).body!.getReader();
+  try {
+    const first = await Promise.race([reader.read(), new Promise<never>((_, reject) => { const timer = setTimeout(() => reject(new Error('SDP blocked by sideband')), 1000); timer.unref(); })]);
+    assert.equal(JSON.parse(new TextDecoder().decode(first.value)).type, 'session');
+    let secondDelivered = false;
+    const second = reader.read().then(value => { secondDelivered = true; return value; });
+    await flush(); assert.equal(secondDelivered, false); assert.equal(starts, 0);
+    release();
+    assert.equal(JSON.parse(new TextDecoder().decode((await second).value)).type, 'ready');
+    assert.equal(starts, 0, 'Browser readiness still gates greeting and microphone');
+  } finally { release(); await reader.cancel(); }
 });

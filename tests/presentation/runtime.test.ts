@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { createElement } from 'react';
+import { createElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { compilePresentation } from '../../packages/platform-ui/src/compile.js';
 import { preflightPresentation } from '../../packages/platform-ui/src/preflight.js';
-import { platformLibrary } from '../../packages/platform-ui/src/components.js';
+import { FocusStage, FocusSurface, VoiceFocusBridge, platformLibrary } from '../../packages/platform-ui/src/components.js';
 import { PresentationView } from '../../packages/platform-ui/src/Runtime.js';
 import { validateCatalog, validatePlan, type PresentationPlan } from '../../packages/platform-ui/src/contracts.js';
 import { defaultPresentation } from '../../packages/platform-ui/src/catalog.js';
@@ -85,4 +85,36 @@ test('plans cannot invent a registered destination or escape the snapshot', () =
   const plan = defaultPresentation(catalog);
   assert.throws(() => validatePlan({ ...plan, components: [{ id: 'actions', type: 'actions', variant: 'compact', entityIds: [], attributeIds: [], capabilityIds: ['book-now'] }] }, catalog, catalog.id));
   assert.throws(() => compilePresentation(catalog, { ...plan, snapshotId: 'other-revision' }));
+});
+
+test('focused entity rendering exposes the shared non-modal return and disclosure contract', () => {
+  const catalog = fixture('classes');
+  const plan = detailPlan(catalog, catalog.entities[0].id);
+  const state = { ...initialInteraction(catalog), focusedRef: { kind: 'entity' as const, id: catalog.entities[0].id }, focusOrigin: { reference: { kind: 'entity' as const, id: catalog.entities[0].id }, surface: 'collection' as const, focusKey: `entity:${catalog.entities[0].id}`, scrollTop: 18 } };
+  const detail = createElement(PresentationView, { catalog, plan, state });
+  const Surface = FocusSurface as unknown as (props: { reference?: typeof state.focusedRef; onClose?: () => void; title?: string }) => ReactNode;
+  const Stage = FocusStage as unknown as (props: { focused?: boolean; onClose?: () => void; context?: ReactNode }) => ReactNode;
+  const surface = createElement(Surface, { reference: state.focusedRef, onClose: () => {}, title: `Details of ${catalog.entities[0].name}` }, detail);
+  const html = renderToStaticMarkup(createElement(Stage, { focused: true, onClose: () => {}, context: createElement('div', null, 'collection') }, surface));
+  assert.match(html, /data-focus-stage="true"/);
+  assert.match(html, /data-focus-surface="true"/);
+  assert.match(html, /data-return-anchor="true"/);
+  assert.match(html, /data-disclosure-stack="true"/);
+  assert.match(html, /data-focus-scrim="true"/);
+});
+
+test('focus stage keeps the origin context mounted before a focused surface opens', () => {
+  const Stage = FocusStage as unknown as (props: { focused?: boolean; onClose?: () => void; context?: ReactNode; children?: ReactNode }) => ReactNode;
+  const html = renderToStaticMarkup(createElement(Stage, { focused: false, context: createElement('div', null, 'collection') }, null));
+  assert.match(html, /data-focus-context="true"/);
+  assert.match(html, /data-focus-layer="true"/);
+  assert.doesNotMatch(html, /data-focus-scrim="true"/);
+  assert.doesNotMatch(html, /data-focus-surface="true"/);
+});
+
+test('voice focus bridge exposes the runtime-owned focused reference', () => {
+  const html = renderToStaticMarkup(createElement(VoiceFocusBridge, { reference: { kind: 'entity', id: 'class-handbuilding' }, status: 'Focused on a published item.' }));
+  assert.match(html, /data-voice-focus-open="true"/);
+  assert.match(html, /data-voice-focus-kind="entity"/);
+  assert.match(html, /data-voice-focus-id="class-handbuilding"/);
 });

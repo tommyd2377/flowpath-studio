@@ -2,16 +2,26 @@ import { validatePlan, type CatalogFilter, type KnowledgeCatalog, type Presentat
 import { defaultPresentation, filterEntities, knownAttributes } from './catalog.js';
 import { galleryAssetIds, type MediaLibrary } from './media.js';
 
+export type FocusReference = { kind: 'entity' | 'photo'; id: string };
+export type ReturnAnchor = {
+  reference: FocusReference;
+  surface: 'collection' | 'gallery';
+  focusKey: string;
+  scrollTop: number;
+};
+
 export type CatalogInteractionState = {
   snapshotId: string;
   filters: CatalogFilter[];
   selectedIds: string[];
   focusedId: string | null;
+  focusedRef: FocusReference | null;
+  focusOrigin: ReturnAnchor | null;
   entityIds: string[];
 };
 
 export function initialInteraction(catalog: KnowledgeCatalog, snapshotId = catalog.id): CatalogInteractionState {
-  return { snapshotId, filters: [], selectedIds: [], focusedId: null, entityIds: catalog.entities.map(entity => entity.id) };
+  return { snapshotId, filters: [], selectedIds: [], focusedId: null, focusedRef: null, focusOrigin: null, entityIds: catalog.entities.map(entity => entity.id) };
 }
 
 /** Apply an already validated plan's explicit filters once; omitted updates preserve them. */

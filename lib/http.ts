@@ -15,18 +15,18 @@ export async function readJson(request: Request) {
   try { return JSON.parse(new TextDecoder().decode(text)); } catch { throw new AppError('Invalid JSON.'); }
 }
 
-export async function readLimitedBody(request: Request, maximum: number): Promise<Uint8Array> {
+export async function readLimitedBody(request: Pick<Request, 'body'>, maximum: number): Promise<Uint8Array> {
   const reader = request.body?.getReader();
   if (!reader) throw new AppError('A request body is required.');
   const chunks: Uint8Array[] = [];
   let length = 0;
-  while (true) {
+  try { while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     length += value.byteLength;
     if (length > maximum) { await reader.cancel(); throw new AppError('File or request is too large.', 413); }
     chunks.push(value);
-  }
+  } } finally { reader.releaseLock(); }
   const result = new Uint8Array(length);
   let offset = 0;
   for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.length; }

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { AppError } from './errors';
-import { GLOBAL_VISITOR_LIMITS, type VisitorAvailability, type VisitorSettings } from './visitor-model';
+import { GLOBAL_VISITOR_LIMITS, type VisitorAvailability, type VisitorSettingsInput } from './visitor-model';
 
 const counter = z.number().int().nonnegative();
 const counts = z.object({ chat: counter, voice: counter });
@@ -27,7 +27,7 @@ export function currentLedger(value: unknown, now = Date.now()): VisitorLedger {
   }
   return { day, totals: { chat: 0, voice: 0 }, sites: {}, requests: {} };
 }
-export function availability(ledger: VisitorLedger, siteId: string, settings: VisitorSettings, live: boolean): VisitorAvailability {
+export function availability(ledger: VisitorLedger, siteId: string, settings: VisitorSettingsInput, live: boolean): VisitorAvailability {
   const used = ledger.sites[siteId] ?? { chat: 0, voice: 0 };
   return { enabled: settings.enabled, mode: settings.mode, live,
     chatRemaining: settings.enabled ? Math.max(0, Math.min(settings.chatDailyLimit - used.chat, GLOBAL_VISITOR_LIMITS.chat - ledger.totals.chat)) : 0,
@@ -35,7 +35,7 @@ export function availability(ledger: VisitorLedger, siteId: string, settings: Vi
     resetsAt: new Date(Date.parse(`${ledger.day}T00:00:00Z`) + 86_400_000).toISOString(),
   };
 }
-export function reserveReply(ledger: VisitorLedger, siteId: string, requestId: string, kind: 'chat' | 'voice', settings: VisitorSettings, live: boolean) {
+export function reserveReply(ledger: VisitorLedger, siteId: string, requestId: string, kind: 'chat' | 'voice', settings: VisitorSettingsInput, live: boolean) {
   if (!settings.enabled) throw new AppError('This site has not enabled visitor conversations.', 403);
   const state = availability(ledger, siteId, settings, live);
   if (kind === 'voice' && settings.mode === 'chat') throw new AppError('Voice is not enabled on this site.', 403);

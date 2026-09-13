@@ -44,7 +44,7 @@ test.afterEach(async ({ page }) => {
 async function settled(page: Page, selector = '.platform-explorer') {
   await page.waitForFunction(selector => {
     const root = document.querySelector(selector);
-    if (!root || root.querySelector('[inert]')) return false;
+    if (!root || root.querySelector('.platform-slot[inert], .platform-focus-surface[inert]')) return false;
     return root.getAnimations({ subtree: true }).every(animation => animation.playState !== 'running' || animation.effect?.getComputedTiming().iterations === Infinity)
       && [...root.querySelectorAll('.platform-slot')].every(element => Number(getComputedStyle(element).opacity) >= 0.999);
   }, selector);
@@ -201,17 +201,17 @@ test('interrupted detail, back and replacement transitions leave one usable curr
   expect(errors).toEqual([]);
 });
 
-test('automatic reveal preserves composer focus and a manual wheel cancels a pending reveal', async ({ page }, info) => {
+test('centered detail preserves composer focus and manual input cannot cause a delayed page jump', async ({ page }, info) => {
   await page.setViewportSize({ width: 1440, height: 700 });
   await openGallery(page);
   const composer = page.getByRole('textbox', { name: 'What are you looking for?', exact: true });
   await composer.fill('Example Blanco');
   await composer.press('Enter');
   await expect(page.locator('.platform-slot-detail:not([inert])')).toBeAttached();
-  await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(20);
+  await expect.poll(() => page.evaluate(() => scrollY)).toBeLessThan(3);
   await settled(page);
   await expect(composer).toBeFocused();
-  await page.locator('.platform-view-toolbar').getByRole('button', { name: 'All items', exact: true }).click();
+  await page.getByRole('button', { name: 'Back to results', exact: true }).click();
   await settled(page);
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
   await composer.fill('Example Reposado');
@@ -231,7 +231,7 @@ test('reduced motion has no residual transforms or invisible keyboard targets af
   await openGallery(page, 'Classes & experiences');
   await expect(page.getByRole('region', { name: 'Refine the collection' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Introduction to Handbuilding', exact: true }).click();
-  await page.locator('.platform-view-toolbar').getByRole('button', { name: 'Back', exact: true }).click();
+  await page.getByRole('button', { name: 'Back to results', exact: true }).click();
   await settled(page);
   const residuals = await page.locator('.platform-slot, .platform-item, [data-platform-disclosure]').evaluateAll(elements => elements.map(element => ({ transform: getComputedStyle(element).transform, opacity: Number(getComputedStyle(element).opacity) })));
   expect(residuals.every(value => /^(none|matrix\(1, 0, 0, 1, 0, 0\))$/.test(value.transform) && value.opacity === 1)).toBeTruthy();
@@ -255,7 +255,8 @@ test('reduced motion has no residual transforms or invisible keyboard targets af
   await page.screenshot({ path: info.outputPath('reduced-motion-current-view.png'), fullPage: true });
 });
 
-test('legacy source cards retain expanded content across plans and animate disclosure height', async ({ page }, info) => {
+test('legacy source plans retain readable objects and scroll across additive plans and symmetric focus', async ({ page }, info) => {
+  await page.setViewportSize({ width: 900, height: 700 });
   const slug = `legacy-motion-${Date.now()}`;
   const headers = { Origin: 'http://127.0.0.1:3225' };
   const created = await page.request.post('/api/sites', { headers, data: { name: 'Offline legacy motion', slug, kind: 'photographer' } });
@@ -280,31 +281,34 @@ test('legacy source cards retain expanded content across plans and animate discl
   await page.goto(`/s/${slug}`);
   const composer = page.getByRole('textbox', { name: 'What would you like to see?', exact: true });
   await composer.fill('Show the published sessions'); await composer.press('Enter');
-  const view = page.getByRole('region', { name: 'Your requested information' });
-  await expect(view).toBeVisible(); await settled(page, '[aria-label="Your requested information"]');
-  const source = view.locator('article').filter({ has: page.getByRole('heading', { name: 'Wedding stories', exact: true }) });
+  const view = page.locator('.visitor-workspace');
+  await expect(view.locator('.platform-workspace-card')).toHaveCount(2);
+  const source = view.locator('.platform-workspace-card').filter({ has: page.getByRole('heading', { name: 'Wedding stories', exact: true }) });
   const sourceNode = await source.elementHandle();
-  const expand = source.getByRole('button', { name: 'Read the details', exact: true });
-  const expandNode = await expand.elementHandle();
+  const expand = source.getByRole('button', { name: 'Open Wedding stories', exact: true });
   await expand.focus();
-  await recordMotion(page, { copy: 'article[data-kind="section"]:first-child [data-platform-height]' });
+  await recordMotion(page, { copy: '[data-workspace-focused]' });
   await page.keyboard.press('Enter');
-  const disclosure = await finishMotion(page, info, 'legacy-source-disclosure');
-  expectIntermediateGeometry(disclosure, 'copy', 'height');
-  expectMeasuredReflow(disclosure, 'copy', 450);
-  await expect(source.getByRole('button', { name: 'Show less', exact: true })).toBeFocused();
+  const disclosure = await finishMotion(page, info, 'legacy-source-focus');
+  expectIntermediateGeometry(disclosure, 'copy', 'width');
+  const focused = page.locator('[data-workspace-focused]:not([inert])');
+  expect(await focused.locator('[data-workspace-scroll]').evaluate(element => element.scrollHeight - element.clientHeight)).toBeGreaterThan(125);
+  await focused.locator('[data-workspace-scroll]').evaluate(element => { element.scrollTop = 125; });
+  await recordMotion(page, { copy: '[data-workspace-focused]' });
+  await focused.getByRole('button', { name: 'Back to workspace', exact: true }).click();
+  const returning = await finishMotion(page, info, 'legacy-source-return');
+  expectIntermediateGeometry(returning, 'copy', 'width');
+  await expect(expand).toBeFocused();
 
   presentation = { layout: 'comparison', sources: ['section:weddings', 'section:portraits', 'overview'], status: 'ready' };
   await composer.fill('Compare the sessions and introduction');
-  await recordMotion(page, { source: 'article[data-kind="section"]:first-child', copy: 'article[data-kind="section"]:first-child [data-platform-height]' });
   await composer.press('Enter');
-  const changed = await finishMotion(page, info, 'legacy-plan-continuity');
-  await expect(view.locator('[data-layout="comparison"][data-count="3"]')).toBeVisible();
-  expectIntermediateGeometry(changed, 'source', 'width');
-  await settled(page, '[aria-label="Your requested information"]');
+  await expect(view.locator('.platform-workspace-card')).toHaveCount(3);
   expect(await sourceNode!.evaluate(element => element.isConnected)).toBeTruthy();
-  expect(await expandNode!.evaluate(element => element.isConnected && element.getAttribute('aria-expanded') === 'true')).toBeTruthy();
-  await expect(source.getByRole('button', { name: 'Show less', exact: true })).toBeVisible();
+  await expand.click();
+  await expect.poll(() => focused.locator('[data-workspace-scroll]').evaluate(element => element.scrollTop)).toBe(125);
+  await focused.getByRole('button', { name: 'Back to workspace', exact: true }).click();
+  await expect(page.locator('[data-workspace-focused]')).toHaveCount(0);
   await expect(view.locator('[inert]')).toHaveCount(0);
   expect(mockedRequests).toHaveLength(2);
   await page.screenshot({ path: info.outputPath('legacy-preserved-disclosure.png'), fullPage: true });

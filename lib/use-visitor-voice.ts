@@ -6,6 +6,7 @@ import { MAX_RECORDING_SECONDS, type VisitorReply } from './visitor-model';
 import type { VoicePhase } from '@/components/Waveform';
 
 type Reply = Pick<VisitorReply, 'text' | 'audio'>;
+type SpeechObserver = { caption: (text: string) => void; audio: (state: { inputActive: boolean; outputActive: boolean }) => void; finish: () => void };
 type Resources = {
   context?: AudioContext; stream?: MediaStream; worklet?: AudioWorkletNode; source?: AudioBufferSourceNode;
   utterance?: SpeechSynthesisUtterance; timer?: ReturnType<typeof setTimeout>; controller?: AbortController;
@@ -48,7 +49,7 @@ export function useVisitorVoice() {
     cancel();
     setError(reason instanceof Error ? reason.message : 'Voice is unavailable. Please try again.');
   }
-  function play(reply: Reply, id: number) {
+  function play(reply: Reply, id: number, observer?: SpeechObserver) {
     if (generation.current !== id) return;
     const resources = current.current;
     setPhase('speaking');
@@ -59,7 +60,11 @@ export function useVisitorVoice() {
       if (!voice) throw new Error('No installed device voice is available for this demo. Published voice uses the selected AI voice.');
       const utterance = new SpeechSynthesisUtterance(reply.text);
       utterance.voice = voice; utterance.lang = voice.lang;
-      utterance.onend = () => { if (generation.current === id) cancel(); };
+      utterance.onstart = () => { if (generation.current === id) observer?.audio({ inputActive: false, outputActive: true }); };
+      utterance.onboundary = event => {
+        if (generation.current === id) observer?.caption(reply.text.slice(0, event.charIndex + (event.charLength || reply.text.slice(event.charIndex).match(/^\S+/)?.[0].length || 0)));
+      };
+      utterance.onend = () => { if (generation.current === id) { observer?.finish(); cancel(); } };
       utterance.onerror = () => fail(new Error('The demo voice could not be played.'), id);
       resources.utterance = utterance;
       window.speechSynthesis.speak(utterance);
@@ -77,7 +82,7 @@ export function useVisitorVoice() {
     resources.timer = setTimeout(() => { if (generation.current === id) cancel(); }, (source.buffer.duration + 1) * 1000);
     source.start();
   }
-  async function respond(send: (signal: AbortSignal) => Promise<Reply>, demo = false) {
+  async function respond(send: (signal: AbortSignal) => Promise<Reply>, demo = false, observer?: SpeechObserver) {
     cancel(); setError(''); setPhase('thinking');
     const id = generation.current;
     const controller = new AbortController(); current.current.controller = controller;
@@ -88,7 +93,7 @@ export function useVisitorVoice() {
         if (generation.current !== id) return;
       }
       const reply = await send(controller.signal);
-      if (generation.current === id) play(reply, id);
+      if (generation.current === id) play(reply, id, observer);
     } catch (error) { fail(error, id); }
   }
   async function finishRecording() {

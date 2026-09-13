@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { Site } from '../../lib/site-model';
 
 const origin = 'http://127.0.0.1:3225';
-type QualityHarness = { navigation: { id: string; status: string }[]; calls: number; stopped: number; denyMicrophone: boolean; emit: (event: unknown) => void };
+type QualityHarness = { navigation: { id: string; status: string }[]; calls: number; stopped: number; denyMicrophone: boolean; interactionRevision: number; emit: (event: unknown) => void };
 declare global { interface Window { __visitorQuality: QualityHarness } }
 test.use({ hasTouch: true });
 const publications = new Map<string, Site>();
@@ -40,16 +40,16 @@ async function prepare(page: Page, mode: 'voice' | 'chat' = 'voice', withCatalog
   await page.addInitScript(mode => {
     const availability = { enabled: true, mode, live: true, chatRemaining: 25, voiceRemaining: 5, resetsAt: '' };
     let sink: ReadableStreamDefaultController<Uint8Array> | undefined;
-    const state: QualityHarness = { navigation: [], calls: 0, stopped: 0, denyMicrophone: false,
-      emit(event) { const frame = event as { type: string; interactionRevision?: number }; sink?.enqueue(new TextEncoder().encode(`${JSON.stringify(['response_started', 'plan', 'playback_started', 'transcript', 'navigation'].includes(frame.type) ? { interactionRevision: 0, ...frame } : frame)}\n`)); } };
+    const state: QualityHarness = { navigation: [], calls: 0, stopped: 0, denyMicrophone: false, interactionRevision: 0,
+      emit(event) { const frame = event as { type: string; interactionRevision?: number }; sink?.enqueue(new TextEncoder().encode(`${JSON.stringify(['response_started', 'plan', 'playback_started', 'transcript', 'navigation'].includes(frame.type) ? { interactionRevision: state.interactionRevision, ...frame } : frame)}\n`)); } };
     window.__visitorQuality = state;
-    class Track { enabled = true; onended: (() => void) | null = null; stop() { state.stopped++; } }
+    class Track { clone() { return new Track(); } enabled = true; onended: (() => void) | null = null; stop() { state.stopped++; } }
     class Stream { track = new Track(); getTracks() { return [this.track]; } getAudioTracks() { return [this.track]; } }
-    class Node { fftSize = 2048; gain = { value: 1 }; connect() { return this; } getFloatTimeDomainData(array: Float32Array) { array.fill(0); } }
+    class Node { getByteTimeDomainData(array: Uint8Array) { array.fill(128); } fftSize = 2048; gain = { value: 1 }; connect() { return this; } getFloatTimeDomainData(array: Float32Array) { array.fill(0); } }
     class Context { state = 'running'; destination = new Node(); resume() { return Promise.resolve(); } close() { this.state = 'closed'; return Promise.resolve(); } createAnalyser() { return new Node(); } createGain() { return new Node(); } createMediaStreamSource() { return new Node(); } }
     class Audio { autoplay = false; srcObject: unknown; setAttribute() {} play() { return Promise.resolve(); } pause() {} }
     class Peer {
-      connectionState = 'new'; ontrack?: (event: unknown) => void; onconnectionstatechange?: () => void;
+      iceGatheringState = 'complete'; connectionState = 'new'; ontrack?: (event: unknown) => void; onconnectionstatechange?: () => void;
       addTrack() {} createDataChannel() { throw new Error('Provider commands cannot originate in the browser'); }
       createOffer() { return Promise.resolve({ type: 'offer', sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n' }); }
       setLocalDescription() { return Promise.resolve(); }
@@ -75,7 +75,8 @@ async function prepare(page: Page, mode: 'voice' | 'chat' = 'voice', withCatalog
         return new Response(body, { headers: { 'Content-Type': 'application/x-ndjson' } });
       }
       if (/\/api\/visitor\/[^/]+\/session\/control$/.test(path)) {
-        const { update } = JSON.parse(String(init?.body));
+        const { update } = JSON.parse(String(init?.body)); if (update.end) queueMicrotask(() => state.emit({ type: 'ended', message: 'Ended.' }));
+        state.interactionRevision = update.interactionRevision;
         if (update.navigationAck) state.navigation.push(update.navigationAck);
         if (!update.end) state.emit({ type: 'control_applied', seq: update.seq, interactionRevision: update.interactionRevision, revision: update.viewRevision, ready: update.ready });
         return new Response(null, { status: 204 });
@@ -100,15 +101,27 @@ async function showView(page: Page, index: number) {
     emit({ type: 'plan', revision: index + 1, presentation: { layout: 'detail', sources: [`section:quality-${index}`], status: 'ready' } });
     emit({ type: 'playback_started', responseId: `quality-response-${index}` });
   }, index);
-  await expect(page.getByRole('region', { name: 'Your requested information' }).getByRole('heading', { name: `Published topic ${index + 1}`, exact: true })).toBeVisible();
+  await expect(page.locator('[data-workspace-focused]:not([inert])').getByRole('heading', { name: `Published topic ${index + 1}`, exact: true })).toBeVisible();
 }
 
 async function scrollAway(page: Page) {
   // Keep focus where the visitor left it while physically moving away from the controls.
+  const back = page.getByRole('button', { name: 'Back to workspace' });
+  if (await back.count()) { await back.click(); await expect(page.locator('[data-workspace-focused]')).toHaveCount(0); }
+  const browse = page.getByRole('button', { name: 'Browse published content' });
+  if (await browse.count()) await browse.click();
   await page.evaluate(() => document.querySelector<HTMLButtonElement>('.site-wave')?.focus({ preventScroll: true }));
   await page.mouse.wheel(0, 10000);
   await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(0);
-  await expect(page.locator('.site-wave')).toBeInViewport();
+  const dockLayout = await page.locator('.site-wave').evaluate(node => {
+    const boxes = [];
+    for (let item: Element | null = node; item; item = item.parentElement) {
+      const style = getComputedStyle(item), rect = item.getBoundingClientRect();
+      boxes.push({ tag: item.tagName, className: item.className, top: rect.top, height: rect.height, position: style.position, overflow: style.overflow, transform: style.transform });
+    }
+    return boxes;
+  });
+  await expect(page.locator('.site-wave'), JSON.stringify(dockLayout)).toBeInViewport();
   // Wheel delivery can precede the final scroll frames. The next mocked reply
   // represents a new turn after that manual movement, not during its momentum.
   await page.evaluate(() => new Promise<void>((resolve, reject) => {
@@ -140,12 +153,13 @@ for (const width of [390, 1600]) test(`shared invitation and dock use the availa
   await expect.poll(() => page.locator('[data-voice-dock]').evaluate(node => Number(getComputedStyle(node).getPropertyValue('--opening-progress')))).toBe(0);
   expect(await canvas!.evaluate(node => node.isConnected)).toBe(true);
   await expect(page.locator('.site-wordmark').locator('..')).toHaveCSS('opacity', '0');
-  const content = (await page.locator('.platform-container').boundingBox())!;
+  const content = (await page.locator('.visitor-workspace').boundingBox())!;
   expect(content.width).toBeGreaterThan(width - 65);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.evaluate(() => window.__visitorQuality.emit({ type: 'activity', activity: 'web', revision: 0, interactionRevision: 0 }));
-  await expect(page.getByText('Searching the web…', { exact: true })).toBeVisible();
-  await expect(page.getByText('Searching the web…', { exact: true }).locator('..')).toHaveCSS('opacity', '1');
+  const voiceStatus = page.locator('[data-voice-dock]').getByRole('status').filter({ hasText: 'Searching the web…' });
+  await expect(voiceStatus).toBeVisible();
+  await expect(voiceStatus.locator('..')).toHaveCSS('opacity', '1');
   await page.screenshot({ path: info.outputPath(`docked-${width}.png`) });
   await page.getByRole('button', { name: 'End voice conversation', exact: true }).click();
 });
@@ -177,15 +191,16 @@ test('mobile visitors retain docked voice and a reachable touch End control whil
   expect(await page.evaluate(() => window.__visitorQuality.stopped)).toBeGreaterThan(0);
 });
 
-test('resetting a legacy voice view restores visible keyboard focus to the waveform', async ({ page }) => {
+test('returning a voice view preserves objects and restores a reachable keyboard origin', async ({ page }) => {
   await prepare(page);
   const start = page.getByRole('button', { name: 'Start conversation', exact: true });
   await start.focus(); await start.press('Enter'); await showView(page, 0);
-  const reset = page.getByRole('button', { name: 'All of the site', exact: true });
+  const reset = page.getByRole('button', { name: 'Back to workspace', exact: true });
   await reset.focus(); await reset.press('Enter');
-  await expect(page.getByRole('region', { name: 'Your requested information' })).toHaveCount(0);
-  const wave = page.getByRole('button', { name: 'End conversation', exact: true });
-  await expect(wave).toBeFocused(); await expect(wave).toBeInViewport();
+  await expect(page.locator('[data-workspace-focused]:not([inert])')).toHaveCount(0);
+  const object = page.locator('[data-workspace-open]').first();
+  await expect(object).toBeFocused();
+  await expect(page.locator('.platform-workspace-card')).toHaveCount(1);
   await expect(page.getByRole('button', { name: 'End voice conversation', exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.__visitorQuality.stopped)).toBe(0);
 });
@@ -217,9 +232,9 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) test(`a new le
   await page.emulateMedia({ reducedMotion }); await prepare(page);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).tap();
   await showView(page, 0);
-  await expect(page.getByRole('region', { name: 'Your requested information' }).getByRole('heading', { level: 2 })).toBeInViewport();
+  await expect(page.locator('[data-workspace-focused]:not([inert])').getByRole('heading', { level: 2 })).toBeInViewport();
   await scrollAway(page); await showView(page, 1);
-  const heading = page.getByRole('region', { name: 'Your requested information' }).getByRole('heading', { level: 2 });
+  const heading = page.locator('[data-workspace-focused]:not([inert])').getByRole('heading', { level: 2 });
   await expect.poll(() => heading.evaluate(element => {
     const box = element.getBoundingClientRect();
     return box.top >= 16 && box.bottom <= innerHeight - 16;
@@ -229,16 +244,18 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) test(`a new le
   await page.screenshot({ path: info.outputPath(`legacy-reveal-${reducedMotion}.png`) });
 });
 
-test('manual scrolling cancels a pending legacy result reveal', async ({ page }) => {
+test('manual scrolling preserves an already focused result without automatic page scrolling', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 }); await prepare(page);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).tap();
   await showView(page, 0);
-  const heading = page.getByRole('region', { name: 'Your requested information' }).getByRole('heading', { level: 2 });
+  const heading = page.locator('[data-workspace-focused]:not([inert])').getByRole('heading', { level: 2 });
   await expect(heading).toBeInViewport();
-  await scrollAway(page); await showView(page, 1);
+  await page.evaluate(() => document.querySelector<HTMLButtonElement>('.site-wave')?.focus({ preventScroll: true }));
   await page.mouse.wheel(0, 80);
+  await page.waitForTimeout(250);
+  const before = await page.evaluate(() => scrollY);
   await page.waitForTimeout(1100);
-  await expect(heading).not.toBeInViewport();
+  expect(Math.abs(await page.evaluate(() => scrollY) - before)).toBeLessThanOrEqual(1);
   await expect(page.locator('.site-wave')).toBeFocused();
 });
 
@@ -252,13 +269,14 @@ test('a voice-only publisher offers an explicit typing fallback when microphone 
   await expect(page.getByRole('textbox', { name: 'What would you like to see?', exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => window.__visitorQuality.calls)).toBe(0);
   await page.screenshot({ path: info.outputPath('voice-typing-fallback.png') });
-  const topic = page.getByRole('button', { name: 'Explore Published topic 1', exact: true });
-  await topic.tap(); await expect(page.getByRole('region', { name: 'Your requested information' })).toContainText('Published topic 1');
+  await page.getByRole('button', { name: 'Browse published content', exact: true }).tap();
+  const topic = page.locator('[data-workspace-content$=":section:quality-0"]').first();
+  await topic.tap(); await expect(page.locator('[data-workspace-focused]:not([inert])')).toContainText('Published topic 1');
   await page.getByRole('button', { name: 'Continue by typing', exact: true }).tap();
   await expect(page.getByRole('textbox', { name: 'What would you like to see?', exact: true })).toBeFocused();
 });
 
-test('a pending host chat request announces progress while manual catalog navigation remains available', async ({ page }) => {
+test('a pending host chat request keeps ordinary browsing available without updating-view copy', async ({ page }) => {
   const site = await prepare(page, 'chat', true);
   let release!: () => void, observed!: () => void;
   const pending = new Promise<void>(resolve => { release = resolve; });
@@ -270,20 +288,24 @@ test('a pending host chat request announces progress while manual catalog naviga
   });
   try {
     const input = page.getByRole('textbox', { name: 'What would you like to see?', exact: true });
-    await input.fill('Show the first published item'); await input.press('Enter'); await requested;
+    await input.fill('Explain how these topics relate'); await input.press('Enter'); await requested;
     const status = page.locator('.platform-view-status');
-    await expect(status).toHaveAttribute('role', 'status'); await expect(status).toHaveText('Shaping your view…');
-    const item = page.locator('.platform-explorer').getByRole('button', { name: 'First published item', exact: true });
+    await expect(status).toHaveCount(0);
+    await page.getByRole('button', { name: 'Browse published content' }).click();
+    const item = page.getByRole('region', { name: 'Browse approved information' }).getByRole('button', { name: 'Open First published item', exact: true });
     await expect(item).toBeEnabled(); await item.click();
-    await expect(page.getByRole('region', { name: 'Details of First published item', exact: true })).toBeVisible();
-    await expect(status).not.toHaveText('Shaping your view…');
+    await expect(page.locator('[data-workspace-focused]:not([inert])')).toContainText('First published item');
+    await expect(status).toHaveCount(0);
   } finally { release(); }
 });
 
 test('voice spotlight, reading view, comparison and back reuse the catalog without reconnecting', async ({ page }, info) => {
   await prepare(page, 'voice', true);
-  const ids = await page.locator('.platform-item[data-entity-id]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-entity-id')!));
+  const browse = page.getByRole('button', { name: 'Browse published content', exact: true });
+  if (await browse.count()) await browse.click();
+  const ids = await page.locator('[data-workspace-content^="entity:"]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-workspace-content')!.split(':').at(-1)!));
   expect(ids.length).toBe(2);
+  await page.locator(`[data-workspace-content$=":${ids[1]}"]`).scrollIntoViewIfNeeded();
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
   async function command(revision: number, target: { kind: string; id?: string; ids?: string[] }) {
@@ -296,20 +318,20 @@ test('voice spotlight, reading view, comparison and back reuse the catalog witho
     await expect.poll(() => page.evaluate(id => window.__visitorQuality.navigation.find(item => item.id === id)?.status, `command-${revision}`)).toBe('applied');
   }
   await command(1, { kind: 'spotlight', id: ids[1] });
-  await expect(page.locator('.platform-item[data-spotlight="true"]')).toHaveAttribute('data-entity-id', ids[1]);
-  await expect(page.locator('.platform-item')).toHaveCount(2);
+  await expect(page.locator('[data-workspace-highlighted]')).toHaveCount(1);
+  await expect(page.locator('.platform-workspace-card')).toHaveCount(0);
   await command(2, { kind: 'open', id: ids[1] });
-  await expect(page.locator('.platform-detail')).toHaveAttribute('data-entity-id', ids[1]);
-  await expect(page.locator('.platform-item')).toHaveCount(0);
+  await expect(page.locator('[data-workspace-focused]:not([inert]) [data-entity-id]')).toHaveAttribute('data-entity-id', ids[1]);
+  await expect(page.locator('.platform-workspace-card')).toHaveCount(1);
   await page.evaluate(() => window.__visitorQuality.emit({ type: 'playback_started', responseId: 'reading' }));
   await expect(page.getByText('Speaking · you can interrupt · tap to end', { exact: true })).toBeAttached();
   await page.screenshot({ path: info.outputPath('voice-reading-view.png') });
   await command(3, { kind: 'back' });
-  await expect(page.locator('.platform-item')).toHaveCount(2);
+  await expect(page.locator('.platform-workspace-card')).toHaveCount(1);
   await command(4, { kind: 'compare', ids });
   await expect(page.locator('.platform-comparison-table')).toBeVisible();
   await command(5, { kind: 'collapse' });
-  await expect(page.locator('.platform-item')).toHaveCount(2);
+  await expect(page.locator('.platform-workspace-card')).toHaveCount(2);
   expect(await page.evaluate(() => window.__visitorQuality.calls)).toBe(1);
   await page.getByRole('button', { name: 'End voice conversation', exact: true }).click();
 });
@@ -350,4 +372,27 @@ for (const width of [390, 1600]) for (const reducedMotion of ['reduce', 'no-pref
   await expect.poll(async () => Math.abs((await dock.boundingBox())!.y)).toBeLessThan(2);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: info.outputPath('chat-docked.png') });
+});
+
+test('chat explanation is readable without an error or workspace mutation', async ({ page }) => {
+  const site = await prepare(page, 'chat', true);
+  await page.route(`**/api/visitor/${site.slug}`, async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    await route.fulfill({ json: { text: 'General background: this place has a long public history.', demo: false,
+      availability: { enabled: true, mode: 'chat', live: true, chatRemaining: 24, voiceRemaining: 5, resetsAt: '' } } });
+  });
+  await page.getByRole('button', { name: 'Browse published content' }).click();
+  await page.getByRole('button', { name: 'Open First published item', exact: true }).click();
+  await expect(page.locator('[data-workspace-focused]:not([inert])')).toBeVisible();
+  const before = await page.locator('[data-workspace-content]').count();
+  const input = page.getByRole('textbox', { name: 'What would you like to see?', exact: true });
+  await input.fill('Tell me more about its history'); await input.press('Enter');
+  await expect(page.getByRole('status').filter({ hasText: 'General background:' })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: 'General background:' })).toHaveCount(0);
+  await expect(page.locator('[data-workspace-content]')).toHaveCount(before);
+  const answer = page.getByRole('complementary', { name: 'Assistant answer' });
+  await expect(answer).toBeInViewport();
+  expect(await answer.evaluate(element => { const r = element.getBoundingClientRect(); return element.contains(document.elementFromPoint(r.x + r.width / 2, r.y + Math.min(20, r.height / 2))); })).toBe(true);
+  await page.getByRole('button', { name: 'Dismiss answer' }).click();
+  await expect(answer).toHaveCount(0); await expect(input).toBeFocused();
 });

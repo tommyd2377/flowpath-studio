@@ -72,7 +72,7 @@ function targetPlan(catalog: KnowledgeCatalog, target: 'collection' | 'criteria'
 test.describe('published validated destinations', () => {
   let site: Site; let catalog: KnowledgeCatalog;
   test.beforeAll(async ({ request }) => { ({ site, catalog } = await publishFixture(request)); });
-
+  const focused = (page: Page) => page.locator('[data-workspace-focused]:not([inert])');
   async function open(page: Page, plan: PresentationPlan | (() => PresentationPlan), waitForReply?: () => Promise<void>) {
     await page.route(`**/api/visitor/${site.slug}`, async route => {
       if (route.request().method() !== 'POST') return route.fulfill({ json: { availability } });
@@ -81,106 +81,52 @@ test.describe('published validated destinations', () => {
     });
     await page.goto(`/s/${site.slug}`);
     await expect(page.getByRole('textbox', { name: 'What would you like to see?', exact: true })).toBeEnabled();
-    await settled(page);
-    // Model a destination below a publisher's opening content without assuming
-    // a particular host heading length or viewport-sized hero.
-    await page.addStyleTag({ content: '.platform-container { margin-top: 650px !important; }' });
   }
-
   async function ask(page: Page) {
     const composer = page.getByRole('textbox', { name: 'What would you like to see?', exact: true });
-    await composer.fill('Show the requested destination');
-    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
-    await composer.press('Enter');
-    return composer;
+    await composer.fill('Show the requested destination'); await composer.press('Enter'); return composer;
   }
-
-  for (const target of ['collection', 'relationships'] as const) {
-    test(`${target} is revealed after settling without stealing composer focus`, async ({ page }) => {
-      await page.setViewportSize({ width: 1000, height: 650 });
-      if (target === 'collection') await page.emulateMedia({ reducedMotion: 'reduce' });
-      await open(page, targetPlan(catalog, target));
-      const composer = await ask(page);
-      const slot = page.locator(`[data-platform-slot="${target}"]:not([inert])`);
-      await expect.poll(() => slot.evaluate(element => {
-        const box = element.getBoundingClientRect();
-        return box.top >= 0 && box.top < innerHeight - 100;
-      })).toBeTruthy();
-      await settled(page);
-      await expect(composer).toBeFocused();
-      expect(await page.evaluate(() => scrollY)).toBeGreaterThan(100);
-      if (target === 'collection') expect(await slot.evaluate(element => element.getAnimations({ subtree: true }).filter(animation => animation.playState === 'running'))).toHaveLength(0);
-    });
-  }
-
-  for (const input of ['wheel', 'touchstart'] as const) {
-    test(`${input} cancels a pending shared reveal`, async ({ page }) => {
-      await page.setViewportSize({ width: 1000, height: 650 });
-      await open(page, targetPlan(catalog, 'relationships'));
-      const composer = await ask(page);
-      await expect(page.locator('[data-platform-slot="relationships"]:not([inert])')).toBeAttached();
-      const before = await page.evaluate(input => {
-        window.dispatchEvent(input === 'wheel' ? new WheelEvent('wheel', { deltaY: -100, bubbles: true }) : new Event('touchstart', { bubbles: true }));
-        return scrollY;
-      }, input);
-      await settled(page);
-      // Wait beyond the bounded 900 ms reveal window to catch delayed jumps.
-      await page.waitForTimeout(1000);
-      expect(await page.evaluate(() => scrollY)).toBeCloseTo(before, 0);
-      await expect(composer).toBeFocused();
-    });
-  }
-
-  test('the opening is not a Back step and equivalent responses do not duplicate history', async ({ page }) => {
+  for (const target of ['collection', 'relationships'] as const) test(`${target} lifts v1 into a visible workspace object without stealing composer focus`, async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 650 }); await page.emulateMedia({ reducedMotion: 'reduce' });
+    await open(page, targetPlan(catalog, target)); const composer = await ask(page);
+    await expect(focused(page)).toHaveAttribute('data-workspace-transition', 'settled');
+    const box = (await focused(page).boundingBox())!; expect(box.y).toBeGreaterThan(0); expect(box.y + box.height).toBeLessThanOrEqual(650);
+    await expect(composer).toBeFocused(); expect(await page.evaluate(() => scrollY)).toBe(0);
+  });
+  for (const input of ['wheel', 'touchstart'] as const) test(`${input} during focus cannot cause a delayed page jump`, async ({ page }) => {
+    await open(page, targetPlan(catalog, 'relationships')); const composer = await ask(page);
+    await expect(focused(page)).toBeAttached();
+    const before = await page.evaluate(input => { window.dispatchEvent(input === 'wheel' ? new WheelEvent('wheel', {deltaY:-100,bubbles:true}) : new Event('touchstart',{bubbles:true})); return scrollY; }, input);
+    await expect(focused(page)).toHaveAttribute('data-workspace-transition', 'settled');
+    await page.waitForTimeout(1000); expect(await page.evaluate(() => scrollY)).toBeCloseTo(before, 0); await expect(composer).toBeFocused();
+  });
+  test('equivalent v1 replies keep one instance and Back retains its useful object', async ({ page }) => {
     await open(page, targetPlan(catalog, 'relationships'));
-    const back = page.locator('.platform-view-toolbar').getByRole('button', { name: 'Back', exact: true });
-    await expect(back).toHaveCount(0);
-    for (let turn = 0; turn < 2; turn++) {
-      const response = page.waitForResponse(response => response.url().endsWith(`/api/visitor/${site.slug}`) && response.request().method() === 'POST');
-      await ask(page); await response;
-      await expect(page.locator('[data-platform-slot="relationships"]:not([inert])')).toBeAttached();
-      await settled(page);
-    }
-    await back.click();
-    await expect(page.locator('[data-platform-slot="relationships"]')).toHaveCount(0);
-    await expect(back).toHaveCount(0);
+    for (let turn = 0; turn < 2; turn++) { await ask(page); await expect(focused(page)).toHaveAttribute('data-workspace-transition','settled'); await expect(page.locator('.platform-workspace-card')).toHaveCount(1); }
+    await focused(page).getByRole('button',{name:'Back to workspace'}).click(); await expect(focused(page)).toHaveCount(0);
+    await expect(page.locator('.platform-workspace-card')).toHaveCount(1);
   });
-
-  test('model filter replacements and reset apply with the view; Back and old plans preserve filters', async ({ page }) => {
-    const filteredView: PresentationPlan = { ...targetPlan(catalog, 'collection'), components: [
-      ...targetPlan(catalog, 'criteria').components, ...targetPlan(catalog, 'collection').components,
-    ] };
-    let responsePlan: PresentationPlan = { ...filteredView, stateUpdate: { filters: [{ attributeId: 'price', operator: 'gte', value: 85 }] } };
-    await open(page, () => responsePlan);
-    await expect(page.getByRole('region', { name: 'Refine the collection' })).toHaveCount(0);
-    await ask(page);
-    await expect(page.locator('.platform-item')).toHaveCount(1);
-    await expect(page.locator('.platform-item')).toContainText('Wheel Skills');
-    responsePlan = { ...filteredView, stateUpdate: { filters: [] } };
-    await ask(page);
-    await expect(page.locator('.platform-item')).toHaveCount(5);
-    await page.locator('.platform-view-toolbar').getByRole('button', { name: 'Back', exact: true }).click();
-    await expect(page.locator('.platform-item')).toHaveCount(1);
-    responsePlan = filteredView;
-    await ask(page);
-    await expect(page.locator('.platform-item')).toHaveCount(1);
-    responsePlan = { ...filteredView, stateUpdate: { filters: [{ attributeId: 'fabricated-price', operator: 'lte', value: 1 }] } };
-    await ask(page);
-    await expect(page.getByRole('region', { name: 'Site assistant' }).getByRole('alert')).toContainText('current view is still available');
-    await expect(page.locator('.platform-item')).toHaveCount(1);
+  test('model filters update only their object; Back and old plans retain filters and invalid updates preserve the view', async ({ page }) => {
+    const filteredView = targetPlan(catalog, 'collection');
+    let responsePlan: PresentationPlan = { ...filteredView, stateUpdate: { filters: [{attributeId:'price',operator:'gte',value:85}] } };
+    await open(page, () => responsePlan); await ask(page);
+    const items = () => focused(page).locator('.platform-workspace-content-list > li');
+    await expect(items()).toHaveCount(1); await expect(items()).toContainText('Wheel Skills');
+    await focused(page).getByRole('button',{name:'Back to workspace'}).click(); await expect(focused(page)).toHaveCount(0);
+    responsePlan = filteredView; await ask(page); await expect(items()).toHaveCount(1);
+    responsePlan = {...filteredView,stateUpdate:{filters:[]}}; await ask(page); await expect(items()).toHaveCount(5);
+    responsePlan = {...filteredView,stateUpdate:{filters:[{attributeId:'fabricated-price',operator:'lte',value:1}]}};
+    await ask(page); await expect(page.getByRole('alert').filter({hasText:'workspace remains available'})).toBeVisible();
+    await expect(items()).toHaveCount(5);
   });
-
-  test('manual All items cancels a pending model filter update', async ({ page }) => {
-    let release!: () => void;
-    const delayed = new Promise<void>(resolve => { release = resolve; });
-    await open(page, { ...targetPlan(catalog, 'collection'), stateUpdate: { filters: [{ attributeId: 'price', operator: 'gte', value: 85 }] } }, () => delayed);
-    await ask(page);
-    await expect(page.locator('.platform-view-status')).toHaveText('Shaping your view…');
-    await page.locator('.platform-view-toolbar').getByRole('button', { name: 'All items', exact: true }).click(); release();
-    await expect(page.locator('.platform-view-status')).not.toHaveText('Shaping your view…');
-    await expect(page.locator('.platform-item')).toHaveCount(5);
+  test('manual browsing cancels a pending model filter update', async ({ page }) => {
+    let release!: () => void; const delayed = new Promise<void>(resolve => {release=resolve;});
+    await open(page, {...targetPlan(catalog,'collection'),stateUpdate:{filters:[{attributeId:'price',operator:'gte',value:85}]}}, () => delayed);
+    await ask(page); await page.getByRole('button',{name:'Browse published content'}).click(); release();
+    await expect(page.getByRole('region',{name:'Browse approved information'})).toBeVisible();
+    await expect(page.locator('.platform-workspace-card')).toHaveCount(0);
+    await expect(page.locator('.platform-view-status')).toHaveCount(0);
   });
-
 });
 
 test('a delayed detail focus cannot steal a newer keyboard choice of Back', async ({ page }) => {
@@ -189,7 +135,7 @@ test('a delayed detail focus cannot steal a newer keyboard choice of Back', asyn
   const back = page.locator('.platform-view-toolbar').getByRole('button', { name: 'Back', exact: true });
   await title.focus(); await page.keyboard.press('Enter');
   await expect(page.getByRole('heading', { name: 'Example Blanco', exact: true })).toBeFocused();
-  await back.click(); await settled(page);
+  await page.getByRole('button', { name: 'Back to results', exact: true }).click(); await settled(page);
 
   // Hold frame callbacks so focus moves to Back before the queued detail handoff.
   await page.evaluate(() => {

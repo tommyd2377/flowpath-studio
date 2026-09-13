@@ -4,9 +4,11 @@ import test from 'node:test';
 import { validateCatalog } from '@thevoice/platform-ui/contracts';
 import { defaultPresentation } from '@thevoice/platform-ui/catalog';
 import { initialInteraction } from '@thevoice/platform-ui/interaction';
+import type { MediaLibrary } from '@thevoice/platform-ui/media';
 import { CATALOG_OUTPUT_LIMIT, catalogPresentationInstructions, catalogPresentationJsonSchema, parseCatalogPresentation, validateCatalogState } from '../lib/catalog-presentation';
 import { parseVisitorText, visitorTextReply, visitorVoiceReply } from '../lib/visitor-provider';
 import { sampleContent } from '../lib/site-model';
+import { semanticFixture } from '../fixtures/semantic-knowledge/graph';
 
 const catalog = () => validateCatalog(JSON.parse(readFileSync(new URL('../fixtures/catalogs/tequila.json', import.meta.url), 'utf8')));
 const envelope = (text: string) => ({ status: 'completed', output: [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text }] }] });
@@ -52,6 +54,11 @@ test('visitor context preserves shortlist and focused items outside filters whil
   const filtered = { ...state, filters: [{ attributeId: 'price', operator: 'lte', value: 50 }] };
   assert.deepEqual(validateCatalogState(filtered, value).entityIds, state.entityIds);
   assert.equal(validateCatalogState({ ...filtered, focusedId: state.entityIds[0], entityIds: [state.entityIds[0]] }, value).focusedId, state.entityIds[0]);
+  const media: MediaLibrary = { schemaVersion: 1, id: 'media-state', assets: [{ id: 'published-photo', width: 1, height: 1, caption: '', alt: 'Published photo' }], albums: [], associations: [] };
+  const focusedPhoto = { ...state, focusedRef: { kind: 'photo' as const, id: 'published-photo' }, focusOrigin: { reference: { kind: 'photo' as const, id: 'published-photo' }, surface: 'gallery' as const, focusKey: 'photo:published-photo', scrollTop: 12 } };
+  assert.equal(validateCatalogState(focusedPhoto, value, media).focusedRef?.id, 'published-photo');
+  assert.throws(() => validateCatalogState({ ...focusedPhoto, focusedRef: { kind: 'photo', id: 'draft-photo' } }, value, media));
+  assert.throws(() => validateCatalogState({ ...focusedPhoto, focusOrigin: { ...focusedPhoto.focusOrigin, surface: 'collection' } }, value, media));
   assert.throws(() => validateCatalogState({ ...state, filters: [{ attributeId: 'missing', operator: 'lte', value: 50 }] }, value));
   const instructions = catalogPresentationInstructions(value, { history: [], catalogState: state });
   assert.ok(instructions.includes('untrusted reference data'));
@@ -101,4 +108,21 @@ test('text adapter sends exactly one mocked request, uses semantic schema and re
 test('an already cancelled voice request never opens a provider session', async () => {
   const controller = new AbortController(); controller.abort();
   await assert.rejects(visitorVoiceReply(sampleContent('photographer'), { requestId: '11111111-1111-4111-8111-111111111111', kind: 'voice', audio: '', history: [] }, controller.signal, catalog()), /cancelled/);
+});
+
+test('the actual visitor text path answers a singleton address from bounded published facts using one mocked plan', async () => {
+  const environment = process.env; const originalFetch = globalThis.fetch; let calls = 0;
+  process.env = { NODE_ENV: 'test', OPENAI_API_KEY: 'offline-fixture-placeholder' };
+  const plan = { ...defaultPresentation(semanticFixture), components: [{ id: 'detail', type: 'detail' as const, variant: 'expanded' as const, entityIds: ['harbor'], attributeIds: [] }] };
+  globalThis.fetch = async (_url, init) => {
+    calls++; const body = JSON.parse(String(init?.body));
+    assert.ok(body.instructions.includes('12 Example Lane'));
+    assert.ok(!body.instructions.includes('origins'));
+    return Response.json(envelope(JSON.stringify({ status: 'ready', plan })));
+  };
+  try {
+    const reply = await visitorTextReply(sampleContent('photographer'), { requestId: '11111111-1111-4111-8111-111111111111', kind: 'chat', text: 'What is Harbor Studio address?', history: [], catalogState: initialInteraction(semanticFixture) }, new AbortController().signal, semanticFixture);
+    assert.match(reply.text, /Harbor Studio · Address: 12 Example Lane, Brooklyn, NY/);
+    assert.equal(calls, 1);
+  } finally { process.env = environment; globalThis.fetch = originalFetch; }
 });

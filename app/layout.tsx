@@ -3,8 +3,13 @@ import './globals.css';
 import '@thevoice/platform-ui/styles.css';
 
 export const metadata: Metadata = {
-  title: 'Voice Studio',
-  description: 'Create and manage your own voice-led website.',
+  title: 'FlowPath Studio',
+  description: 'Create and manage your own FlowPath website.',
+  icons: {
+    icon: '/brand/flowpath-icon-square.png',
+    shortcut: '/brand/flowpath-icon-square.png',
+    apple: '/brand/flowpath-icon-square.png',
+  },
   robots: { index: false, follow: false },
 };
 

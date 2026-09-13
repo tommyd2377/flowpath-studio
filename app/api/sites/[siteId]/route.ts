@@ -5,7 +5,8 @@ import { getSite, modifySite } from '@/lib/site-store';
 import { applyCommand, commandSchema } from '@/lib/site-commands';
 import { editWithChat } from '@/lib/chat-editor';
 import { readKnowledgeArtifact, stagePublicKnowledge } from '@/lib/knowledge-store';
-import { validateOpening } from '@/lib/site-opening';
+import { validateOpeningWithMedia } from '@/lib/site-opening';
+import { pruneGreetingSources, validateGreeting } from '@/lib/site-greeting';
 import { recordPlatformEvent } from '@/lib/platform-events';
 import { readMediaLibrary, reconcileSectionAssociations, stagePublicMedia } from '@/lib/media-store';
 import { validateMediaLibrary } from '@thevoice/platform-ui/media';
@@ -27,6 +28,11 @@ export async function POST(request: Request, { params }: Context) {
     const { siteId } = await params;
     const command = commandSchema.parse(await readJson(request));
     let effectiveCommand = command;
+    if (command.action === 'save' && command.content.greetingPoints) {
+      const current = await getSite(user, siteId);
+      const catalog = current.draft.knowledgeRevisionId ? (await readKnowledgeArtifact(user, siteId, current.draft.knowledgeRevisionId)).catalog : null;
+      validateGreeting(pruneGreetingSources(command.content), catalog);
+    }
     if (command.action === 'publish') {
       let current = await getSite(user, siteId);
       const repair = await reconcileSectionAssociations(user, siteId, current.revision, current.draft.sections.map(section => section.id));
@@ -34,12 +40,13 @@ export async function POST(request: Request, { params }: Context) {
       effectiveCommand = { ...command, revision: current.revision };
       await assertLaunchPublication(user, siteId);
       const catalog = current.draft.knowledgeRevisionId ? (await readKnowledgeArtifact(user, siteId, current.draft.knowledgeRevisionId)).catalog : null;
-      validateOpening(current.draft, catalog);
+      const media = current.draft.mediaRevisionId ? await readMediaLibrary(user, siteId, current.draft.mediaRevisionId) : null;
+      validateOpeningWithMedia(current.draft, catalog, media);
+      validateGreeting(current.draft, catalog);
       if (current.draft.knowledgeRevisionId) await stagePublicKnowledge(user, siteId, current.draft.knowledgeRevisionId);
-      if (current.draft.mediaRevisionId) {
-        const media = await readMediaLibrary(user, siteId, current.draft.mediaRevisionId);
+      if (media) {
         validateMediaLibrary(media, { entityIds: catalog?.entities.map(item => item.id) ?? [], sectionIds: current.draft.sections.map(item => item.id) });
-        await stagePublicMedia(user, siteId, current.draft.mediaRevisionId);
+        await stagePublicMedia(user, siteId, current.draft.mediaRevisionId!);
       }
     }
     let site = command.action === 'chat' ? await editWithChat(user, siteId, command)

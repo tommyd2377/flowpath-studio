@@ -25,6 +25,7 @@ test('malformed and oversized event frames fail closed without accepting plans',
   }
   assert.equal(accepted, 0);
   assert.equal(visitorRealtimeEventSchema.safeParse({ type: 'speech_started' }).success, false);
+  assert.equal(visitorRealtimeEventSchema.safeParse({ type: 'task_error', revision: 1, interactionRevision: 0, message: 'Image search could not finish.' }).success, true);
 });
 
 test('Stop cancels a pending reader immediately and late frames do not escape', async () => {

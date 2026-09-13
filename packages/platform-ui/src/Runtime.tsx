@@ -5,10 +5,10 @@ import { z } from 'zod';
 import { useReducedMotion } from 'motion/react';
 import { validateCatalog, validatePlan, catalogFilterSchema, type KnowledgeCatalog, type PresentationPlan } from './contracts.js';
 import { defaultPresentation, filterEntities } from './catalog.js';
-import { applyPresentationState, comparisonPlan, detailPlan, entityIdsForComponent, initialInteraction, planForIntent, replaceCatalogFilter, type CatalogInteractionState } from './interaction.js';
+import { applyPresentationState, comparisonPlan, detailPlan, entityIdsForComponent, initialInteraction, planForIntent, replaceCatalogFilter, type CatalogInteractionState, type FocusReference, type ReturnAnchor as ReturnAnchorState } from './interaction.js';
 import { compilePresentation } from './compile.js';
 import { preflightPresentation } from './preflight.js';
-import { Icon, RuntimeContext, platformLibrary } from './components.js';
+import { FocusStage, FocusSurface, Icon, RuntimeContext, VoiceFocusBridge, platformLibrary } from './components.js';
 import { Renderer } from './openui.js';
 import { InterfaceMotion } from './motion.js';
 import { MediaProvider } from './MediaViews.js';
@@ -35,6 +35,7 @@ export type CatalogExplorerProps = {
 
 const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('focus'), params: z.object({ id: z.string() }).strict() }).strict(),
+  z.object({ type: z.literal('back'), params: z.object({}).strict() }).strict(),
   z.object({ type: z.literal('select'), params: z.object({ id: z.string() }).strict() }).strict(),
   z.object({ type: z.literal('collection'), params: z.object({ id: z.string() }).strict() }).strict(),
   z.object({ type: z.literal('filter'), params: catalogFilterSchema }).strict(),
@@ -42,7 +43,7 @@ const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('compare'), params: z.object({}).strict() }).strict(),
 ]);
 
-type SavedView = { plan: PresentationPlan; state: CatalogInteractionState; scrollTop: number; spotlightId: string | null };
+type SavedView = { plan: PresentationPlan; state: CatalogInteractionState; scrollTop: number; spotlightId: string | null; returnAnchor?: ReturnAnchorState };
 function scrollContainer(root: HTMLElement | null) {
   for (let node = root; node; node = node.parentElement) {
     if (/(auto|scroll)/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight) return node;
@@ -69,6 +70,9 @@ function useSettledReveal(root: { current: HTMLDivElement | null }, plan: Presen
         if (performance.now() - started < 900) frame = requestAnimationFrame(follow);
         return;
       }
+      // Focus surfaces are viewport-bound overlays; scrolling their detail
+      // slot would pull the document toward the old card's flow position.
+      if (target.closest('[data-focus-layer="true"]')) return;
       const bounds = target.getBoundingClientRect();
       const geometry = [bounds.top, bounds.bottom, bounds.width].map(value => Math.round(value * 10)).join(':');
       stable = geometry === previous ? stable + 1 : 0;
@@ -115,22 +119,23 @@ function checkedView(catalog: KnowledgeCatalog, value: unknown, snapshotId: stri
 }
 
 /** Render a complete validated view. Data and actions are supplied by the embedding application. */
-export function PresentationView({ catalog, plan, state, onAction, onLinkClick, media, resolveAssetUrl, onMediaInteraction, onPhotoView, spotlightId }: {
+export function PresentationView({ catalog, plan, state, onAction, onLinkClick, media, resolveAssetUrl, onMediaInteraction, onPhotoView, onMediaFocusChange, mediaLayoutId, spotlightId }: {
   spotlightId?: string | null;
   catalog: KnowledgeCatalog; plan: PresentationPlan; state: CatalogInteractionState;
   onAction?: (event: { type: string; params: Record<string, unknown> }) => void;
   onLinkClick?: (event: { kind: 'link_click'; entityId?: string; capabilityId: string }) => void;
   media?: MediaLibrary | null; resolveAssetUrl?: AssetUrlResolver; onMediaInteraction?: () => void; onPhotoView?: (assetId: string) => void;
+  onMediaFocusChange?: (reference: FocusReference | null, origin?: ReturnAnchorState | null) => void; mediaLayoutId?: string;
 }) {
   const program = useMemo(() => {
     const compiled = compilePresentation(catalog, plan, state.snapshotId, media);
     preflightPresentation(compiled);
     return compiled;
   }, [catalog, plan, state.snapshotId, media]);
-  const context = useMemo(() => ({ catalog, state, plan, spotlightId, onLinkClick, onInteraction: onMediaInteraction }), [catalog, state, plan, spotlightId, onLinkClick, onMediaInteraction]);
+  const context = useMemo(() => ({ catalog, state, plan, spotlightId, onLinkClick, onInteraction: onMediaInteraction, onMediaFocusChange }), [catalog, state, plan, spotlightId, onLinkClick, onMediaInteraction, onMediaFocusChange]);
   const content = <RuntimeContext.Provider value={context}><Renderer response={program} library={platformLibrary}
     isStreaming={false} publishObservability={false} onAction={onAction}/></RuntimeContext.Provider>;
-  return media ? <MediaProvider library={media} resolveAssetUrl={resolveAssetUrl ?? (() => '')} onInteraction={onMediaInteraction} onPhotoView={onPhotoView}>{content}</MediaProvider> : content;
+  return media ? <MediaProvider library={media} resolveAssetUrl={resolveAssetUrl ?? (() => '')} onInteraction={onMediaInteraction} onPhotoView={onPhotoView} layoutGroupId={mediaLayoutId}>{content}</MediaProvider> : content;
 }
 
 function Explorer({ commandRef, catalog, accent = '#c6af86', snapshotId = catalog.id, plan: suppliedPlan, onStateChange, onInteraction, onOutcome, onPresentation, onAsk, pending: externalPending = false, showComposer = true, media, resolveAssetUrl, onPhotoView }: CatalogExplorerProps) {
@@ -151,6 +156,7 @@ function Explorer({ commandRef, catalog, accent = '#c6af86', snapshotId = catalo
   const root = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLInputElement>(null);
   const restoreScroll = useRef<number | null>(null);
+  const restoreAnchor = useRef<ReturnAnchorState | null>(null);
   const instanceId = useId();
   const stateCallback = useRef(onStateChange);
   const presentationCallback = useRef(onPresentation);
@@ -169,7 +175,8 @@ function Explorer({ commandRef, catalog, accent = '#c6af86', snapshotId = catalo
     const allowed = collection ? new Set(entityIdsForComponent(catalog, collection)) : null;
     const entityIds = collection ? filterEntities(catalog, state.filters).filter(entity => allowed!.has(entity.id)).map(entity => entity.id)
       : comparison?.entityIds ?? detail?.entityIds ?? state.entityIds;
-    return { ...state, entityIds, focusedId: detail?.entityIds[0] ?? null };
+    const focusedId = detail?.entityIds[0] ?? null;
+    return { ...state, entityIds, focusedId, focusedRef: focusedId ? { kind: 'entity', id: focusedId } : state.focusedRef };
   }, [catalog, accepted, state]);
 
   useEffect(() => { stateCallback.current = onStateChange; }, [onStateChange]);
@@ -185,12 +192,15 @@ function Explorer({ commandRef, catalog, accent = '#c6af86', snapshotId = catalo
     setBusy(false);
   }, []);
 
-  const accept = useCallback((value: unknown, remember = true) => {
+  const accept = useCallback((value: unknown, remember = true, returnAnchor?: ReturnAnchorState) => {
     const next = checkedView(catalog, value, snapshotId, media);
-    const nextState = applyPresentationState(interaction, next);
+    const focusedId = next.components.find(component => component.type === 'detail')?.entityIds[0] ?? null;
+    const nextState = { ...applyPresentationState(interaction, next), focusedId,
+      focusedRef: focusedId ? { kind: 'entity' as const, id: focusedId } : null,
+      focusOrigin: returnAnchor ?? null };
     const changedFilters = JSON.stringify(nextState.filters) !== JSON.stringify(interaction.filters);
-    if (remember && (changedFilters || JSON.stringify(next) !== JSON.stringify(accepted))) setHistory(items => [...items.slice(-19), { plan: accepted, state: interaction, scrollTop: scrollContainer(root.current)?.scrollTop ?? window.scrollY, spotlightId }]);
-    if (changedFilters) setState(nextState);
+    if (remember && (changedFilters || JSON.stringify(next) !== JSON.stringify(accepted))) setHistory(items => [...items.slice(-19), { plan: accepted, state: interaction, scrollTop: scrollContainer(root.current)?.scrollTop ?? window.scrollY, spotlightId, ...(returnAnchor ? { returnAnchor } : {}) }]);
+    setState(nextState);
     setAccepted(next);
     setError('');
   }, [catalog, snapshotId, accepted, interaction, media, spotlightId]);
@@ -202,12 +212,14 @@ function Explorer({ commandRef, catalog, accent = '#c6af86', snapshotId = catalo
     setBusy(false);
     try {
       const next = checkedView(catalog, suppliedPlan, snapshotId, media);
-      const nextState = applyPresentationState(interaction, next);
+      const focusedId = next.components.find(component => component.type === 'detail')?.entityIds[0] ?? null;
+      const nextState = { ...applyPresentationState(interaction, next), focusedId,
+        focusedRef: focusedId ? { kind: 'entity' as const, id: focusedId } : null, focusOrigin: null };
       const changedFilters = JSON.stringify(nextState.filters) !== JSON.stringify(interaction.filters);
       if (changedFilters || JSON.stringify(next) !== JSON.stringify(accepted)) {
         setHistory(items => [...items.slice(-19), { plan: accepted, state: interaction, scrollTop: scrollContainer(root.current)?.scrollTop ?? window.scrollY, spotlightId }]);
         setAccepted(next);
-        if (changedFilters) setState(nextState);
+        setState(nextState);
       }
       setError('');
     } catch { setError('That view could not be validated. Your previous view is still available.'); }
@@ -227,11 +239,14 @@ function Explorer({ commandRef, catalog, accent = '#c6af86', snapshotId = catalo
     cancelPending();
     setError('');
     try {
-      if (action.type === 'focus') {
+      if (action.type === 'back') {
+        back();
+      } else if (action.type === 'focus') {
         if (!catalog.entities.some(entity => entity.id === action.params.id)) throw new Error();
         const origin = document.activeElement;
         const current = generation.current;
-        accept(detailPlan(catalog, action.params.id, snapshotId));
+        const returnAnchor: ReturnAnchorState = { reference: { kind: 'entity', id: action.params.id }, surface: 'collection', focusKey: `entity:${action.params.id}`, scrollTop: scrollContainer(root.current)?.scrollTop ?? window.scrollY };
+        accept(detailPlan(catalog, action.params.id, snapshotId), true, returnAnchor);
         // A deliberate navigation can transfer focus; background/model updates never steal it.
         requestAnimationFrame(() => {
           if (generation.current !== current) return;
@@ -271,6 +286,7 @@ function Explorer({ commandRef, catalog, accent = '#c6af86', snapshotId = catalo
     const previous = history.at(-1);
     if (!previous) return;
     setHistory(items => items.slice(0, -1));
+    restoreAnchor.current = previous.returnAnchor ?? previous.state.focusOrigin;
     setAccepted({ ...previous.plan, transition: { type: 'restore' } });
     setState(previous.state);
     setSpotlightId(previous.spotlightId);
@@ -301,6 +317,27 @@ function Explorer({ commandRef, catalog, accent = '#c6af86', snapshotId = catalo
     events.forEach(event => window.addEventListener(event, cancel, { passive: true, capture: true }));
     return () => { cancel(); events.forEach(event => window.removeEventListener(event, cancel, true)); };
   }, [accepted]);
+  const mediaFocusChange = useCallback((reference: FocusReference | null, origin?: ReturnAnchorState | null) => {
+    setState(value => ({ ...value, focusedId: reference?.kind === 'entity' ? reference.id : null, focusedRef: reference, focusOrigin: origin ?? null }));
+  }, []);
+  useEffect(() => {
+    const anchor = restoreAnchor.current;
+    if (!anchor) return;
+    let frame = 0;
+    const find = () => {
+      const escaped = anchor.reference.id.replace(/[^A-Za-z0-9_-]/g, '\\$&');
+      const selector = anchor.reference.kind === 'entity'
+        ? `[data-entity-id="${escaped}"] .platform-item-open`
+        : `[data-gallery-asset="${escaped}"] button`;
+      const target = Array.from(root.current?.querySelectorAll<HTMLElement>(selector) ?? []).find(candidate => !candidate.closest('[inert], [aria-hidden="true"]'));
+      if (target && !target.closest('[inert], [aria-hidden="true"]')) {
+        target.focus({ preventScroll: true }); restoreAnchor.current = null; return;
+      }
+      frame = requestAnimationFrame(find);
+    };
+    frame = requestAnimationFrame(find);
+    return () => cancelAnimationFrame(frame);
+  }, [accepted]);
   useEffect(() => {
     if (!commandRef) return;
     commandRef.current = command => {
@@ -320,11 +357,21 @@ function Explorer({ commandRef, catalog, accent = '#c6af86', snapshotId = catalo
           setSpotlightId(command.id); return true;
         }
         if (command.kind !== 'open' && command.kind !== 'expand') return false;
-        accept(detailPlan(catalog, command.id, snapshotId)); setSpotlightId(null); return true;
+        const returnAnchor: ReturnAnchorState = { reference: { kind: 'entity', id: command.id }, surface: 'collection', focusKey: `entity:${command.id}`, scrollTop: scrollContainer(root.current)?.scrollTop ?? window.scrollY };
+        accept(detailPlan(catalog, command.id, snapshotId), true, returnAnchor); setSpotlightId(null); return true;
       } catch { return false; }
     };
     return () => { commandRef.current = null; };
   });
+  const focusedEntity = interaction.focusedRef?.kind === 'entity';
+  const focusedReference = interaction.focusedRef;
+  const focusedEntityName = focusedReference?.kind === 'entity' ? catalog.entities.find(entity => entity.id === focusedReference.id)?.name : undefined;
+  const focusStatus = focusedReference ? focusedReference.kind === 'entity' ? `Focused on ${focusedEntityName ?? 'a published item'}.` : 'Focused on a published photo.' : '';
+  const currentPresentation = <PresentationView spotlightId={spotlightId} catalog={catalog} plan={visiblePlan} state={interaction} media={media} resolveAssetUrl={resolveAssetUrl} mediaLayoutId={instanceId} onPhotoView={onPhotoView} onMediaInteraction={() => { onInteraction?.(); cancelPending(); }} onMediaFocusChange={mediaFocusChange} onAction={handleAction} onLinkClick={event => { onInteraction?.(); onOutcome?.(event); }}/>;
+  const previousView = history.at(-1);
+  const focusContext = focusedEntity
+    ? previousView ? <PresentationView catalog={catalog} plan={previousView.plan} state={previousView.state} media={media} resolveAssetUrl={resolveAssetUrl} mediaLayoutId={instanceId}/> : undefined
+    : currentPresentation;
   async function ask(event: FormEvent) {
     event.preventDefault();
     const query = text.trim();
@@ -352,9 +399,11 @@ function Explorer({ commandRef, catalog, accent = '#c6af86', snapshotId = catalo
       {showComposer && <div className="platform-composer-area"><form onSubmit={event => void ask(event)} className="platform-composer"><Icon name="spark" size={20}/><label className="platform-sr-only" htmlFor={`${instanceId}-intent`}>What are you looking for?</label><input ref={composer} id={`${instanceId}-intent`} value={text} maxLength={2000} onChange={event => setText(event.target.value)} placeholder="Tell us what matters to you…" autoComplete="off"/><button className="platform-submit" type="submit" disabled={busy || !text.trim()} aria-label="Explore this request"><Icon name="arrow"/></button></form>
         <div className="platform-prompts"><span>Try a direction</span>{catalog.jobs.slice(0, 3).map(job => <button type="button" key={job.id} disabled={busy} onClick={() => { setText(job.label); composer.current?.focus({ preventScroll: true }); }}>{job.label}<Icon name="arrow" size={12}/></button>)}</div>
       </div>}
-      <div className="platform-view-toolbar"><div>{!!history.length && <><button className="platform-text-button" type="button" onClick={() => back()}><Icon name="back" size={14}/>Back</button><span className="platform-toolbar-divider"/></>}<button className="platform-text-button" type="button" onClick={reset}>All items</button>{!!media?.assets.length && <button className="platform-text-button" type="button" onClick={() => { onInteraction?.(); cancelPending(); accept(planForIntent(catalog, 'show photos', interaction, media)); }}>Photos</button>}</div><span className="platform-view-status" role="status" aria-live="polite">{busy || externalPending ? 'Shaping your view…' : gallery && media ? `${galleryAssetIds(media, gallery).length} photos in this view` : interaction.focusedId ? 'A closer look' : `${interaction.entityIds.length} ${accepted.operation === 'compare' ? 'items side by side' : 'items in this view'}`}</span></div>
+      <div className="platform-view-toolbar"><div>{!!history.length && <><button className="platform-text-button" type="button" onClick={() => back()}><Icon name="back" size={14}/>Back</button><span className="platform-toolbar-divider"/></>}<button className="platform-text-button" type="button" onClick={reset}>All items</button>{!!media?.assets.length && <button className="platform-text-button" type="button" onClick={() => { onInteraction?.(); cancelPending(); accept(planForIntent(catalog, 'show photos', interaction, media)); }}>Photos</button>}</div><VoiceFocusBridge reference={focusedReference} status={busy || externalPending ? 'Shaping your view…' : focusStatus}><span className="platform-view-status" role="status" aria-live="polite">{busy || externalPending ? 'Shaping your view…' : gallery && media ? `${galleryAssetIds(media, gallery).length} photos in this view` : interaction.focusedId ? 'A closer look' : `${interaction.entityIds.length} ${accepted.operation === 'compare' ? 'items side by side' : 'items in this view'}`}</span></VoiceFocusBridge></div>
       {error && <div className="platform-error" role="alert"><p>{error}</p><button type="button" aria-label="Dismiss message" onClick={() => setError('')}><Icon name="close" size={14}/></button></div>}
-      <PresentationView spotlightId={spotlightId} catalog={catalog} plan={visiblePlan} state={interaction} media={media} resolveAssetUrl={resolveAssetUrl} onPhotoView={onPhotoView} onMediaInteraction={() => { onInteraction?.(); cancelPending(); }} onAction={handleAction} onLinkClick={event => { onInteraction?.(); onOutcome?.(event); }}/>
+      <FocusStage focused={focusedEntity} onClose={focusedEntity ? () => back() : undefined} label={interaction.focusedRef ? `Focused ${interaction.focusedRef.kind}` : 'Published catalog'} context={focusContext}>
+        {focusedEntity ? <FocusSurface key={`entity:${interaction.focusedRef!.id}`} reference={interaction.focusedRef} onClose={() => back()} title={`Details of ${catalog.entities.find(entity => entity.id === interaction.focusedRef?.id)?.name ?? 'published item'}`}>{currentPresentation}</FocusSurface>
+          : !focusContext ? currentPresentation : null}</FocusStage>
     </InterfaceMotion>
   </div>;
 }

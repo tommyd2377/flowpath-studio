@@ -1,39 +1,52 @@
 import { test, expect, type Page } from '@playwright/test';
 import type { Site } from '../../lib/site-model';
 import type { VisitorContext, VisitorHistory, VisitorControlUpdate } from '../../lib/visitor-realtime-context';
+import { randomUUID } from 'node:crypto';
+import sharp from 'sharp';
 
 const origin = 'http://127.0.0.1:3225';
-type Harness = { controls: VisitorControlUpdate[]; requests: { context: VisitorContext; history: VisitorHistory }[]; chats: { context: VisitorContext; history: VisitorHistory; text: string }[]; audioMuted: boolean; ack: boolean; failControl: boolean; deferConnection: boolean; deferTrack: boolean; neverResolvePlay: boolean; connect: () => void; attach: () => void; revision: number; calls: number; closed: number; aborted: number; tracks: { stopped: boolean; enabled: boolean }[]; deferPermission: boolean; releasePermission: () => void; emit: (event: unknown) => void; disconnect: () => void; offers: string[] };
+type Harness = { controls: VisitorControlUpdate[]; requests: { context: VisitorContext; history: VisitorHistory }[]; chats: { context: VisitorContext; history: VisitorHistory; text: string }[]; outputActive: boolean; outgoing: { stopped: boolean; enabled: boolean }[]; audioMuted: boolean; ack: boolean; failControl: boolean; deferConnection: boolean; deferTrack: boolean; neverResolvePlay: boolean; connect: () => void; attach: () => void; revision: number; calls: number; closed: number; aborted: number; tracks: { stopped: boolean; enabled: boolean }[]; deferPermission: boolean; releasePermission: () => void; emit: (event: unknown) => void; disconnect: () => void; offers: string[] };
 declare global { interface Window { __visitorVoice: Harness } }
 let publishedSite: Site | undefined;
+let greetingSite: Site | undefined;
 
-async function prepare(page: Page) {
+async function prepare(page: Page, welcome = false) {
   async function post(path: string, data: unknown) {
     const response = await page.request.post(path, { headers: { Origin: origin }, data });
     const body = await response.json(); expect(response.ok(), JSON.stringify(body)).toBeTruthy(); return body;
   }
   // Calls are mocked and each browser is fresh; reuse the immutable publication
   // so regression cases do not consume the demo workspace's site allowance.
-  if (!publishedSite) {
+  if (!(welcome ? greetingSite : publishedSite)) {
     let site: Site = (await post('/api/sites', { name: 'Synthetic voice publisher', slug: `voice-${Date.now()}`, kind: 'photographer' })).site;
-    site = (await post(`/api/sites/${site.id}`, { action: 'save', revision: site.revision, content: { ...site.draft, visitorSpeaksFirst: true, visitor: { enabled: true, mode: 'both', voiceTier: 'standard', chatDailyLimit: 25, voiceDailyLimit: 5 } } })).site;
-    publishedSite = (await post(`/api/sites/${site.id}`, { action: 'publish', revision: site.revision })).site;
+    if (welcome) {
+      const bytes = await sharp({ create: { width: 640, height: 480, channels: 3, background: '#698aa0' } }).png().toBuffer();
+      const upload = await page.request.post(`/api/sites/${site.id}/files`, { headers: { Origin: origin, 'Content-Type': 'image/png', 'X-File-Name': 'greeting-fixture.png', 'X-Site-Revision': String(site.revision) }, data: bytes });
+      expect(upload.ok()).toBe(true); const body = await upload.json(); site = body.site;
+      site = (await post(`/api/sites/${site.id}/media`, { revision: site.revision, library: { schemaVersion: 1, id: randomUUID(), assets: [{ id: body.fileId, width: 640, height: 480, caption: 'Wedding setting', alt: 'Synthetic welcome photograph' }], albums: [], associations: [{ id: 'welcome-photo', assetId: body.fileId, targetType: 'section', targetId: 'weddings', role: 'depicts', primary: true }] } })).site;
+    }
+    site = (await post(`/api/sites/${site.id}`, { action: 'save', revision: site.revision, content: { ...site.draft, visitorSpeaksFirst: !welcome,
+      ...(welcome ? { greetingPoints: [{ kind: 'source', id: 'section:weddings' }, { kind: 'source', id: 'section:portraits' }, { kind: 'custom', text: 'Explore the neighborhood at your own pace.' }] } : {}),
+      visitor: { enabled: true, mode: 'both', voiceTier: 'standard', chatDailyLimit: 25, voiceDailyLimit: 5 } } })).site;
+    const published = (await post(`/api/sites/${site.id}`, { action: 'publish', revision: site.revision })).site;
+    if (welcome) greetingSite = published; else publishedSite = published;
   }
-  const site = publishedSite!;
+  const site = (welcome ? greetingSite : publishedSite)!;
   await page.addInitScript(() => {
     const availability = { enabled: true, mode: 'both', live: true, chatRemaining: 25, voiceRemaining: 5, resetsAt: '' };
     let sink: ReadableStreamDefaultController<Uint8Array> | undefined;
-    const state: Harness = { controls: [], requests: [], chats: [], audioMuted: false, ack: true, failControl: false, deferConnection: false, deferTrack: false, neverResolvePlay: false, connect() {}, attach() {}, revision: 0, calls: 0, closed: 0, aborted: 0, tracks: [], deferPermission: false, releasePermission() {}, offers: [],
+    const state: Harness = { controls: [], requests: [], chats: [], outputActive: false, outgoing: [], audioMuted: false, ack: true, failControl: false, deferConnection: false, deferTrack: false, neverResolvePlay: false, connect() {}, attach() {}, revision: 0, calls: 0, closed: 0, aborted: 0, tracks: [], deferPermission: false, releasePermission() {}, offers: [],
       emit(event) { const frame = event as { type: string; revision?: number; interactionRevision?: number }; if (frame.revision !== undefined) state.revision = Math.max(state.revision, frame.revision); sink?.enqueue(new TextEncoder().encode(`${JSON.stringify(['response_started', 'plan', 'playback_started', 'transcript', 'navigation'].includes(frame.type) ? { interactionRevision: 0, ...frame } : frame)}\n`)); },
       disconnect() { sink?.close(); sink = undefined; } };
     window.__visitorVoice = state;
-    class Track { enabled = true; stopped = false; onended: (() => void) | null = null; stop() { this.stopped = true; } }
+    class Track { clone() { const clone = new Track(); state.outgoing.push(clone); return clone; } enabled = true; stopped = false; onended: (() => void) | null = null; stop() { this.stopped = true; } }
     class Stream { track = new Track(); getTracks() { return [this.track]; } getAudioTracks() { return [this.track]; } }
-    class Node { fftSize = 2048; gain = { value: 1 }; connect() { return this; } getFloatTimeDomainData(array: Float32Array) { array.fill(0); } }
-    class Context { state = 'running'; destination = new Node(); resume() { return Promise.resolve(); } close() { this.state = 'closed'; return Promise.resolve(); } createAnalyser() { return new Node(); } createGain() { return new Node(); } createMediaStreamSource() { return new Node(); } }
+    class Node { output = false; getByteTimeDomainData(array: Uint8Array) { array.fill(this.output && state.outputActive ? 144 : 128); } fftSize = 2048; gain = { value: 1 }; connect() { return this; } getFloatTimeDomainData(array: Float32Array) { array.fill(0); } }
+    let analyserIndex = 0;
+    class Context { state = 'running'; destination = new Node(); resume() { return Promise.resolve(); } close() { this.state = 'closed'; return Promise.resolve(); } createAnalyser() { const node = new Node(); node.output = analyserIndex++ % 2 === 1; return node; } createGain() { return new Node(); } createMediaStreamSource() { return new Node(); } }
     class Audio { autoplay = false; srcObject: unknown; get muted() { return state.audioMuted; } set muted(value: boolean) { state.audioMuted = value; } setAttribute() {} play() { return state.neverResolvePlay ? new Promise<void>(() => {}) : Promise.resolve(); } pause() {} }
     class Peer {
-      connectionState = 'new'; ontrack?: (event: unknown) => void; onconnectionstatechange?: () => void;
+      iceGatheringState = 'complete'; connectionState = 'new'; ontrack?: (event: unknown) => void; onconnectionstatechange?: () => void;
       addTrack() {} createDataChannel() { throw new Error('Provider data channels are forbidden'); }
       createOffer() { return Promise.resolve({ type: 'offer', sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n' }); }
       setLocalDescription() { return Promise.resolve(); }
@@ -59,7 +72,7 @@ async function prepare(page: Page) {
         return new Response(body, { headers: { 'Content-Type': 'application/x-ndjson' } });
       }
       if (/\/api\/visitor\/[^/]+\/session\/control$/.test(path)) {
-        const { update } = JSON.parse(String(init?.body)); state.controls.push(update);
+        const { update } = JSON.parse(String(init?.body)); state.controls.push(update); if (update.end) queueMicrotask(() => state.emit({ type: 'ended', message: 'Ended.' }));
         if (state.failControl) return Response.json({ error: 'Synthetic control failure' }, { status: 503 });
         if (state.ack && !update.end) state.emit({ type: 'control_applied', seq: update.seq, interactionRevision: update.interactionRevision, revision: state.revision, ready: update.ready });
         return new Response(null, { status: 204 });
@@ -76,6 +89,77 @@ async function prepare(page: Page) {
   await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeEnabled();
 }
 
+async function browse(page: Page) {
+  const button = page.getByRole('button', { name: 'Browse published content', exact: true });
+  if (await button.count()) await button.click();
+}
+
+for (const mobile of [false, true]) test(`opening narration follows three carousel cards${mobile ? ' on mobile with reduced motion' : ''}`, async ({ page }, info) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  if (mobile) { await page.setViewportSize({ width: 390, height: 844 }); await page.emulateMedia({ reducedMotion: 'reduce' }); }
+  await prepare(page, true);
+  const carousel = page.getByRole('region', { name: 'Welcome highlights' });
+  const focused = page.locator('[data-workspace-focused]:not([inert])');
+  await expect(carousel).toHaveCount(0);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
+  await page.evaluate(() => window.__visitorVoice.emit({ type: 'greeting_progress', text: 'Welcome.', revision: 0, interactionRevision: 0 }));
+  await expect(carousel).toHaveCount(0);
+  await page.evaluate(() => { window.__visitorVoice.outputActive = true; });
+  await expect(carousel).toBeVisible();
+  await expect(carousel.locator('.platform-workspace-card')).toHaveCount(3);
+  await expect(focused).toHaveCount(0);
+  const pageTop = await page.evaluate(() => window.scrollY);
+  const activeControl = await page.evaluate(() => document.activeElement?.getAttribute('aria-label'));
+  await page.evaluate(() => window.__visitorVoice.emit({ type: 'greeting_progress', text: 'Welcome. Wedding stories.', revision: 0, interactionRevision: 0 }));
+  await expect(focused.getByRole('heading', { name: 'Wedding stories', exact: true })).toBeVisible();
+  await expect(focused.getByRole('img', { name: 'Synthetic welcome photograph' })).toBeVisible();
+  if (!mobile) await expect(focused).toHaveAttribute('data-workspace-transition', 'settled');
+  await page.evaluate(() => window.__visitorVoice.emit({ type: 'greeting_progress', text: 'Welcome. Wedding stories. Portrait sessions.', revision: 0, interactionRevision: 0 }));
+  await expect(focused.getByRole('heading', { name: 'Portrait sessions', exact: true })).toBeVisible();
+  await page.evaluate(() => window.__visitorVoice.emit({ type: 'greeting_progress', text: 'Welcome. Wedding stories. Portrait sessions. Explore the neighborhood at your own pace.', revision: 0, interactionRevision: 0 }));
+  await expect(focused.getByText('Explore the neighborhood at your own pace.', { exact: true })).toBeVisible();
+  await expect(focused).toHaveAttribute('data-workspace-transition', 'settled');
+  await page.screenshot({ path: info.outputPath('welcome-focus.png'), fullPage: true });
+  expect(await page.evaluate(() => window.scrollY)).toBe(pageTop);
+  expect(await page.evaluate(() => document.activeElement?.getAttribute('aria-label'))).toBe(activeControl);
+  expect(await page.evaluate(() => window.__visitorVoice.controls.every(update => update.interactionRevision === 0))).toBe(true);
+  await page.evaluate(() => { window.__visitorVoice.outputActive = false; });
+  await expect(focused).toHaveCount(0);
+  await expect(page.locator('[data-workspace-focused]')).toHaveCount(0);
+  await expect(carousel.locator('.platform-workspace-card:not([inert])')).toHaveCount(3);
+  for (const card of await carousel.locator('.platform-workspace-card').all()) await expect(card).toHaveCSS('opacity', '1');
+  await page.screenshot({ path: info.outputPath('welcome-carousel.png'), fullPage: true });
+  expect(await page.evaluate(() => window.__visitorVoice.calls)).toBe(1);
+  await carousel.getByRole('button', { name: 'Show welcome highlight 1: Wedding stories' }).click();
+  await expect(focused.getByRole('heading', { name: 'Wedding stories', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape'); await expect(focused).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('manual browsing cancels opening focus and rejects late captions without recreating closed cards', async ({ page }) => {
+  await prepare(page, true);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
+  await page.evaluate(() => { window.__visitorVoice.outputActive = true; window.__visitorVoice.emit({ type: 'greeting_progress', text: 'Wedding stories.', revision: 0, interactionRevision: 0 }); });
+  const focused = page.locator('[data-workspace-focused]:not([inert])');
+  await expect(focused.getByRole('heading', { name: 'Wedding stories', exact: true })).toBeVisible();
+  await focused.getByRole('button', { name: 'Close Wedding stories', exact: true }).click();
+  await expect(focused).toHaveCount(0);
+  await page.evaluate(() => {
+    const state = window.__visitorVoice;
+    state.emit({ type: 'greeting_progress', text: 'Wedding stories. Portrait sessions.', revision: 0, interactionRevision: 0 });
+    state.emit({ type: 'greeting_progress', text: 'Portrait sessions.', revision: 0, interactionRevision: state.controls.at(-1)?.interactionRevision ?? 1 });
+    state.outputActive = false;
+  });
+  await page.waitForTimeout(3000);
+  await expect(focused).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Welcome highlights' }).locator('.platform-workspace-card')).toHaveCount(2);
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  await page.getByRole('button', { name: 'Home', exact: true }).first().click();
+  await expect(page.getByRole('region', { name: 'Welcome highlights' })).toHaveCount(0);
+});
+
 test('one tap maintains streaming conversation, interruption and explicit Stop', async ({ page }, info) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await prepare(page);
@@ -91,7 +175,7 @@ test('one tap maintains streaming conversation, interruption and explicit Stop',
   await expect(page.getByText('Speaking · you can interrupt · tap to end', { exact: true })).toBeAttached();
   await expect(page.locator('.site-opening')).toHaveCount(0);
   await expect(page.locator('.site-cards')).toHaveCount(0);
-  await expect(page.getByRole('region', { name: 'Your requested information' })).toHaveCSS('opacity', '1');
+  await expect(page.locator('[data-workspace-focused]:not([inert])')).toHaveCSS('opacity', '1');
   await page.screenshot({ path: info.outputPath('continuous-voice.png'), fullPage: true });
   expect(await page.evaluate(() => window.__visitorVoice.tracks.every(track => track.enabled && !track.stopped))).toBe(true);
   await page.evaluate(() => window.__visitorVoice.emit({ type: 'playback_stopped', responseId: 'unrelated-response' }));
@@ -103,8 +187,8 @@ test('one tap maintains streaming conversation, interruption and explicit Stop',
     window.__visitorVoice.emit({ type: 'plan', revision: 1, presentation: { layout: 'detail', sources: ['section:portraits'], status: 'ready' } });
   });
   await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
-  await expect(page.getByRole('region', { name: 'Your requested information' }).getByRole('heading', { name: 'Wedding stories', exact: true })).toBeVisible();
-  await expect(page.getByRole('region', { name: 'Your requested information' }).getByRole('heading', { name: 'Portrait sessions', exact: true })).toHaveCount(0);
+  await expect(page.locator('[data-workspace-focused]:not([inert])').getByRole('heading', { name: 'Wedding stories', exact: true })).toBeVisible();
+  await expect(page.locator('[data-workspace-focused]:not([inert])').getByRole('heading', { name: 'Portrait sessions', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'End conversation', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeVisible();
   expect(await page.evaluate(() => ({ calls: window.__visitorVoice.calls, closed: window.__visitorVoice.closed, aborted: window.__visitorVoice.aborted, stopped: window.__visitorVoice.tracks.every(track => track.stopped), offer: window.__visitorVoice.offers[0] }))).toEqual({ calls: 1, closed: 1, aborted: 1, stopped: true, offer: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n' });
@@ -113,20 +197,21 @@ test('one tap maintains streaming conversation, interruption and explicit Stop',
 
 test('manual browsing preserves the call, invalidates older output, and Escape ends capture', async ({ page }) => {
   await prepare(page);
+  await browse(page);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
-  await page.getByRole('button', { name: 'Explore Wedding stories', exact: true }).click();
+  await page.locator('[data-workspace-content$=":section:weddings"]').first().click();
   await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
-  await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.interactionRevision === 1 && update.context.expandedSourceIds?.includes('section:weddings')))).toBe(true);
-  expect(await page.evaluate(() => window.__visitorVoice.audioMuted)).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.interactionRevision === 1 && update.context.scene?.objects.some(object => object.references.some(ref => ref.id === 'section:weddings'))))).toBe(true);
+  expect(await page.evaluate(() => window.__visitorVoice.audioMuted)).toBe(false);
   await page.evaluate(() => {
     window.__visitorVoice.emit({ type: 'response_started', revision: 1 });
     window.__visitorVoice.emit({ type: 'plan', revision: 1, presentation: { layout: 'detail', sources: ['section:portraits'], status: 'ready' } });
     window.__visitorVoice.emit({ type: 'playback_started', responseId: 'stale' });
   });
-  await expect(page.getByRole('region', { name: 'Your requested information' })).toContainText('Wedding stories');
-  await expect(page.getByRole('region', { name: 'Your requested information' })).not.toContainText('Portrait sessions');
-  expect(await page.evaluate(() => ({ muted: window.__visitorVoice.audioMuted, stopped: window.__visitorVoice.tracks.some(track => track.stopped), calls: window.__visitorVoice.calls }))).toEqual({ muted: true, stopped: false, calls: 1 });
+  await expect(page.locator('[data-workspace-focused]:not([inert])')).toContainText('Wedding stories');
+  await expect(page.locator('[data-workspace-focused]:not([inert])')).not.toContainText('Portrait sessions');
+  expect(await page.evaluate(() => ({ muted: window.__visitorVoice.audioMuted, stopped: window.__visitorVoice.tracks.some(track => track.stopped), calls: window.__visitorVoice.calls }))).toEqual({ muted: false, stopped: false, calls: 1 });
   await page.evaluate(() => {
     window.__visitorVoice.emit({ type: 'speech_started', revision: 2 });
     window.__visitorVoice.emit({ type: 'speech_stopped' });
@@ -135,6 +220,9 @@ test('manual browsing preserves the call, invalidates older output, and Escape e
   });
   await expect(page.getByText('Speaking · you can interrupt · tap to end', { exact: true })).toBeAttached();
   expect(await page.evaluate(() => window.__visitorVoice.audioMuted)).toBe(false);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('[data-workspace-focused]:not([inert])')).toHaveCount(0);
+  await page.getByRole('button', { name: 'End conversation', exact: true }).focus();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.__visitorVoice.tracks.every(track => track.stopped))).toBe(true);
@@ -167,7 +255,7 @@ test('stream failure stops without retry; exhausted session falls back to chat',
   expect(await page.evaluate(() => window.__visitorVoice.calls)).toBe(2);
 });
 
-test('unpublished references stop voice and preserve the last accepted view', async ({ page }) => {
+test('unpublished references fail their request and preserve the last accepted workspace and call', async ({ page }) => {
   await prepare(page);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
@@ -175,46 +263,50 @@ test('unpublished references stop voice and preserve the last accepted view', as
     window.__visitorVoice.emit({ type: 'response_started', revision: 1 });
     window.__visitorVoice.emit({ type: 'plan', revision: 1, presentation: { layout: 'detail', sources: ['section:weddings'], status: 'ready' } });
   });
-  await expect(page.getByRole('region', { name: 'Your requested information' }).getByRole('heading', { name: 'Wedding stories', exact: true })).toBeVisible();
+  await expect(page.locator('[data-workspace-focused]:not([inert])').getByRole('heading', { name: 'Wedding stories', exact: true })).toBeVisible();
   await page.evaluate(() => {
     window.__visitorVoice.emit({ type: 'speech_started', revision: 2 });
     window.__visitorVoice.emit({ type: 'plan', revision: 2, presentation: { layout: 'detail', sources: ['section:private-unpublished'], status: 'ready' } });
   });
-  await expect(page.getByRole('region', { name: 'Site assistant', exact: true }).getByRole('alert')).toContainText('Your current view is still available');
-  await expect(page.getByRole('region', { name: 'Your requested information' }).getByRole('heading', { name: 'Wedding stories', exact: true })).toBeVisible();
-  expect(await page.evaluate(() => ({ calls: window.__visitorVoice.calls, stopped: window.__visitorVoice.tracks.every(track => track.stopped) }))).toEqual({ calls: 1, stopped: true });
+  await expect(page.getByText('The browser could not apply that view. Your current workspace is still available.', { exact: true })).toBeVisible();
+  await expect(page.locator('[data-workspace-focused]:not([inert])').getByRole('heading', { name: 'Wedding stories', exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.planAck?.revision === 2 && update.planAck.status === 'failed'))).toBe(true);
+  expect(await page.evaluate(() => ({ calls: window.__visitorVoice.calls, stopped: window.__visitorVoice.tracks.some(track => track.stopped) }))).toEqual({ calls: 1, stopped: false });
 });
 
 test('readiness waits for connected media and the owner ACK, without waiting for audio samples', async ({ page }) => {
   await prepare(page);
-  await page.getByRole('button', { name: 'Explore Wedding stories', exact: true }).click();
+  await browse(page);
+  await page.locator('[data-workspace-content$=":section:weddings"]').first().click();
   await page.evaluate(() => { const state = window.__visitorVoice; state.deferConnection = true; state.deferTrack = true; state.neverResolvePlay = true; state.ack = false; });
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.__visitorVoice.calls)).toBe(1);
-  expect(await page.evaluate(() => window.__visitorVoice.tracks.every(track => !track.enabled))).toBe(true);
+  expect(await page.evaluate(() => window.__visitorVoice.outgoing.every(track => !track.enabled))).toBe(true);
   await page.evaluate(() => window.__visitorVoice.connect());
   await expect(page.getByText('Connecting…', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.__visitorVoice.controls.some(update => update.ready))).toBe(false);
   await page.evaluate(() => window.__visitorVoice.attach());
   await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.ready))).toBe(true);
   await expect(page.getByText('Connecting…', { exact: true })).toBeVisible();
-  expect(await page.evaluate(() => window.__visitorVoice.tracks.every(track => !track.enabled))).toBe(true);
+  expect(await page.evaluate(() => window.__visitorVoice.outgoing.every(track => !track.enabled))).toBe(true);
   await page.evaluate(() => {
     const state = window.__visitorVoice, update = state.controls.filter(update => update.ready).at(-1)!;
     state.ack = true; state.emit({ type: 'control_applied', seq: update.seq, interactionRevision: update.interactionRevision, revision: 0, ready: true });
   });
   await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
   expect(await page.evaluate(() => window.__visitorVoice.tracks.every(track => track.enabled))).toBe(true);
-  await expect(page.getByRole('button', { name: 'All of the site', exact: true })).toBeVisible();
-  expect(await page.evaluate(() => window.__visitorVoice.requests[0].context.expandedSourceIds)).toContain('section:weddings');
+  await expect(page.getByRole('button', { name: 'Back to workspace', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => window.__visitorVoice.requests[0].context.scene?.objects.flatMap(object => object.references.map(ref => ref.id)))).toContain('section:weddings');
 });
 
 test('a failed control update stops once and offers typing without reconnecting', async ({ page }) => {
   await prepare(page);
+  await browse(page);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
   await page.evaluate(() => { window.__visitorVoice.failControl = true; });
-  await page.getByRole('button', { name: 'Explore Wedding stories', exact: true }).click();
+  await browse(page);
+  await page.locator('[data-workspace-content$=":section:weddings"]').first().click();
   await expect(page.getByRole('region', { name: 'Site assistant', exact: true }).getByRole('alert')).toContainText('could not update your view');
   await expect(page.getByRole('button', { name: 'Continue by typing', exact: true })).toBeVisible();
   expect(await page.evaluate(() => ({ calls: window.__visitorVoice.calls, stopped: window.__visitorVoice.tracks.every(track => track.stopped), ended: window.__visitorVoice.controls.at(-1)?.end }))).toEqual({ calls: 1, stopped: true, ended: true });
@@ -233,15 +325,15 @@ test('bounded voice history and accepted views survive typing and restarting voi
     emit({ type: 'transcript', id: 'u1', role: 'user', text: 'Tell me about weddings.', revision: 1 });
     emit({ type: 'transcript', id: 'u1', role: 'user', text: 'Tell me about weddings.', revision: 1 });
   });
-  await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.viewRevision === 1 && update.context.presentation?.sources.includes('section:weddings')))).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.viewRevision === 1 && update.context.scene?.objects.some(object => object.references.some(ref => ref.id === 'section:weddings'))))).toBe(true);
   await page.getByRole('button', { name: 'Chat', exact: true }).click();
   const input = page.getByRole('textbox', { name: 'What would you like to see?', exact: true });
   await input.fill('And what else?'); await input.press('Enter');
   await expect.poll(() => page.evaluate(() => window.__visitorVoice.chats.length)).toBe(1);
   const typed = await page.evaluate(() => window.__visitorVoice.chats[0]);
   expect(typed.history).toEqual([{ role: 'user', text: 'Tell me about weddings.' }, { role: 'assistant', text: 'Wedding information from the site.' }]);
-  expect(typed.context.presentation?.sources).toEqual(['section:weddings']);
-  expect(typed.context.expandedSourceIds).toContain('section:weddings');
+  expect(typed.context.scene?.objects.flatMap(object => object.references.map(ref => ref.id))).toEqual(['section:weddings']);
+  expect(typed.context.workspace?.focusedId).toBeTruthy();
   await expect(input).not.toHaveAttribute('readonly');
   await page.getByRole('button', { name: 'Voice', exact: true }).click();
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
@@ -249,7 +341,7 @@ test('bounded voice history and accepted views survive typing and restarting voi
   const restarted = await page.evaluate(() => window.__visitorVoice.requests[1]);
   expect(restarted.history.map(item => item.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
   expect(restarted.history[2].text).toBe('And what else?');
-  expect(restarted.context.presentation?.sources).toEqual(['section:weddings']);
+  expect(restarted.context.scene?.objects.flatMap(object => object.references.map(ref => ref.id))).toEqual(['section:weddings']);
   await page.evaluate(() => {
     for (let revision = 2; revision <= 7; revision++) {
       window.__visitorVoice.emit({ type: 'transcript', id: `u${revision}`, role: 'user', text: `Question ${revision}`, revision });
@@ -267,6 +359,8 @@ for (const nested of [false, true]) test(`navigation acknowledges actual ${neste
   await page.setViewportSize({ width: 1000, height: 650 });
   await prepare(page);
   await page.emulateMedia({ reducedMotion: 'reduce' });
+  await browse(page);
+  await page.getByRole('region', { name: 'Browse approved information' }).evaluate(element => { (element as HTMLElement).style.minHeight = '1400px'; });
   if (nested) await page.evaluate(() => {
     const root = document.querySelector<HTMLElement>('[data-visitor-site]')!;
     const pane = document.createElement('div'); pane.id = 'synthetic-preview-pane'; pane.style.cssText = 'height:400px;overflow:auto;border:2px solid gray;';
@@ -314,30 +408,32 @@ test('navigation reports unavailable targets and yields to manual scrolling', as
   expect(await page.evaluate(() => ({ calls: window.__visitorVoice.calls, stopped: window.__visitorVoice.tracks.some(track => track.stopped) }))).toEqual({ calls: 1, stopped: false });
 });
 
-test('manual context pauses capture until the matching owner ACK, preserving the call', async ({ page }) => {
+test('manual context pauses outgoing audio until the matching owner ACK, preserving the call', async ({ page }) => {
   await prepare(page);
+  await browse(page);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
   await page.evaluate(() => { window.__visitorVoice.ack = false; });
-  await page.getByRole('button', { name: 'Explore Wedding stories', exact: true }).click();
+  await browse(page);
+  await page.locator('[data-workspace-content$=":section:weddings"]').first().click();
   await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.interactionRevision === 1))).toBe(true);
-  await expect(page.getByText('Updating view · microphone paused…', { exact: true })).toBeVisible();
+  await expect(page.getByText('Updating view · microphone paused…', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
-  expect(await page.evaluate(() => window.__visitorVoice.tracks.every(track => !track.enabled && !track.stopped))).toBe(true);
-  await page.getByRole('button', { name: 'All of the site', exact: true }).click();
+  expect(await page.evaluate(() => window.__visitorVoice.outgoing.every(track => !track.enabled && !track.stopped))).toBe(true);
+  await page.getByRole('button', { name: 'Back to workspace', exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.interactionRevision === 2))).toBe(true);
   await page.evaluate(() => {
     const state = window.__visitorVoice, older = state.controls.find(update => update.interactionRevision === 1)!;
     state.emit({ type: 'control_applied', seq: older.seq, interactionRevision: 1, revision: 1, ready: true });
   });
-  await expect(page.getByText('Updating view · microphone paused…', { exact: true })).toBeVisible();
-  expect(await page.evaluate(() => window.__visitorVoice.tracks.every(track => !track.enabled))).toBe(true);
+  await expect(page.getByText('Updating view · microphone paused…', { exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => window.__visitorVoice.outgoing.every(track => !track.enabled))).toBe(true);
   await page.evaluate(() => {
     const state = window.__visitorVoice, latest = state.controls.filter(update => update.interactionRevision === 2).at(-1)!;
     state.ack = true; state.emit({ type: 'control_applied', seq: latest.seq, interactionRevision: 2, revision: 2, ready: true });
   });
   await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
-  expect(await page.evaluate(() => ({ calls: window.__visitorVoice.calls, live: window.__visitorVoice.tracks.every(track => track.enabled && !track.stopped), muted: window.__visitorVoice.audioMuted }))).toEqual({ calls: 1, live: true, muted: true });
+  expect(await page.evaluate(() => ({ calls: window.__visitorVoice.calls, live: window.__visitorVoice.tracks.every(track => track.enabled && !track.stopped), muted: window.__visitorVoice.audioMuted }))).toEqual({ calls: 1, live: true, muted: false });
 });
 
 test('continuous busy animation cannot starve accepted view updates or navigation acknowledgments', async ({ page }) => {
@@ -358,12 +454,72 @@ test('continuous busy animation cannot starve accepted view updates or navigatio
     window.__visitorVoice.emit({ type: 'response_started', revision: 1 });
     window.__visitorVoice.emit({ type: 'plan', revision: 1, presentation: { layout: 'detail', sources: ['section:weddings'], status: 'ready' } });
   });
-  await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.viewRevision === 1 && update.context.presentation?.sources.includes('section:weddings'))), { timeout: 1500 }).toBe(true);
+  // Default exponential polling stops around 850 ms when its next 1 s delay
+  // exceeds this deadline. Keep sampling through the unchanged 1.5 s budget.
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.viewRevision === 1 && update.context.scene?.objects.some(object => object.references.some(ref => ref.id === 'section:weddings')))), { timeout: 1500, intervals: [50] }).toBe(true);
   await page.evaluate(() => {
     window.__visitorVoice.emit({ type: 'response_started', revision: 2 });
     window.__visitorVoice.emit({ type: 'navigation', id: 'busy-navigation', revision: 2, target: { kind: 'source', id: 'section:unrendered' } });
   });
-  await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.navigationAck?.id === 'busy-navigation' && update.navigationAck.status === 'unavailable')), { timeout: 1500 }).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.navigationAck?.id === 'busy-navigation' && update.navigationAck.status === 'unavailable')), { timeout: 1500, intervals: [50] }).toBe(true);
   await expect(page.locator('#synthetic-continuous-motion')).not.toHaveAttribute('data-finished', 'true');
-  expect(await page.evaluate(() => window.__visitorVoice.controls.filter(update => update.navigationAck?.id === 'busy-navigation').every(update => update.viewRevision === 1 && update.context.presentation?.sources.includes('section:weddings')))).toBe(true);
+  expect(await page.evaluate(() => window.__visitorVoice.controls.filter(update => update.navigationAck?.id === 'busy-navigation').every(update => update.viewRevision === 1 && update.context.scene?.objects.some(object => object.references.some(ref => ref.id === 'section:weddings'))))).toBe(true);
+});
+
+ test('Live audio levels drive playback independently of backend completion and stale speech is muted during browsing', async ({ page }) => {
+  await prepare(page);
+  await browse(page);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
+  await page.evaluate(() => { window.__visitorVoice.outputActive = true; });
+  await expect(page.getByText('Speaking · you can interrupt · tap to end', { exact: true })).toBeAttached();
+  await page.evaluate(() => window.__visitorVoice.emit({ type: 'backend_idle', revision: 0, interactionRevision: 0 }));
+  await expect(page.getByText('Speaking · you can interrupt · tap to end', { exact: true })).toBeAttached();
+  await browse(page);
+  await page.locator('[data-workspace-content$=":section:weddings"]').first().click();
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.audioMuted)).toBe(true);
+  expect(await page.evaluate(() => window.__visitorVoice.tracks.every(track => track.enabled && !track.stopped))).toBe(true);
+  await page.evaluate(() => { window.__visitorVoice.outputActive = false; });
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.audioMuted)).toBe(false);
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'End conversation', exact: true }).focus();
+  await page.keyboard.press('Escape');
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.tracks.every(track => track.stopped))).toBe(true);
+});
+
+test('live adapter receives actual photo focus, modal obscuring, offscreen retained objects and quiet updates', async ({ page }) => {
+  await prepare(page);
+  let site = publishedSite!;
+  const bytes = await sharp({ create: { width: 640, height: 480, channels: 3, background: '#698aa0' } }).png().toBuffer();
+  const uploaded = await page.request.post(`/api/sites/${site.id}/files`, { headers: { Origin: origin, 'Content-Type': 'image/png', 'X-File-Name': 'screen-fixture.png', 'X-Site-Revision': String(site.revision) }, data: bytes });
+  expect(uploaded.ok()).toBe(true); const body = await uploaded.json(); site = body.site;
+  const fileId = body.fileId as string;
+  const saved = await page.request.post(`/api/sites/${site.id}/media`, { headers: { Origin: origin }, data: { revision: site.revision, library: { schemaVersion: 1, id: randomUUID(), assets: [{ id: fileId, width: 640, height: 480, caption: 'Scene photo', alt: 'Synthetic scene' }], albums: [], associations: [] } } });
+  expect(saved.ok()).toBe(true); site = (await saved.json()).site;
+  const published = await page.request.post(`/api/sites/${site.id}`, { headers: { Origin: origin }, data: { action: 'publish', revision: site.revision } });
+  expect(published.ok()).toBe(true); publishedSite = (await published.json()).site;
+  await page.reload(); await page.setViewportSize({ width: 390, height: 844 }); await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await browse(page);
+  await page.locator(`[data-workspace-content^="photo:"][data-workspace-content$=":${fileId}"]`).first().click();
+  const focused = page.locator('[data-workspace-focused]:not([inert])'); await expect(focused).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.at(-1)?.context.scene?.objects.some(object => object.name === 'Scene photo' && object.visibility === 'full'))).toBe(true);
+  await focused.getByRole('button', { name: 'Open photo: Scene photo' }).click(); await expect(page.getByRole('dialog')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => { const scene = window.__visitorVoice.controls.at(-1)?.context.scene; return scene?.modal?.kind === 'photo' && scene.objects.every(object => object.open && object.mounted && object.visibility === 'obscured'); })).toBe(true);
+  await page.getByRole('button', { name: 'Close photo', exact: true }).click();
+  await focused.getByRole('button', { name: 'Back to workspace' }).click(); await expect(focused).toHaveCount(0);
+  await page.locator('[data-workspace-content$=":section:weddings"]').first().click(); await expect(focused).toBeVisible();
+  await focused.getByRole('button', { name: 'Back to workspace' }).click(); await expect(focused).toHaveCount(0);
+  // Browse deliberately hides retained workspace objects; return to workspace
+  // before testing offscreen geometry rather than conflating hidden with offscreen.
+  await page.getByRole('button', { name: 'Hide browser', exact: true }).click();
+  // Guarantee a long fixture after the focused view closes; a compact website
+  // need not naturally push the retained photo outside the viewport.
+  await page.locator('.visitor-workspace').evaluate(element => { (element as HTMLElement).style.minHeight = '2400px'; });
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.at(-1)?.context.scene?.objects.some(object => object.name === 'Scene photo' && object.open && object.visibility === 'offscreen'))).toBe(true);
+  const count = await page.evaluate(() => window.__visitorVoice.controls.length); await page.waitForTimeout(600);
+  expect(await page.evaluate(() => window.__visitorVoice.controls.length)).toBeLessThanOrEqual(count + 1);
+  expect(await page.evaluate(() => window.__visitorVoice.calls)).toBe(1);
 });

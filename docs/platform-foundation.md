@@ -19,7 +19,7 @@ Use Node 24 and the existing application setup. `npm run dev` builds the shared 
 
 ## Boundaries
 
-- CSV and labeled TXT blocks are interpreted locally. Text-bearing PDF pages are extracted locally with installed PDF.js assets. Free-form prose uses the configured direct model connection when available; the offline demo reports when it cannot interpret it.
+- CSV/XLSX tables and labeled TXT/DOCX/HTML blocks are interpreted locally. Text-bearing PDF pages are extracted locally with installed PDF.js assets, and images can use the injectable OCR adapter. One public HTTPS webpage can be imported through the bounded website route. Free-form prose uses the configured direct model connection when available; the offline demo reports when it cannot interpret it.
 - Originals, import jobs and provenance remain private. Immutable catalogs are stored separately from the site's small content document. A separately staged public projection contains only the catalog; it is served only while referenced by the current publication.
 - Correction produces a new candidate. Apply checks the current draft and import claim; publication is separate. Cloud Apply commits the site and job state in one transaction. Local Apply holds the job lock across the site write. Recovery fences older claims instead of replaying provider calls.
 - Reimport uses the same filename plus stable item IDs, or an explicit replacement choice for renamed files. Private row/line/page excerpts and previous/current/incoming values make source updates reviewable. Publisher corrections and missing items are kept by default; publishers can accept incoming values or explicitly remove items. Unchanged removed source relationships/collections are removed in the proposed merge. Cross-source identity merging is deliberately not automatic. See [Source review and updates](source-review.md).
@@ -47,15 +47,15 @@ Existing daily request limits remain in force. Direct generation has a single bo
 
 ## Current pilot limits
 
-- Upload: 10 MB photos, 2 MB PDFs, 256 KB CSV/TXT; 100 photos plus 20 other sources, with a 100 MB site cap including photo originals and display variants.
-- Extraction: 40 PDF pages and 60,000 extracted characters. Empty/unreadable pages, encrypted or damaged PDFs and unsupported OCR paths fail explicitly. Embedded PDF images are not interpreted. Connected interpretation and correction have a 90-second provider timeout, with no automatic retries; timed-out attempts still count toward the AI limit.
+- Upload: 10 MB photos, 2 MB PDFs/DOCX/XLSX/HTML, 256 KB CSV/TXT; 100 photos plus 20 other sources, with a 100 MB site cap including photo originals and display variants.
+- Extraction: 40 PDF pages and 60,000 extracted characters. Office/HTML adapters are bounded. Empty/unreadable pages, encrypted or damaged PDFs and unavailable OCR fail explicitly. Embedded PDF images are not interpreted. Connected interpretation and correction have a 90-second provider timeout, with no automatic retries; timed-out attempts still count toward the AI limit.
 - Catalog: 100 entities, 24 attributes and bounded collections/relationships/jobs. Oversized records fail rather than silently truncating.
 - Import/review activity: 50 explicit attempts per site in this pilot. No unattended worker or automatic paid retry. Ambiguous interruptions require an explicit new attempt after checking saved state.
 - The demo correction grammar supports exact-name rename and attribute changes; broader conversational corrections require the configured interpreter.
 
 The first photo and album release adds publisher-reviewed media, contextual card imagery and shared galleries. See [Photos and albums](photo-library.md) for the workflow, current image limits, publication boundaries and connected-interpretation scope.
 
-Remaining milestones include DOCX/XLSX/website/OCR ingestion, larger durable processing, field-level grounding for model-interpreted prose, cross-source identity consolidation, broader correction coverage, longitudinal funnel analytics, monetary reservation/reconciliation and hard spending limits, and self-serve launch onboarding. Live model quality, Firebase integration and deployment behavior need separately authorized verification; offline results do not establish those.
+Identity review/aliases, exact XLSX cells, assertion correction history and bounded published retrieval are implemented in the existing review flow. See [semantic architecture](semantic-graph-architecture.md) and the [workspace handoff](semantic-workspace-handoff.md). Remaining milestones include larger durable processing, deployed managed OCR workers, scanned-PDF OCR, longitudinal funnel analytics, monetary reservation/reconciliation and hard spending limits, and self-serve launch onboarding. Live model quality, Firebase integration and deployment behavior need separately authorized verification; offline results do not establish those.
 
 ## Verification
 

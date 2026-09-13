@@ -1,10 +1,9 @@
 .stage {
   --opening-progress: 1;
-  --status-space: 0px;
   --wave-vertical-scale: calc(.6 + .4 * var(--opening-progress));
   --wave-height: calc(clamp(110px, 21svh, 220px) * var(--wave-vertical-scale));
   --wave-top: calc(6px + env(safe-area-inset-top, 0px));
-  --dock-height: calc(var(--wave-height) + var(--wave-top) + 6px + var(--status-space));
+  --dock-height: calc(var(--wave-height) + var(--wave-top) + 6px);
   position: relative; top: 0; z-index: 25; width: 100%; flex: none;
   height: calc(var(--dock-height) + var(--opening-progress) * (var(--site-viewport, 100svh) - var(--dock-height)));
   background: #101110;

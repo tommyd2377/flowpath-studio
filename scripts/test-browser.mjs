@@ -7,8 +7,14 @@ import { fileURLToPath } from 'node:url';
 const project = fileURLToPath(new URL('../', import.meta.url));
 const cli = createRequire(import.meta.url).resolve('@playwright/test/cli');
 const groups = {
-  core: ['media.spec.ts', 'media-runtime.spec.ts', 'motion.spec.ts', 'platform.spec.ts', 'shared-reveal.spec.ts', 'source-review.spec.ts'],
-  voice: ['visitor-realtime.spec.ts', 'visitor-quality.spec.ts'],
+  // Source imports create several sites. Give them fresh data rather than
+  // exhausting the unchanged 12-site pilot cap in the runtime group.
+  ingestion: ['source-review.spec.ts', 'semantic-ingestion.spec.ts'],
+  workspace: ['adaptive-workspace.spec.ts'],
+  website: ['published-website.spec.ts'],
+  core: ['media.spec.ts', 'media-runtime.spec.ts', 'motion.spec.ts', 'platform.spec.ts', 'shared-reveal.spec.ts'],
+  voice: ['visitor-realtime.spec.ts'],
+  quality: ['visitor-quality.spec.ts'],
   search: ['search-explore.spec.ts'],
   billing: ['billing.spec.ts'],
 };

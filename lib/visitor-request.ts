@@ -3,11 +3,15 @@ import { MAX_PCM_BYTES } from './visitor-model';
 import { catalogFilterSchema, presentationPlanSchema } from '@thevoice/platform-ui/contracts';
 import { presentationSchema } from './site-presentation';
 import { exploreContextSchema } from './explore-model';
+import { workspaceStateSchema, workspaceSceneSchema } from '@thevoice/platform-ui/workspace';
 
 export const visitorHistorySchema = z.array(z.object({ role: z.enum(['user', 'assistant']), text: z.string().trim().min(1).max(2000) }).strict()).max(8).default([]);
 export type VisitorHistory = z.infer<typeof visitorHistorySchema>;
 export const visitorCatalogStateSchema = z.object({ snapshotId: z.string().max(100), filters: z.array(catalogFilterSchema).max(24),
-  selectedIds: z.array(z.string().max(100)).max(6), focusedId: z.string().max(100).nullable(), entityIds: z.array(z.string().max(100)).max(100) }).strict();
+  selectedIds: z.array(z.string().max(100)).max(6), focusedId: z.string().max(100).nullable(),
+  focusedRef: z.object({ kind: z.enum(['entity', 'photo']), id: z.string().max(100) }).nullable().default(null),
+  focusOrigin: z.object({ reference: z.object({ kind: z.enum(['entity', 'photo']), id: z.string().max(100) }).strict(), surface: z.enum(['collection', 'gallery']), focusKey: z.string().max(160), scrollTop: z.number().int().min(0).max(10000000) }).nullable().default(null),
+  entityIds: z.array(z.string().max(100)).max(100) }).strict();
 const ids = z.array(z.string().min(1).max(100)).max(100);
 export const visitorScreenSchema = z.object({
   viewportWidth: z.number().int().min(0).max(20000), viewportHeight: z.number().int().min(0).max(20000),
@@ -20,6 +24,7 @@ export const visitorScreenSchema = z.object({
   focusedEntityId: z.string().min(1).max(100).nullable(), focusedSourceId: z.string().min(1).max(100).nullable(),
 }).strict();
 export const visitorContextSchema = z.object({
+  workspace: workspaceStateSchema.optional(), scene: workspaceSceneSchema.optional(), externalResults: z.array(exploreContextSchema).max(6).optional(),
   explore: exploreContextSchema.optional(),
   catalogState: visitorCatalogStateSchema.optional(), catalogPlan: presentationPlanSchema.optional(), presentation: presentationSchema.optional(),
   expandedSourceIds: ids.optional(), screen: visitorScreenSchema.optional(),

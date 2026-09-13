@@ -2,9 +2,12 @@
 /* eslint-disable @next/next/no-img-element -- This framework-neutral package uses host-processed image variants. */
 
 import { createContext, forwardRef, useCallback, useContext, useEffect, useLayoutEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { AnimatePresence, LayoutGroup, motion, useIsPresent, useReducedMotion, type HTMLMotionProps } from 'motion/react';
 import { galleryAssetIds, mediaForTarget, validateMediaLibrary, type AssetUrlResolver, type MediaLibrary, type MediaTarget } from './media.js';
 import { galleryItemVariants, MotionHeight, motionTiming, revealTransition, sequenceVariants, surfaceTransition } from './motion.js';
+import { FocusStage, FocusSurface } from './components.js';
+import type { FocusReference, ReturnAnchor as ReturnAnchorState } from './interaction.js';
 
 type Viewer = { assetIds: string[]; index: number; examples: string[] };
 type MediaContextValue = { library: MediaLibrary; resolveAssetUrl: AssetUrlResolver; open: (ids: string[], initialId: string, examples?: string[]) => void; onInteraction?: () => void; onPhotoView?: (assetId: string) => void };
@@ -16,15 +19,17 @@ function safeSource(value: string): string | undefined {
   catch { return undefined; }
 }
 
-export type MediaProviderProps = { library: MediaLibrary | null; resolveAssetUrl: AssetUrlResolver; children?: ReactNode; onInteraction?: () => void; onPhotoView?: (assetId: string) => void };
+export type MediaProviderProps = { library: MediaLibrary | null; resolveAssetUrl: AssetUrlResolver; children?: ReactNode; onInteraction?: () => void; onPhotoView?: (assetId: string) => void; layoutGroupId?: string; dismissalKey?: number; onHome?: () => void };
 export function MediaProvider({ library, ...props }: MediaProviderProps) {
   const checked = useMemo(() => library ? validateMediaLibrary(library) : null, [library]);
   return checked ? <MediaProviderContent {...props} library={checked} key={checked.id}/> : <>{props.children}</>;
 }
 
-function MediaProviderContent({ library, resolveAssetUrl, children, onInteraction, onPhotoView }: Omit<MediaProviderProps, 'library'> & { library: MediaLibrary }) {
-  const [viewer, setViewer] = useState<Viewer | null>(null);
+function MediaProviderContent({ library, resolveAssetUrl, children, onInteraction, onPhotoView, layoutGroupId, dismissalKey, onHome }: Omit<MediaProviderProps, 'library'> & { library: MediaLibrary }) {
+  const [viewerState, setViewer] = useState<(Viewer & { dismissalKey?: number }) | null>(null);
+  const viewer = viewerState?.dismissalKey === dismissalKey ? viewerState : null;
   const closeButton = useRef<HTMLButtonElement>(null);
+  const dialog = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLElement | null>(null);
   const photoCallback = useRef(onPhotoView);
   const labelId = useId();
@@ -35,15 +40,18 @@ function MediaProviderContent({ library, resolveAssetUrl, children, onInteractio
     if (!assetIds.includes(initialId)) return;
     onInteraction?.();
     opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setViewer({ assetIds, index: assetIds.indexOf(initialId), examples });
-  }, [library, onInteraction]);
+    setViewer({ assetIds, index: assetIds.indexOf(initialId), examples, dismissalKey });
+  }, [library, onInteraction, dismissalKey]);
   const active = viewer !== null;
   useEffect(() => {
     if (!active) return;
     const overflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     closeButton.current?.focus({ preventScroll: true });
+    const guard = (event: FocusEvent) => { if (event.target instanceof Node && !dialog.current?.contains(event.target)) closeButton.current?.focus({ preventScroll: true }); };
+    document.addEventListener('focusin', guard);
     return () => {
+      document.removeEventListener('focusin', guard);
       document.body.style.overflow = overflow;
       if (opener.current?.isConnected && !opener.current.closest('[inert], [aria-hidden="true"]')) opener.current.focus({ preventScroll: true });
     };
@@ -60,13 +68,23 @@ function MediaProviderContent({ library, resolveAssetUrl, children, onInteractio
     onInteraction?.(); setViewer({ ...viewer, index });
   };
   const close = () => { if (viewer) { onInteraction?.(); setViewer(null); } };
-  return <LayoutGroup id={`gallery-${labelId}`}><MediaContext.Provider value={context}>{children}
-    <AnimatePresence>{asset && viewer && <motion.div className="platform-lightbox-backdrop" key="lightbox" role="presentation" initial={reduced ? false : { opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ ...revealTransition, duration: reduced ? 0 : motionTiming.feedback }}
+  return <LayoutGroup id={`gallery-${layoutGroupId ?? labelId}`}><MediaContext.Provider value={context}><div data-media-background="true" inert={active || undefined} aria-hidden={active || undefined}>{children}</div>
+    {typeof document !== 'undefined' && createPortal(<AnimatePresence>{asset && viewer && <motion.div className="platform-lightbox-backdrop" key="lightbox" role="presentation" initial={reduced ? false : { opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ ...revealTransition, duration: reduced ? 0 : motionTiming.feedback }}
       onMouseDown={event => { if (event.target === event.currentTarget) close(); }}>
-      <motion.div className="platform-lightbox" role="dialog" aria-modal="true" aria-labelledby={labelId} initial={reduced ? false : { y: 18, scale: 0.985 }} animate={{ y: 0, scale: 1 }} exit={{ y: 12, scale: 0.99 }} transition={{ type: 'spring', visualDuration: reduced ? 0 : motionTiming.reveal, bounce: 0.08 }}
-        onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); close(); } if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); move(event.key === 'ArrowLeft' ? -1 : 1); } }}>
+      <motion.div ref={dialog} className="platform-lightbox" role="dialog" aria-modal="true" data-workspace-photo={asset.id} data-workspace-media={library.id} aria-labelledby={labelId} initial={reduced ? false : { y: 18, scale: 0.985 }} animate={{ y: 0, scale: 1 }} exit={{ y: 12, scale: 0.99 }} transition={{ type: 'spring', visualDuration: reduced ? 0 : motionTiming.reveal, bounce: 0.08 }}
+        onClick={event => { if (event.target instanceof Element && !event.target.closest('button, a, input, select, textarea, [role="button"], [contenteditable="true"]') && !window.getSelection()?.toString()) close(); }}
+        onKeyDown={event => {
+          if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
+          if (event.key === 'Tab') {
+            const controls = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], [tabindex="0"]')];
+            const first = controls[0], last = controls.at(-1);
+            if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+            else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+          }
+          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); move(event.key === 'ArrowLeft' ? -1 : 1); }
+        }}>
       <div className="platform-lightbox-content">
-        <div className="platform-lightbox-toolbar"><p id={labelId}>Photo {viewer.index + 1} of {viewer.assetIds.length}</p><button ref={closeButton} type="button" aria-label="Close photo" onClick={close}>Close <span aria-hidden="true">×</span></button></div>
+        <div className="platform-lightbox-toolbar">{onHome && <button type="button" onClick={onHome}>Home</button>}<p id={labelId}>Photo {viewer.index + 1} of {viewer.assetIds.length}</p><button ref={closeButton} type="button" aria-label="Close photo" onClick={close}>Close <span aria-hidden="true">×</span></button></div>
         <div className="platform-lightbox-stage"><AnimatePresence initial={false} mode="wait"><motion.div key={asset.id} className="platform-lightbox-frame"
           initial={reduced ? false : { opacity: 0, scale: 0.985 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.985 }} transition={{ ...revealTransition, duration: reduced ? 0 : motionTiming.disclosure / 2 }}>
           <div className="platform-lightbox-image"><MediaImage assetId={asset.id} size="display" fit="contain" interactive={false} layoutId={`gallery-photo-${asset.id}`}/></div>
@@ -74,7 +92,7 @@ function MediaProviderContent({ library, resolveAssetUrl, children, onInteractio
         </motion.div></AnimatePresence></div>
         {viewer.assetIds.length > 1 && <nav className="platform-lightbox-navigation" aria-label="Photo navigation"><button type="button" disabled={viewer.index === 0} onClick={() => move(-1)}>← Previous</button><button type="button" disabled={viewer.index === viewer.assetIds.length - 1} onClick={() => move(1)}>Next →</button></nav>}
       </div></motion.div>
-    </motion.div>}</AnimatePresence>
+    </motion.div>}</AnimatePresence>, document.body)}
   </MediaContext.Provider></LayoutGroup>;
 }
 
@@ -97,6 +115,7 @@ export function MediaImage({ assetId, size = 'thumb', className = '', fit = 'cov
 export type MediaGalleryProps = {
   library?: MediaLibrary | null; resolveAssetUrl?: AssetUrlResolver; assetIds?: string[]; albumId?: string; entityIds?: string[];
   variant?: 'grid' | 'list'; title?: string; showAlbums?: boolean; onInteraction?: () => void;
+  onFocusChange?: (reference: FocusReference | null, origin?: ReturnAnchorState | null) => void;
 };
 export function MediaGallery({ library, resolveAssetUrl, ...props }: MediaGalleryProps) {
   if (library && resolveAssetUrl) return <MediaProvider library={library} resolveAssetUrl={resolveAssetUrl} onInteraction={props.onInteraction}><GalleryContent {...props}/></MediaProvider>;
@@ -117,18 +136,26 @@ function visibleCaption(value: string | undefined) {
   return caption && !/^(?:photo|image|full ?size ?render|img[_ -]?\d+)$/i.test(caption) ? caption : '';
 }
 
+function scrollContainerTop(root: HTMLElement | null) {
+  for (let node = root; node; node = node.parentElement) {
+    if (/(auto|scroll)/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight) return node.scrollTop;
+  }
+  return window.scrollY;
+}
+
 function photoLabel(asset: MediaLibrary['assets'][number], index: number) {
   const supplied = visibleCaption(asset.caption) || (asset.alt && !/^photo$/i.test(asset.alt.trim()) ? asset.alt.trim() : '');
   return supplied || `Photo ${String(index + 1).padStart(2, '0')}`;
 }
 
-function GalleryContent({ assetIds, albumId, entityIds, variant = 'grid', title = 'Photos', showAlbums = true, onInteraction }: Omit<MediaGalleryProps, 'library' | 'resolveAssetUrl'>) {
+function GalleryContent({ assetIds, albumId, entityIds, variant = 'grid', title = 'Photos', showAlbums = true, onInteraction, onFocusChange }: Omit<MediaGalleryProps, 'library' | 'resolveAssetUrl'>) {
   const context = useContext(MediaContext);
   const reduced = useReducedMotion();
   const galleryRoot = useRef<HTMLElement>(null);
   const scopeKey = JSON.stringify([assetIds, albumId, entityIds]);
   const [selection, setSelection] = useState({ scopeKey, albumId: albumId ?? '' });
   const [focusedAssetId, setFocusedAssetId] = useState<string | null>(null);
+  const returnAnchor = useRef<ReturnAnchorState | null>(null);
   useLayoutEffect(() => {
     if (focusedAssetId) galleryRoot.current?.querySelector<HTMLElement>('.platform-photo-detail')?.focus({ preventScroll: true });
   }, [focusedAssetId]);
@@ -139,6 +166,9 @@ function GalleryContent({ assetIds, albumId, entityIds, variant = 'grid', title 
     const reveal = () => {
       const detail = galleryRoot.current?.querySelector<HTMLElement>('.platform-photo-detail');
       if (!detail) return;
+      // FocusStage owns placement for focused photos. Do not scroll the page
+      // toward the detail node's old in-flow position.
+      if (detail.closest('[data-focus-layer="true"]')) return;
       const rect = detail.getBoundingClientRect();
       const geometry = `${Math.round(rect.top)}:${Math.round(rect.height)}`;
       stable = geometry === previous ? stable + 1 : 0; previous = geometry;
@@ -163,27 +193,49 @@ function GalleryContent({ assetIds, albumId, entityIds, variant = 'grid', title 
   const examples = entityIds?.length
     ? ids.filter(id => !library.associations.some(item => item.assetId === id && item.targetType === 'entity' && entityIds.includes(item.targetId!) && item.role === 'depicts'))
     : ids.filter(id => library.associations.some(item => item.assetId === id && item.role === 'example'));
-  function chooseAlbum(id: string) { (onInteraction ?? context?.onInteraction)?.(); setFocusedAssetId(null); setSelection({ scopeKey, albumId: id }); }
-  function focusPhoto(asset: MediaLibrary['assets'][number]) { (onInteraction ?? context?.onInteraction)?.(); context?.onPhotoView?.(asset.id); setFocusedAssetId(asset.id); }
-  function closePhoto() { const id = focusedAssetId; (onInteraction ?? context?.onInteraction)?.(); setFocusedAssetId(null); requestAnimationFrame(() => requestAnimationFrame(() => { galleryRoot.current?.querySelector<HTMLElement>(`[data-gallery-asset="${CSS.escape(id ?? '')}"] button`)?.focus({ preventScroll: true }); })); }
+  function chooseAlbum(id: string) { (onInteraction ?? context?.onInteraction)?.(); setFocusedAssetId(null); onFocusChange?.(null, null); setSelection({ scopeKey, albumId: id }); }
+  function focusPhoto(asset: MediaLibrary['assets'][number]) {
+    (onInteraction ?? context?.onInteraction)?.(); context?.onPhotoView?.(asset.id);
+    returnAnchor.current = { reference: { kind: 'photo', id: asset.id }, surface: 'gallery', focusKey: `photo:${asset.id}`, scrollTop: scrollContainerTop(galleryRoot.current) };
+    onFocusChange?.({ kind: 'photo', id: asset.id }, returnAnchor.current);
+    setFocusedAssetId(asset.id);
+  }
+  function closePhoto() {
+    (onInteraction ?? context?.onInteraction)?.(); setFocusedAssetId(null);
+    const anchor = returnAnchor.current;
+    onFocusChange?.(null, anchor);
+    const restore = () => {
+      if (!anchor) return;
+      const escaped = anchor.reference.id.replace(/[^A-Za-z0-9_-]/g, '\\$&');
+      const target = galleryRoot.current?.querySelector<HTMLElement>(`[data-gallery-asset="${escaped}"] .platform-item-open`);
+      if (target && !target.closest('[inert], [aria-hidden="true"]')) { target.focus({ preventScroll: true }); returnAnchor.current = null; return; }
+      requestAnimationFrame(restore);
+    };
+    requestAnimationFrame(restore);
+  }
   function movePhoto(offset: number) { const next = assets[focusedIndex + offset]; if (next) focusPhoto(next); }
+  const photoGrid = <MotionHeight key="photo-grid"><motion.div layout={reduced ? false : 'position'} variants={reduced ? undefined : sequenceVariants} initial={reduced ? false : 'hidden'} whileInView="visible" viewport={{ once: true, amount: 0.16 }} className="platform-media-grid platform-items" data-variant={variant} data-layout={variant === 'grid' ? 'editorial' : 'list'} transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }}>
+    {assets.map((asset, index) => { const caption = visibleCaption(asset.caption); const orientation = asset.width / asset.height > 1.25 ? 'landscape' : asset.height / asset.width > 1.25 ? 'portrait' : 'square'; return <MediaFigure key={asset.id} layoutId={`gallery-card-${asset.id}`} className="platform-media-card platform-item" data-gallery-asset={asset.id} data-card-focus={`photo:${asset.id}`} data-order={index} data-orientation={orientation}
+      onClick={event => { if (event.target instanceof Element && event.target.closest('button, a, input, select, textarea, [role="button"]')) return; focusPhoto(asset); }}>
+      <MediaImage assetId={asset.id} size="display" layoutId={`gallery-photo-${asset.id}`} aspectRatio={`${asset.width} / ${asset.height}`} onOpen={() => focusPhoto(asset)}/>
+      <div className="platform-item-kicker"><span>Photo</span><span>{String(index + 1).padStart(2, '0')}</span></div><button className="platform-item-open" type="button" data-focus-key={`photo:${asset.id}`} onClick={() => focusPhoto(asset)}><motion.h4 layoutId={`gallery-title-${asset.id}`}>{photoLabel(asset, index)}</motion.h4><span aria-hidden="true">↗</span></button>
+      {(caption || asset.credit || examples.includes(asset.id)) && <figcaption>{examples.includes(asset.id) && <span className="platform-media-example">Example photo</span>}{caption && <p>{caption}</p>}{asset.credit && <small>{asset.credit}</small>}</figcaption>}
+    </MediaFigure>; })}
+    {!assets.length && <MediaFigure key="empty" className="platform-media-empty"><p role="status">No photos are available in this view.</p></MediaFigure>}
+  </motion.div></MotionHeight>;
+  const focusedSurface = focusedAsset && <motion.section key={`photo-detail-${focusedAsset.id}`} layoutId={`gallery-card-${focusedAsset.id}`} layout="position" className="platform-detail platform-photo-detail" data-source-id={`photo:${focusedAsset.id}`} data-focused-ref={`photo:${focusedAsset.id}`} tabIndex={-1} aria-label={`Details of ${photoLabel(focusedAsset, focusedIndex)}`} transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }} initial={false} animate={{ opacity: 1 }} exit={{ opacity: reduced ? 0 : 0.999, transition: { ...revealTransition, duration: reduced ? 0 : motionTiming.workspace, layout: reduced ? { duration: 0 } : surfaceTransition } }}>
+    <span className="platform-eyebrow">PHOTO · A CLOSER LOOK</span><motion.h3 layoutId={`gallery-title-${focusedAsset.id}`} tabIndex={-1} data-platform-focus>{photoLabel(focusedAsset, focusedIndex)}</motion.h3>
+    <div className="platform-photo-detail-image"><MediaImage assetId={focusedAsset.id} size="display" fit="contain" interactive={false} layoutId={`gallery-photo-${focusedAsset.id}`}/></div>
+    {(visibleCaption(focusedAsset.caption) || focusedAsset.credit || examples.includes(focusedAsset.id)) && <div className="platform-photo-detail-copy">{examples.includes(focusedAsset.id) && <span className="platform-media-example">Example photo</span>}{visibleCaption(focusedAsset.caption) && <p>{visibleCaption(focusedAsset.caption)}</p>}{focusedAsset.credit && <small>{focusedAsset.credit}</small>}</div>}
+    <div className="platform-photo-detail-bottom">{assets.length > 1 && <div><button className="platform-button" type="button" disabled={focusedIndex === 0} onClick={() => movePhoto(-1)}>Previous</button><button className="platform-button" type="button" disabled={focusedIndex === assets.length - 1} onClick={() => movePhoto(1)}>Next</button></div>}</div>
+  </motion.section>;
   return <section ref={galleryRoot} className="platform-media-gallery" data-layout={variant === 'grid' ? 'editorial' : 'list'} aria-label={title || 'Photos'}>
     <div className="platform-media-heading"><div>{title && <h3>{title}</h3>}{album?.description && <p>{album.description}</p>}</div><span>{assets.length} {assets.length === 1 ? 'photo' : 'photos'}</span></div>
-    {showAlbums && !albumId && library.albums.length > 0 && <div className="platform-media-albums" aria-label="Photo albums"><button type="button" aria-pressed={!selectedAlbumId} onClick={() => chooseAlbum('')}>All photos</button>{library.albums.map(item => <button type="button" key={item.id} aria-pressed={selectedAlbumId === item.id} onClick={() => chooseAlbum(item.id)}>
+    {showAlbums && !albumId && library.albums.length > 0 && <div className="platform-media-albums" aria-label="Photo albums" inert={focusedAsset ? true : undefined} aria-hidden={focusedAsset ? true : undefined}><button type="button" aria-pressed={!selectedAlbumId} onClick={() => chooseAlbum('')}>All photos</button>{library.albums.map(item => <button type="button" key={item.id} aria-pressed={selectedAlbumId === item.id} onClick={() => chooseAlbum(item.id)}>
       {(item.coverAssetId || item.assetIds[0]) && <MediaImage assetId={item.coverAssetId || item.assetIds[0]} interactive={false}/>}<span>{item.title}</span></button>)}</div>}
-    <AnimatePresence mode="popLayout" initial={false}>{focusedAsset ? <motion.section key={`photo-detail-${focusedAsset.id}`} layoutId={`gallery-card-${focusedAsset.id}`} layout="position" className="platform-detail platform-photo-detail" data-source-id={`photo:${focusedAsset.id}`} tabIndex={-1} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); closePhoto(); } }} aria-label={`Details of ${photoLabel(focusedAsset, focusedIndex)}`} transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }} initial={reduced ? false : { opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
-      <span className="platform-eyebrow">PHOTO · A CLOSER LOOK</span><motion.h3 layoutId={`gallery-title-${focusedAsset.id}`} tabIndex={-1}>{photoLabel(focusedAsset, focusedIndex)}</motion.h3>
-      <div className="platform-photo-detail-image"><MediaImage assetId={focusedAsset.id} size="display" fit="contain" interactive={false} layoutId={`gallery-photo-${focusedAsset.id}`}/></div>
-      {(visibleCaption(focusedAsset.caption) || focusedAsset.credit || examples.includes(focusedAsset.id)) && <div className="platform-photo-detail-copy">{examples.includes(focusedAsset.id) && <span className="platform-media-example">Example photo</span>}{visibleCaption(focusedAsset.caption) && <p>{visibleCaption(focusedAsset.caption)}</p>}{focusedAsset.credit && <small>{focusedAsset.credit}</small>}</div>}
-      <div className="platform-photo-detail-bottom"><button className="platform-text-button" type="button" onClick={closePhoto}>← Back to photos</button>{assets.length > 1 && <div><button className="platform-button" type="button" disabled={focusedIndex === 0} onClick={() => movePhoto(-1)}>Previous</button><button className="platform-button" type="button" disabled={focusedIndex === assets.length - 1} onClick={() => movePhoto(1)}>Next</button></div>}</div>
-    </motion.section> : <MotionHeight key="photo-grid"><motion.div layout={reduced ? false : 'position'} variants={reduced ? undefined : sequenceVariants} initial={reduced ? false : 'hidden'} whileInView="visible" viewport={{ once: true, amount: 0.16 }} className="platform-media-grid platform-items" data-variant={variant} data-layout={variant === 'grid' ? 'editorial' : 'list'} transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }}>
-      {assets.map((asset, index) => { const caption = visibleCaption(asset.caption); const orientation = asset.width / asset.height > 1.25 ? 'landscape' : asset.height / asset.width > 1.25 ? 'portrait' : 'square'; return <MediaFigure key={asset.id} layoutId={`gallery-card-${asset.id}`} className="platform-media-card platform-item" data-gallery-asset={asset.id} data-order={index} data-orientation={orientation}>
-        <MediaImage assetId={asset.id} size="display" layoutId={`gallery-photo-${asset.id}`} aspectRatio={`${asset.width} / ${asset.height}`} onOpen={() => focusPhoto(asset)}/>
-        <div className="platform-item-kicker"><span>Photo</span><span>{String(index + 1).padStart(2, '0')}</span></div><button className="platform-item-open" type="button" onClick={() => focusPhoto(asset)}><motion.h4 layoutId={`gallery-title-${asset.id}`}>{photoLabel(asset, index)}</motion.h4><span aria-hidden="true">↗</span></button>
-        {(caption || asset.credit || examples.includes(asset.id)) && <figcaption>{examples.includes(asset.id) && <span className="platform-media-example">Example photo</span>}{caption && <p>{caption}</p>}{asset.credit && <small>{asset.credit}</small>}</figcaption>}
-        <div className="platform-item-bottom"><button className="platform-text-button" type="button" onClick={() => focusPhoto(asset)}>Take a closer look <span aria-hidden="true">↗</span></button></div>
-      </MediaFigure>; })}
-      {!assets.length && <MediaFigure key="empty" className="platform-media-empty"><p role="status">No photos are available in this view.</p></MediaFigure>}</motion.div></MotionHeight>}</AnimatePresence>
+    <FocusStage focused={Boolean(focusedAsset)} context={photoGrid} onClose={closePhoto} label={focusedAsset ? `Focused photo ${photoLabel(focusedAsset, focusedIndex)}` : title || 'Photos'}>
+      {focusedAsset ? <FocusSurface key={`photo:${focusedAsset.id}`} reference={{ kind: 'photo', id: focusedAsset.id }} onClose={closePhoto} returnLabel="Back to photos" title={`Details of ${photoLabel(focusedAsset, focusedIndex)}`}><AnimatePresence mode="popLayout" initial={false}>{focusedSurface}</AnimatePresence></FocusSurface> : null}
+    </FocusStage>
   </section>;
 }
 

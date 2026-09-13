@@ -74,11 +74,20 @@ async function writePrivateMedia(user: WorkspaceUser, siteId: string, library: M
 }
 
 /** Prepare only; the caller installs this revision atomically with knowledge Apply. */
-export async function prepareKnowledgeMedia(user: WorkspaceUser, siteId: string, revisionId: string | undefined, entityIds: ReadonlySet<string>): Promise<MediaLibrary | null> {
+export async function prepareKnowledgeMedia(user: WorkspaceUser, siteId: string, revisionId: string | undefined, entityIds: ReadonlySet<string>, remaps: Record<string, string> = {}): Promise<MediaLibrary | null> {
   if (!revisionId) return null;
   const current = await readMediaLibrary(user, siteId, revisionId);
-  const associations = current.associations.filter(link => link.targetType !== 'entity' || entityIds.has(link.targetId!));
-  if (associations.length === current.associations.length) return null;
+  const { remappedEntityId } = await import('./knowledge-model');
+  const primary = new Set<string>();
+  const associations = [...new Map(current.associations.map(link => link.targetType === 'entity' ? { ...link, targetId: remappedEntityId(link.targetId!, remaps) } : link)
+    .filter(link => link.targetType !== 'entity' || entityIds.has(link.targetId!)).map(link => [`${link.targetType}/${link.targetId ?? ''}/${link.assetId}`, link])).values()]
+    .map(link => {
+      const key = `${link.targetType}/${link.targetId ?? ''}/${link.role}`;
+      if (!link.primary) return link;
+      if (primary.has(key)) return { ...link, primary: false };
+      primary.add(key); return link;
+    });
+  if (JSON.stringify(associations) === JSON.stringify(current.associations)) return null;
   const library = validateMediaLibrary({ ...current, id: randomUUID(), associations });
   await writePrivateMedia(user, siteId, library);
   return library;

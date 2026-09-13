@@ -1,7 +1,9 @@
 'use client';
+import LoadingIndicator from './LoadingIndicator';
 
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { ArrowUp, ArrowUpRight, AudioLines, Check, ChevronDown, CircleHelp, CreditCard, FileText, FolderOpen, Globe2, Layers3, Menu, MessageSquare, Monitor, Palette, Paperclip, Plus, RotateCcw, Smartphone, Sparkles, X } from 'lucide-react';
 import { visitorDraft } from '@/lib/visitor-model';
 import { hasChanges, summarize, type Site, type SiteContent, type SiteSummary } from '@/lib/site-model';
@@ -59,7 +61,7 @@ export default function Dashboard({ initialSites, initialSite, user, editor, ini
   const chatRequest = useRef<{ signature: string; id: string } | null>(null);
   const unsaved = JSON.stringify(content) !== JSON.stringify(site.draft);
   const dirty = hasChanges(site);
-  const textFiles = site.files.filter(file => file.kind === 'text');
+  const textFiles = site.files.filter(file => file.kind === 'text' && /^text\/(?:plain|csv)$/.test(file.mime));
   useEffect(() => { observePlatformEvent(`/api/sites/${site.id}/events`, { type: 'studio_visit', surface: 'preview' }); }, [site.id]);
 
   useEffect(() => { endOfChat.current?.scrollIntoView({ block: 'nearest' }); }, [site.messages.length, panel]);
@@ -139,7 +141,8 @@ export default function Dashboard({ initialSites, initialSite, user, editor, ini
         const image = /^image\/(png|jpeg|webp)$/.test(file.type) || /\.(png|jpe?g|webp)$/i.test(file.name);
         const maximum = image ? 10 : 2;
         if (file.size > maximum * 1024 * 1024) throw new Error(`${file.name} is larger than ${maximum} MB.`);
-        const result = await request<{ site: Site; fileId: string }>(`/api/sites/${site.id}/files`, { method: 'POST', headers: { 'Content-Type': file.type || (/\.csv$/i.test(file.name) ? 'text/csv' : /\.txt$/i.test(file.name) ? 'text/plain' : /\.png$/i.test(file.name) ? 'image/png' : /\.jpe?g$/i.test(file.name) ? 'image/jpeg' : /\.webp$/i.test(file.name) ? 'image/webp' : 'application/octet-stream'), 'X-File-Name': encodeURIComponent(file.name), 'X-Site-Revision': String(revision) }, body: file });
+        const contentType = file.type || (/\.csv$/i.test(file.name) ? 'text/csv' : /\.txt$/i.test(file.name) ? 'text/plain' : /\.docx$/i.test(file.name) ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : /\.xlsx$/i.test(file.name) ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : /\.html?$/i.test(file.name) ? 'text/html' : /\.png$/i.test(file.name) ? 'image/png' : /\.jpe?g$/i.test(file.name) ? 'image/jpeg' : /\.webp$/i.test(file.name) ? 'image/webp' : 'application/octet-stream');
+        const result = await request<{ site: Site; fileId: string }>(`/api/sites/${site.id}/files`, { method: 'POST', headers: { 'Content-Type': contentType, 'X-File-Name': encodeURIComponent(file.name), 'X-Site-Revision': String(revision) }, body: file });
         revision = result.site.revision;
         const fileId = result.fileId || result.site.files.find(item => !latest.files.some(previous => previous.id === item.id))?.id;
         latest = result.site; acceptSite(result.site);
@@ -170,7 +173,7 @@ export default function Dashboard({ initialSites, initialSite, user, editor, ini
   return <div className="studio-shell">
     {mobileNav && <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setMobileNav(false)}/>}
     <aside className={`sidebar ${mobileNav ? 'is-open' : ''}`}>
-      <div className="studio-brand"><span className="brand-symbol"><AudioLines size={24}/></span><span>Voice <b>Studio</b><small>YOUR WORKSPACE</small></span><button className="icon-button mobile-only" aria-label="Close navigation" onClick={() => setMobileNav(false)}><X size={20}/></button></div>
+      <div className="studio-brand"><Image className="brand-logo-full" src="/brand/flowpath-logo-full.png" alt="FlowPath Studio" width={168} height={112} priority/><Image className="brand-logo-square" src="/brand/flowpath-icon-square.png" alt="" width={40} height={40} priority/><span className="brand-name">FlowPath Studio</span><button className="icon-button mobile-only" aria-label="Close navigation" onClick={() => setMobileNav(false)}><X size={20}/></button></div>
       <div className="site-switcher"><span className="site-avatar" style={{ background: site.draft.accent }}>{site.draft.name.slice(0, 1)}</span><label className="site-picker"><span>Current site</span><select aria-label="Current site" disabled={busy} value={site.id} onChange={e => void switchSite(e.target.value)}>{sites.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><ChevronDown size={14}/></div>
       <button className="new-site-button" disabled={busy} onClick={() => { if (unsaved || mediaPending) { setError('Save form changes and apply or discard photo changes before creating another site.'); return; } if (text.trim() && !window.confirm('Discard your unsent message when the new site is created?')) return; setError(''); setNewSite(true); }}><Plus size={15}/>Create a site</button>
       <span className="nav-caption">WORKSPACE</span>
@@ -179,7 +182,7 @@ export default function Dashboard({ initialSites, initialSite, user, editor, ini
     </aside>
     <div className="studio-main">
       <header className="topbar"><div className="breadcrumbs"><button className="icon-button mobile-only" aria-label="Open navigation" onClick={() => setMobileNav(true)}><Menu size={20}/></button><Layers3 size={16}/><span>My sites</span><span className="crumb-divider">/</span><strong>{site.draft.name}</strong><span className="badge desktop-only">{site.publishedAt ? (cloud ? 'Published' : 'Published locally') : 'Draft'}</span></div>
-        <div className="topbar-actions"><ThemeToggle/><span className="save-state">{busy ? 'Working…' : mediaPending ? 'Photos to review' : unsaved ? 'Unsaved changes' : dirty ? 'Draft saved' : 'Up to date'}</span><button className="icon-button" aria-label="Undo last draft change" disabled={busy || mediaPending || (!unsaved && !site.history.length)} onClick={() => { if (unsaved) { setContent(site.draft); setError(''); setNotice('Unsaved changes discarded.'); } else void command({ action: 'undo' }); }}><RotateCcw size={17}/></button>
+        <div className="topbar-actions"><ThemeToggle/><span className="save-state">{busy ? <LoadingIndicator/> : mediaPending ? 'Photos to review' : unsaved ? 'Unsaved changes' : dirty ? 'Draft saved' : 'Up to date'}</span><button className="icon-button" aria-label="Undo last draft change" disabled={busy || mediaPending || (!unsaved && !site.history.length)} onClick={() => { if (unsaved) { setContent(site.draft); setError(''); setNotice('Unsaved changes discarded.'); } else void command({ action: 'undo' }); }}><RotateCcw size={17}/></button>
         {unsaved && <button className="button secondary" disabled={busy} onClick={() => void command({ action: 'save', content })}>Save draft</button>}
         {site.publishedAt && <a className="icon-button" aria-label="Open published site" href={`/s/${site.slug}`} target="_blank" rel="noopener noreferrer"><ArrowUpRight size={19}/></a>}
         <button className="button primary publish-button" disabled={busy || unsaved || mediaPending || !dirty} onClick={() => setPublishReview(!publishReview)}>Publish<ArrowUpRight size={16}/></button></div>
@@ -206,17 +209,17 @@ export default function Dashboard({ initialSites, initialSite, user, editor, ini
               {liveEditor && <details className="chat-context"><summary><Paperclip size={13}/><span>Text file context</span><span>{selectedFileIds.length} / 3 selected</span></summary><div className="chat-context-options">{textFiles.length ? textFiles.map(file => <label className="chat-context-file" key={file.id}><input type="checkbox" checked={selectedFileIds.includes(file.id)} disabled={busy || (!selectedFileIds.includes(file.id) && selectedFileIds.length >= 3)} onChange={() => selectFile(file.id)}/><span>{file.name}</span></label>) : <p>Upload a .txt file in Files to include it in a message.</p>}</div></details>}
               {editorUnavailable && <p className="editor-availability" role="status">{editor.message} You can still edit your draft in Branding and Content.</p>}
               <form className="composer" onSubmit={event => { event.preventDefault(); submitChat(); }}><textarea aria-label="Describe a change" disabled={busy || editorUnavailable} value={text} maxLength={4000} placeholder="What would you like to change?" onChange={event => editText(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); submitChat(); } }}/><div className="composer-tools"><button type="button" className="icon-button" aria-label="Add files" disabled={busy || unsaved} onClick={() => fileInput.current?.click()}><Plus size={20}/></button><span>{editorLabel}</span><button type="submit" className="send-button" aria-label="Send message" disabled={busy || !text.trim() || unsaved || editorUnavailable}><ArrowUp size={19}/></button></div></form>
-              <input hidden ref={fileInput} type="file" multiple accept="image/png,image/jpeg,image/webp,application/pdf,text/plain,text/csv,.txt,.csv" onChange={e => { void upload(e.target.files); e.target.value = ''; }}/>
+              <input hidden ref={fileInput} type="file" multiple accept="image/png,image/jpeg,image/webp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/html,text/plain,text/csv,.docx,.xlsx,.html,.htm,.txt,.csv" onChange={e => { void upload(e.target.files); e.target.value = ''; }}/>
               {liveEditor && <p className="chat-disclosure">Sending shares your saved draft, recent chat, logo filenames, and selected text (up to 8,000 characters per file) with OpenAI. PDFs and images are not read.</p>}
               <p className="composer-note"><CircleHelp size={12}/>Review changes before they go live. Nothing publishes automatically.</p>
             </div>
           </> : panel === 'knowledge' ? <KnowledgeReview key={site.id} site={site} blocked={busy || unsaved} onBusyChange={value => { requestInFlight.current = value; setBusy(value); }} onSiteChange={next => { acceptSite(next); setPreviewMode('draft'); }}/> : panel === 'files' ? null : <EditorPanels {...editorPanelProps} panel={panel}/>}
           <div className="media-files-panel" hidden={panel !== 'files'}><EditorPanels key={site.id} {...editorPanelProps} panel="files"/></div>
         </section>
-        <section className="preview-workspace" aria-label="Website preview"><div className="preview-toolbar"><div className="preview-title"><span className="status-light"/>Site preview</div><div className="segmented" aria-label="Preview size"><button aria-label="Desktop preview" aria-pressed={device === 'desktop'} className={device === 'desktop' ? 'active' : ''} onClick={() => setDevice('desktop')}><Monitor size={16}/></button><button aria-label="Mobile preview" aria-pressed={device === 'mobile'} className={device === 'mobile' ? 'active' : ''} onClick={() => setDevice('mobile')}><Smartphone size={16}/></button></div></div>
+        <section className="preview-workspace" aria-label="FlowPath Studio website preview"><div className="preview-toolbar"><div className="preview-title"><span className="status-light"/>Site preview</div><div className="segmented" aria-label="Preview size"><button aria-label="Desktop preview" aria-pressed={device === 'desktop'} className={device === 'desktop' ? 'active' : ''} onClick={() => setDevice('desktop')}><Monitor size={16}/></button><button aria-label="Mobile preview" aria-pressed={device === 'mobile'} className={device === 'mobile' ? 'active' : ''} onClick={() => setDevice('mobile')}><Smartphone size={16}/></button></div></div>
           <div className="preview-options"><span>{previewMode === 'published' ? 'Published version' : unsaved ? 'Unsaved preview' : 'Saved draft'}</span><div className="preview-mode"><button aria-pressed={previewMode === 'draft'} className={previewMode === 'draft' ? 'active' : ''} onClick={() => setPreviewMode('draft')}>Draft</button><button aria-pressed={previewMode === 'published'} disabled={!site.published} className={previewMode === 'published' ? 'active' : ''} onClick={() => setPreviewMode('published')}>Published</button></div></div>
           <div className="preview-canvas"><div className={`browser-frame ${device}`}><div className="browser-chrome"><div className="traffic-lights"><i/><i/><i/></div><span><Globe2 size={11}/>{site.slug} · {cloud ? 'preview' : 'local preview'}</span><ArrowUpRight size={13}/></div><div className="preview-scroll"><KnowledgePreview key={site.id} siteId={site.id} content={previewMode === 'published' && site.published ? site.published : content}/></div></div></div>
-          <div className="preview-footer"><span><Layers3 size={13}/>Voice template · v1</span><span>{previewMode === 'published' ? 'Showing the last published version' : 'Changes appear here as you edit'}</span></div>
+          <div className="preview-footer"><span><Layers3 size={13}/>FlowPath template · v1</span><span>{previewMode === 'published' ? 'Showing the last published version' : 'Changes appear here as you edit'}</span></div>
         </section>
       </div>
     </div>

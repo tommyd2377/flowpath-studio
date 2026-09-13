@@ -1,12 +1,15 @@
 # FlowPath Studio
 
+Voice now uses **GPT-Live-1 with a separate Luna backend**. See [GPT-Live architecture and verification](docs/gpt-live.md) for the shared core, publisher defaults, limits and migration details.
+
+
 A general-purpose, AI-native website publishing platform. Publishers supply their knowledge, capabilities and identity; the platform helps each visitor discover, understand, compare and act through an interface suited to their current intent.
 
 Studio turns source material into reviewable knowledge and media, then publishes an immutable snapshot. Visitors explore it through controlled React components, typed requests and optional voice. Models select approved content and interface components; they do not generate arbitrary HTML/CSS or invent business capabilities.
 
 **Status:** working local pilot with semantic ingestion, publisher correction, photos/albums and a shared visitor runtime. Firebase and direct model integrations are implemented but require separate configuration and live verification. This is not yet a complete commercial hosting or billing service.
 
-The application currently displays **Voice Studio**. Existing identifiers (`voice-platform`, `@thevoice/platform-ui`, `VOICE_*`) are retained. The separate FlowPath/news application is a reference implementation and test publisher, not a dependency or a template for this platform.
+The application displays **FlowPath Studio**. Existing identifiers (`voice-platform`, `@thevoice/platform-ui`, `VOICE_*`) are retained. The separate FlowPath/news application is a reference implementation and test publisher, not a dependency or a template for this platform.
 
 ## Start locally
 
@@ -29,21 +32,21 @@ The demo is a single local owner with Git-ignored storage under `data/`. It is f
 ## Try the publisher-to-visitor flow
 
 1. Create a site using **Start from my content**, or explore an existing sample.
-2. In **Files**, upload a synthetic CSV or labeled TXT file from [`fixtures/source-packs`](fixtures/source-packs). Text-bearing PDFs are also supported.
+2. In **Files**, upload a synthetic CSV or labeled TXT file from [`fixtures/source-packs`](fixtures/source-packs). Text-bearing PDFs, DOCX, XLSX, HTML and OCR-capable images are also supported.
 3. Open **Knowledge → Interpret source**. Review discovered entities, attributes, collections, relationships and likely visitor needs. Correct fields directly, or try an exact-name rename through the demo correction controls.
 4. **Apply to draft**. In **Files → Photos**, add individual images, a batch or a folder. Review album names, labels and connections to knowledge items or information sections. Mark illustrative images as examples.
 5. Configure **Content → Opening experience** with highlights, featured items and tone. Choose chat, voice or both under **Visitor conversations**. Browsing never requires voice; the current conversation setting initially defaults to voice.
 6. Review the desktop/mobile preview and **Publish**. The saved snapshot appears at `/s/{slug}`. Later draft changes remain private until republished; **Undo** restores prior draft content.
 7. Explore cards, filters, comparisons, details, relationships and photo galleries. Manual controls and `/lab` use the same shared component library without model calls.
 
-Local interpretation supports CSV and labeled TXT structures, plus PDF text extraction. Free-form interpretation and broader conversational correction require a configured model. The demo reports unsupported requests rather than pretending to understand every document.
+Local interpretation supports CSV and compatible multi-sheet XLSX tables, labeled TXT/DOCX/HTML structures and text-bearing PDFs. Free-form interpretation and broader conversational correction require a configured model. OCR uses local Tesseract when installed or an explicitly configured/injected worker; this repository does not deploy that worker. Scanned PDF pages, unsupported Office structures and incomplete extraction fail explicitly. Review exact source locations, singleton facts, conditions and identity suggestions before Apply; publishing remains separate.
 
 ## What is implemented
 
 | Area | Current behavior |
 | --- | --- |
 | Studio | Multiple sites, chat proposals, branding/content editing, draft and published previews, approval, publication and Undo |
-| Knowledge | Source ingestion, private row/line/page excerpts, semantic catalogs, direct/conversational corrections and explicit reimport choices that preserve publisher overrides |
+| Knowledge | Bounded multi-format ingestion, private field/fact/relationship evidence, singleton/temporal assertions, identity review, correction history and publication-scoped retrieval |
 | Media | PNG/JPEG/WebP upload, folder albums, optional group context, captions/alt/credit, actual/example connections, covers and lead images |
 | Visitor interface | Controlled cards, conversational filtering, details, comparisons, selections, relationships, explicit links and galleries; typed requests and bounded continuous voice that preserves manual browsing |
 | Reliability | Schema/reference validation, local OpenUI parsing, stale-response protection, manual-interaction cancellation, fallbacks and reduced motion |
@@ -64,7 +67,7 @@ Versions are pinned in the lockfile. These are the current direct dependencies, 
 | Interface | Semantic React components, Motion 13, Lucide icons, scoped CSS |
 | Rendering grammar | `@openuidev/react-lang` with local compilation, parser preflight and controlled component registration |
 | Contracts | Zod 4 for source, catalog, media, interaction and presentation validation |
-| Source processing | PDF.js for text-bearing PDFs; local CSV/TXT extraction; Sharp for image decode, orientation and sanitized variants |
+| Source processing | PDF.js for text-bearing PDFs; bounded CSV/TXT/DOCX/XLSX/HTML extraction; injectable local OCR; Sharp for image decode, orientation and sanitized variants |
 | Optional backend | Firebase Authentication, Firestore and Cloud Storage through server-owned routes |
 | Optional models | Direct OpenAI Responses requests and bounded Realtime voice through server-side integrations; no OpenUI Gateway dependency |
 | Verification | Node test runner with tsx, React server rendering, a packed-package consumer check, Playwright and ESLint |
@@ -100,7 +103,7 @@ An optional [manual validation workflow example](docs/examples/github-actions-va
 - **Demo:** `VOICE_BACKEND=demo` and `VOICE_AI_MODE=demo`. This path never sends paid model requests, even if a key exists elsewhere in the process environment.
 - **Connected backend:** see [Firebase setup](docs/firebase-setup.md). Missing configuration fails closed; local demo content is not automatically migrated.
 - **Connected interpretation/editor:** see [AI editor setup](docs/ai-editor-setup.md), [knowledge foundation](docs/platform-foundation.md) and [photo interpretation](docs/photo-library.md). Suggestions require publisher review before Apply and Publish.
-- **Visitor input:** see [visitor conversations](docs/visitor-conversations.md). Text and voice share approved content, current view context and bounded ephemeral history. Connected published sites use continuous, interruptible WebRTC voice with server-authorized turns and a two-minute session limit. Browsing keeps the call connected while cancelling stale responses; voice can answer directly or request a validated view/navigation change. Voice errors offer separately capped typing fallback. Demo previews remain local and deterministic; live audio quality and deployed session supervision require separate verification.
+- **Visitor input:** see [visitor conversations](docs/visitor-conversations.md). Text and voice share approved content, current view context and bounded ephemeral history. Connected published sites use continuous, interruptible WebRTC voice with server-authorized turns, a publisher-configurable inactivity close and a two-minute hard session limit. Browsing keeps the call connected while cancelling stale responses; voice can answer directly or request a validated view/navigation change. Voice errors offer separately capped typing fallback. Demo previews remain local and deterministic; live audio quality and deployed session supervision require separate verification.
 - **Launch billing:** see [the launch offer](docs/launch-offer.md). Usage & billing supports persistent synthetic payments locally. The Stripe integration is test-only and requires separately supplied test configuration; signed confirmations, durable orders and credit reservations are implemented. Test credits cannot fund live AI. Existing unenrolled pilots retain their attempt limits. No real payment, merchant setup or domain connection happens automatically.
 - **Private data:** credentials, environment files, original uploads, local databases, logs and generated artifacts stay out of Git. Never paste credentials or publisher material into issues, prompts, fixtures or logs.
 
@@ -127,6 +130,6 @@ See [Product philosophy and direction](docs/product-philosophy.md) for the princ
 - [Coding-agent instructions](AGENTS.md) and [Claude entry point](CLAUDE.md)
 - [Security and private data](SECURITY.md)
 
-Still ahead: DOCX/XLSX/website/OCR ingestion, larger durable import processing, field-level grounding for model-interpreted prose, cross-source identity consolidation, live interpretation evaluations, production payment activation and provider-usage reconciliation, complete funnel/retention analytics, domain routing and self-serve launch onboarding. Visitor-to-publisher commerce will use Stripe Connect by default; that separate integration is not implemented.
+Still ahead: larger durable import processing, deployed managed OCR workers, live interpretation evaluations, production payment activation and provider-usage reconciliation, complete funnel/retention analytics, domain routing and self-serve launch onboarding. Visitor-to-publisher commerce will use Stripe Connect by default; that separate integration is not implemented. See [semantic graph architecture](docs/semantic-graph-architecture.md) and the [executable knowledge-to-workspace handoff](docs/semantic-workspace-handoff.md) for implemented behavior, exact limits and verification boundaries.
 
 This repository is private. No open-source license is included; visibility, licensing and redistribution remain owner decisions.

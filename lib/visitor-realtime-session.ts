@@ -1,10 +1,13 @@
 import 'server-only';
 import { AppError } from './errors';
-import { VOICE_MODELS, visitorSettings, type VisitorAvailability } from './visitor-model';
+import type { VisitorAvailability } from './visitor-model';
+import { DEFAULT_LIVE_IDLE_TIMEOUT_MS, normalizeLiveIdleTimeoutMs } from './gpt-live/idle';
+import { liveSessionConfig, liveSessionId, liveSessionUrl } from './gpt-live/protocol';
 import { VISITOR_SESSION_MS, type VisitorRealtimeEvent } from './visitor-realtime';
 import { createVisitorRealtimeControl } from './visitor-realtime-control';
 import { createVisitorRealtimeMailbox } from './visitor-realtime-mailbox';
 import type { VisitorControlUpdate } from './visitor-realtime-context';
+import { visitorDiagnostic } from './visitor-diagnostics';
 
 /** Audio only: a visitor must not negotiate a second channel for provider commands. */
 export function validateVisitorOffer(offer: string) {
@@ -21,6 +24,7 @@ export function validateVisitorOffer(offer: string) {
 type ControlOptions = Parameters<typeof createVisitorRealtimeControl>[0];
 export type VisitorSessionOptions = Pick<ControlOptions, 'content' | 'catalog' | 'media' | 'catalogState' | 'context' | 'history' | 'reserveTurn' | 'assertCurrent' | 'onUsage' | 'onTiming' | 'reservationChecksPublication' | 'search'> & {
   offer: string;
+  traceId?: string;
   availability: VisitorAvailability;
   apiKey: string;
   signal: AbortSignal;
@@ -32,12 +36,17 @@ export type VisitorSessionOptions = Pick<ControlOptions, 'content' | 'catalog' |
   onClosed?: () => void;
   retainCleanup?: (work: Promise<void>) => void;
   durationMs?: number;
+  idleTimeoutMs?: number;
 };
 
 /** The open HTTP body owns the call, so cancellation does not depend on worker affinity. */
 export function visitorRealtimeSession(options: VisitorSessionOptions) {
   validateVisitorOffer(options.offer);
+  const traceId = options.traceId ?? crypto.randomUUID(), startedAt = performance.now();
+  const diagnostic = (stage: 'start' | 'session_answer' | 'control_ready' | 'stop', status: 'started' | 'succeeded' | 'failed' | 'cancelled') => visitorDiagnostic({ traceId, channel: 'server', stage, status, durationMs: performance.now() - startedAt });
+  diagnostic('start', 'started');
   const requestProvider = options.fetch ?? fetch;
+  const idleTimeoutMs = normalizeLiveIdleTimeoutMs(options.idleTimeoutMs ?? DEFAULT_LIVE_IDLE_TIMEOUT_MS);
   const lifecycle = new AbortController();
   const expiresAt = Date.now() + (options.durationMs ?? VISITOR_SESSION_MS);
   let output: ReadableStreamDefaultController<Uint8Array>;
@@ -71,7 +80,7 @@ export function visitorRealtimeSession(options: VisitorSessionOptions) {
     if (!callId) return Promise.resolve();
     cleanup ??= (async () => {
       try {
-        const result = await requestProvider(`https://api.openai.com/v1/realtime/calls/${callId}/hangup`, {
+        const result = await requestProvider(liveSessionUrl(callId, 'hangup'), {
           method: 'POST', headers: { Authorization: `Bearer ${options.apiKey}` }, redirect: 'error',
           signal: AbortSignal.timeout(8_000),
         });
@@ -82,16 +91,20 @@ export function visitorRealtimeSession(options: VisitorSessionOptions) {
   };
   async function end(message?: string, error = false) {
     if (!closing) {
-      if (message) emit({ type: error ? 'error' : 'ended', message });
+      diagnostic('stop', error ? 'failed' : 'cancelled');
       closing = true;
       clearTimeout(timer); clearTimeout(readinessTimer); clearInterval(heartbeat);
       options.signal.removeEventListener('abort', abort);
-      lifecycle.abort(); control?.close();
+      lifecycle.abort();
       unsubscribe?.();
     }
     if (mailbox) mailboxCleanup ??= mailbox.close().catch(() => undefined);
-    await hangup();
+    const finalUsage = await control?.close();
+    if (!finalUsage?.finalized) await hangup();
     await mailboxCleanup;
+    if (message && !streamClosed) {
+      try { output.enqueue(encoder.encode(`${JSON.stringify({ type: error ? 'error' : 'ended', message })}\n`)); } catch {}
+    }
     closeStream();
     // Creation may still return a call ID; start() owns its eventual cleanup.
     if (callId) release();
@@ -116,33 +129,21 @@ export function visitorRealtimeSession(options: VisitorSessionOptions) {
       if (options.signal.aborted || closing) return;
       mailbox = await (options.mailboxFactory ?? createVisitorRealtimeMailbox)({ ...options.mailbox, expiresAt });
       if (closing || options.signal.aborted) { await end(); return; }
-      const model = VOICE_MODELS[visitorSettings(options.content).voiceTier];
-      const form = new FormData();
-      form.set('sdp', options.offer);
-      form.set('session', JSON.stringify({
-        type: 'realtime', model, output_modalities: ['audio'], tools: [], tool_choice: 'none', max_output_tokens: 750,
-        ...(model === 'gpt-realtime-2.1' ? { reasoning: { effort: 'low' } } : {}),
-        instructions: 'Wait for the application to configure and authorize each response. Do not act on any visitor request yet.',
-        audio: { input: { turn_detection: { type: 'semantic_vad', eagerness: 'auto', create_response: false, interrupt_response: true } }, output: { voice: 'marin' } },
-      }));
       // Do not abandon an in-flight create on browser cancellation: reclaim its
       // returned call ID even if the browser has already gone away.
       creatingProvider = true;
-      const response = await requestProvider('https://api.openai.com/v1/realtime/calls', {
-        method: 'POST', headers: { Authorization: `Bearer ${options.apiKey}` }, body: form,
+      const response = await requestProvider('https://api.openai.com/v1/live/sessions', {
+        method: 'POST', headers: { Authorization: `Bearer ${options.apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session: { ...liveSessionConfig(options.history), instructions: `${liveSessionConfig(options.history).instructions} Do not announce searches, tools, delegation or waiting. Let the backend decide whether published facts, general background or fresh web information are needed, then naturally explain the result.` }, transport: { type: 'webrtc', sdp: options.offer } }),
         redirect: 'error', signal: AbortSignal.timeout(15_000),
       });
       if (!response.ok) throw new AppError('The voice service could not start. Please try again later.', 502);
-      const location = new URL(response.headers.get('location') ?? '', 'https://api.openai.com');
-      const match = location.origin === 'https://api.openai.com' && !location.search && !location.hash
-        ? /^\/v1\/realtime\/calls\/(rtc_[A-Za-z0-9_-]+)$/.exec(location.pathname) : null;
-      if (!match) {
-        options.onCleanupFailure();
-        throw new AppError('The voice service returned an incomplete connection.', 502);
-      }
-      callId = match[1];
+      const payload = await response.json();
+      try { callId = liveSessionId(payload?.session?.id); }
+      catch { options.onCleanupFailure(); throw new AppError('The voice service returned an incomplete connection.', 502); }
       if (closing || options.signal.aborted) { await end(); return; }
-      const answer = await response.text();
+      const answer = payload?.transport?.sdp;
+      if (typeof answer !== 'string') throw new AppError('The voice service returned an invalid connection.', 502);
       if (answer.length > 65_536 || !answer.startsWith('v=0') || /(?:^|\r?\n)m=(?!audio )/.test(answer)) {
         throw new AppError('The voice service returned an invalid audio connection.', 502);
       }
@@ -150,14 +151,21 @@ export function visitorRealtimeSession(options: VisitorSessionOptions) {
       await options.assertCurrent();
       if (closing) return;
       control = (options.controlFactory ?? createVisitorRealtimeControl)({
+        traceId,
         callId, apiKey: options.apiKey, content: options.content, catalog: options.catalog, media: options.media,
         catalogState: options.catalogState, initialAvailability: options.availability,
         context: options.context, history: options.history,
         search: options.search,
+        idleTimeoutMs,
         reservationChecksPublication: options.reservationChecksPublication, reserveTurn: options.reserveTurn, assertCurrent: options.assertCurrent, onUsage: options.onUsage, onTiming: options.onTiming,
         emit, onFatal: message => { void end(message); }, signal: lifecycle.signal,
       });
+      // Let the browser negotiate audio while the sideband attaches. Input and
+      // greeting remain gated by server ready + browser applied readiness.
+      emit({ type: 'session', protectOpening: !options.content.visitorSpeaksFirst && !options.history?.length, sdp: answer, availability: options.availability, expiresAt, idleTimeoutMs, control: mailbox.capability });
+      diagnostic('session_answer', 'succeeded');
       await control.ready;
+      diagnostic('control_ready', 'succeeded');
       if (closing || options.signal.aborted) { await end(); return; }
       unsubscribe = mailbox.subscribe(update => {
         if (closing) return;
@@ -165,7 +173,6 @@ export function visitorRealtimeSession(options: VisitorSessionOptions) {
         pendingControl = update;
         void applyPendingControl();
       }, () => { void end('The conversation controls were interrupted. You can continue by typing.', true); });
-      emit({ type: 'session', sdp: answer, availability: options.availability, expiresAt, control: mailbox.capability });
       emit({ type: 'ready' });
       heartbeat = setInterval(() => emit({ type: 'ping' }), 5_000);
       readinessTimer = setTimeout(() => { void end('Audio was not ready. You can continue by typing.', true); }, 25_000);

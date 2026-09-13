@@ -4,12 +4,14 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getFirestore } from 'firebase-admin/firestore';
 import { z } from 'zod';
+import { catalogForPublication, validateAssertionReviews } from './knowledge-assertions';
+import { projectKnowledgeCatalog } from '@thevoice/platform-ui/knowledge';
 import { getFirebaseAdminApp } from './firebase/admin';
 import { getBackendMode } from './firebase/config';
 import type { WorkspaceUser } from './firebase/types';
 import { withDatabase } from './local-store';
 import { AppError } from './errors';
-import { hashValue, validateKnowledgeUpdates, validateKnowledgeUpdateContext, updateAnchorsSchema, type KnowledgeArtifact, type KnowledgeLedger } from './knowledge-model';
+import { hashValue, validateGraphCorrections, validateGraphUpdates, validateKnowledgeUpdates, validateKnowledgeUpdateContext, updateAnchorsSchema, sourceIdentityMatchSchema, type KnowledgeArtifact, type KnowledgeLedger } from './knowledge-model';
 import { validateCatalog, type KnowledgeCatalog } from '@thevoice/platform-ui/contracts';
 import { validateSourceProvenance } from './source-provenance';
 
@@ -31,8 +33,9 @@ const validateSize = (value: unknown) => {
 function validateArtifact(value: unknown): KnowledgeArtifact {
   const parsed = z.object({ schemaVersion: z.literal(1), id: uuid, catalog: z.unknown(),
     origins: z.array(z.object({ key: z.string().min(1).max(255), fileId: uuid, name: z.string().min(1).max(255), hash: z.string().max(128),
-      entityIds: z.array(z.string().min(1).max(80)).max(100), baseline: z.unknown(), provenance: z.unknown().optional(),
-  }).strict()).max(50), notes: z.array(z.string().max(2000)).max(5000), updates: z.unknown().optional(), updateAnchors: z.unknown().optional(), updateContext: z.unknown().optional(),
+      entityIds: z.array(z.string().min(1).max(80)).max(100), entityMap: z.record(z.string().min(1).max(80), z.string().min(1).max(80)).optional(), baseline: z.unknown(), provenance: z.unknown().optional(),
+  }).strict()).max(50), notes: z.array(z.string().max(2000)).max(5000), updates: z.unknown().optional(), updateAnchors: z.unknown().optional(), updateContext: z.unknown().optional(), identityMatches: z.unknown().optional(), graphUpdates: z.unknown().optional(), correctionHistory: z.unknown().optional(),
+    identityRemaps: z.record(z.string().min(1).max(80), z.string().min(1).max(80)).optional(), assertionReviews: z.unknown().optional(),
   }).strict().parse(value);
   const catalog = validateCatalog(parsed.catalog);
   if (catalog.id !== parsed.id) throw new AppError('Knowledge revision identity does not match.');
@@ -41,11 +44,28 @@ function validateArtifact(value: unknown): KnowledgeArtifact {
     const baseline = validateCatalog(rawBaseline);
     if (new Set(origin.entityIds).size !== origin.entityIds.length || origin.entityIds.length !== baseline.entities.length
       || origin.entityIds.some(id => !baseline.entities.some(entity => entity.id === id))) throw new AppError('A source contains invalid item references.');
+    if (origin.entityMap && (Object.keys(origin.entityMap).length > 100 || Object.values(origin.entityMap).some(id => !origin.entityIds.includes(id)))) throw new AppError('A source identity mapping is invalid.');
     return { ...origin, baseline, ...(provenance !== undefined ? { provenance: validateSourceProvenance(provenance, baseline) } : {}) };
   });
   const updateAnchors = updateAnchorsSchema.parse(parsed.updateAnchors ?? []);
   const updateContext = validateKnowledgeUpdateContext(parsed.updateContext ?? { collections: [], relationships: [], capabilities: [] });
-  return { ...parsed, catalog, origins, updateAnchors, updateContext, updates: validateKnowledgeUpdates(parsed.updates ?? [], catalog, updateContext, updateAnchors) };
+  const identityMatches = sourceIdentityMatchSchema.array().max(500).parse(parsed.identityMatches ?? []);
+  if (new Set(identityMatches.map(match => match.id)).size !== identityMatches.length) throw new AppError('Knowledge contains duplicate identity matches.');
+  // Decided suggestions remain historical even if an item is subsequently removed.
+  if (identityMatches.some(match => !match.decision && !catalog.entities.some(entity => entity.id === match.canonicalEntityId))) throw new AppError('Knowledge identity matches reference unavailable entities.');
+  if (parsed.identityRemaps && Object.keys(parsed.identityRemaps).length > 100) throw new AppError('Identity remaps exceed the catalog limit.');
+  for (const id of Object.keys(parsed.identityRemaps ?? {})) {
+    const seen = new Set<string>(); let current = id;
+    while (parsed.identityRemaps && Object.hasOwn(parsed.identityRemaps, current)) {
+      if (seen.has(current)) throw new AppError('Identity remaps contain a cycle.');
+      seen.add(current); current = parsed.identityRemaps[current];
+    }
+  }
+  const correctionHistory = validateGraphCorrections(parsed.correctionHistory ?? []);
+  if (correctionHistory.some(entry => entry.anchorIds?.some(id => !updateAnchors.some(anchor => anchor.id === id)))) throw new AppError('Correction history references an unavailable source excerpt.');
+  return { ...parsed, catalog, origins, updateAnchors, updateContext, identityMatches, updates: validateKnowledgeUpdates(parsed.updates ?? [], catalog, updateContext, updateAnchors),
+    graphUpdates: validateGraphUpdates(parsed.graphUpdates ?? [], catalog, updateAnchors), correctionHistory,
+    assertionReviews: parsed.assertionReviews !== undefined ? validateAssertionReviews(parsed.assertionReviews, catalog) : undefined };
 }
 async function readOptional(path: string): Promise<unknown | undefined> {
   try { return JSON.parse(await readFile(path, 'utf8')); }
@@ -59,7 +79,7 @@ async function atomicWrite(path: string, value: unknown) {
 function ledger(value: unknown): KnowledgeLedger {
   if (value === undefined) return emptyLedger();
   const result = z.object({ schemaVersion: z.literal(1), jobs: z.array(z.object({
-    id: uuid, fileId: uuid.optional(), operation: z.enum(['source', 'review']).optional(), sourceName: z.string(), sourceHash: z.string(), baseDraftHash: z.string(), baseRevision: z.number().int().positive(),
+    id: uuid, fileId: uuid.optional(), sourceUrl: z.string().url().max(2048).optional(), operation: z.enum(['source', 'review']).optional(), sourceName: z.string(), sourceHash: z.string(), baseDraftHash: z.string(), baseRevision: z.number().int().positive(),
     status: z.enum(['running', 'needs_review', 'applied', 'discarded', 'failed', 'interrupted']), stage: z.enum(['extracting', 'interpreting', 'review']),
     claim: uuid, startedAt: z.number(), updatedAt: z.number(), message: z.string(), candidateRevisionId: uuid.optional(), appliedRevisionId: uuid.optional(), paidAttempt: z.boolean().optional(),
   }).strict()).max(50) }).strict().safeParse(value);
@@ -147,8 +167,7 @@ export async function readKnowledgeArtifact(user: WorkspaceUser, siteId: string,
 
 /** Stage a separate, source-free immutable public projection. Serving still requires publication. */
 export async function stagePublicKnowledge(user: WorkspaceUser, siteId: string, id: string) {
-  const { catalog } = await readKnowledgeArtifact(user, siteId, id);
-  const publicCatalog = validateCatalog(JSON.parse(JSON.stringify(catalog)));
+  const publicCatalog = catalogForPublication(await readKnowledgeArtifact(user, siteId, id));
   const key = artifactKey(siteId, id); const text = validateSize(publicCatalog);
   if (user.mode === 'firebase') {
     const ref = getFirestore(getFirebaseAdminApp()).collection('voiceKnowledgePublic').doc(key);
@@ -169,7 +188,9 @@ export async function stagePublicKnowledge(user: WorkspaceUser, siteId: string, 
   return id;
 }
 
-export async function getPublishedKnowledge(siteId: string, revisionId?: string): Promise<KnowledgeCatalog | null> {
+/** Full approved assertions, authorized against the current publication. Time
+ * projection must happen AFTER a retrieval request supplies its as-of date. */
+export async function getPublishedKnowledgeSnapshot(siteId: string, revisionId?: string): Promise<KnowledgeCatalog | null> {
   if (!revisionId) return null;
   const key = artifactKey(siteId, revisionId);
   if (getBackendMode() === 'firebase') {
@@ -187,6 +208,11 @@ export async function getPublishedKnowledge(siteId: string, revisionId?: string)
   const catalog = await readOptional(join(root(), 'knowledge-public', `${key}.json`));
   if (!catalog) throw new AppError('Published knowledge is unavailable.', 503);
   return validateCatalog(catalog);
+}
+
+export async function getPublishedKnowledge(siteId: string, revisionId?: string): Promise<KnowledgeCatalog | null> {
+  const catalog = await getPublishedKnowledgeSnapshot(siteId, revisionId);
+  return catalog ? projectKnowledgeCatalog(catalog) : null;
 }
 
 export const getPublicKnowledge = getPublishedKnowledge;

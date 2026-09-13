@@ -72,7 +72,8 @@ test('free-form prose stays unlinked, with bounded direct excerpts instead of in
   assert.ok(text.includes(provenance.anchors[0].excerpt));
   const long = unlinkedSourceProvenance({ format: 'text', text: 'Publisher prose. '.repeat(200) });
   assert.equal(long.anchors[0].excerpt.length, MAX_SOURCE_EXCERPT);
-  assert.equal(long.anchors[0].truncated, true);
+  assert.ok(long.anchors.every(anchor => !anchor.truncated));
+  assert.equal(long.anchors.map(anchor => anchor.excerpt).join(''), 'Publisher prose. '.repeat(200));
 });
 
 test('shortened record excerpts never claim to show the supporting text for hidden fields', () => {

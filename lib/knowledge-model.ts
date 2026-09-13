@@ -1,37 +1,78 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { CatalogEntity, KnowledgeCatalog } from '@thevoice/platform-ui/contracts';
-import { catalogEntitySchema, catalogCollectionSchema, catalogRelationshipSchema, capabilityDefinitionSchema, isCatalogValue, validateCatalog } from '@thevoice/platform-ui/contracts';
+import type { CatalogEntity, CatalogFact, CatalogRelationship, KnowledgeCatalog } from '@thevoice/platform-ui/contracts';
+import { catalogEntitySchema, catalogCollectionSchema, catalogFactSchema, catalogRelationshipSchema, capabilityDefinitionSchema, isCatalogValue, validateCatalog } from '@thevoice/platform-ui/contracts';
 import { AppError } from './errors';
-import { sourceAnchorSchema, validateSourceProvenance, type SourceAnchor, type SourceProvenance } from './source-provenance';
+import { sourceAnchorSchema, validateSourceProvenance, type SourceAnchor, type SourceGraphReference, type SourceProvenance } from './source-provenance';
+import { refreshAssertionReviews, remapAssertionReviews, type AssertionReview } from './knowledge-assertions';
 
 export type KnowledgeJob = {
-  id: string; fileId?: string; operation?: 'source' | 'review'; sourceName: string; sourceHash: string; baseDraftHash: string; baseRevision: number;
+  id: string; fileId?: string; sourceUrl?: string; operation?: 'source' | 'review'; sourceName: string; sourceHash: string; baseDraftHash: string; baseRevision: number;
   status: 'running' | 'needs_review' | 'applied' | 'discarded' | 'failed' | 'interrupted';
   stage: 'extracting' | 'interpreting' | 'review'; claim: string; startedAt: number; updatedAt: number;
   message: string; candidateRevisionId?: string; appliedRevisionId?: string; paidAttempt?: boolean;
 };
 export type KnowledgeLedger = { schemaVersion: 1; jobs: KnowledgeJob[] };
-export type SourceOrigin = { key: string; fileId: string; name: string; hash: string; entityIds: string[]; baseline: KnowledgeCatalog; provenance?: SourceProvenance };
+export type SourceOrigin = { key: string; fileId: string; name: string; hash: string; entityIds: string[]; entityMap?: Record<string, string>; baseline: KnowledgeCatalog; provenance?: SourceProvenance };
+export type SourceIdentityMatch = { id: string; sourceKey: string; incomingId: string; canonicalEntityId: string; incomingName: string; canonicalName: string;
+  confidence: number; method: 'identifier-corroborated' | 'exact-name-kind' | 'alias' | 'token-similarity'; status: 'auto' | 'review'; decision?: 'pending' | 'approved' | 'rejected'; reason: string };
+export type GraphValue = CatalogFact | CatalogRelationship;
+export type GraphUpdate = { id: string; targetType: 'fact' | 'relationship'; kind: `${'fact' | 'relationship'}_${'changed' | 'conflict' | 'missing' | 'added'}`;
+  targetId: string; entityName: string; previous: GraphValue | null; current: GraphValue | null; incoming: GraphValue | null; defaultChoice: 'keep' | 'incoming'; choice?: 'keep' | 'incoming';
+  previousSource?: { sourceName: string; anchorId: string }; incomingSource?: { sourceName: string; anchorId: string } };
+export type GraphCorrection = { id: string; targetType: 'fact' | 'relationship'; targetId: string; sourceKey: string; action: 'source-added' | 'source-updated' | 'source-removed' | 'publisher-kept' | 'source-accepted' | 'publisher-corrected';
+  before: GraphValue | null; after: GraphValue | null; sourceName?: string; anchorIds?: string[]; recordedAt: number };
 export type KnowledgeArtifact = { schemaVersion: 1; id: string; catalog: KnowledgeCatalog; origins: SourceOrigin[]; notes: string[]; updates?: SourceUpdate[];
-  updateAnchors?: SourceAnchor[]; updateContext?: SourceUpdateContext };
+  updateAnchors?: SourceAnchor[]; updateContext?: SourceUpdateContext; identityMatches?: SourceIdentityMatch[]; graphUpdates?: GraphUpdate[]; correctionHistory?: GraphCorrection[]; identityRemaps?: Record<string, string>; assertionReviews?: AssertionReview[] };
 export type KnowledgeCandidate = { id: string; catalog: KnowledgeCatalog; notes: string[]; sourceName: string; baseRevision: number;
-  origins?: Pick<SourceOrigin, 'key' | 'name' | 'provenance'>[]; updates?: SourceUpdate[]; updateAnchors?: SourceAnchor[] };
+  origins?: Pick<SourceOrigin, 'key' | 'name' | 'provenance'>[]; updates?: SourceUpdate[]; updateAnchors?: SourceAnchor[]; identityMatches?: SourceIdentityMatch[]; graphUpdates?: GraphUpdate[]; correctionHistory?: GraphCorrection[]; assertionReviews?: AssertionReview[] };
 export const hashValue = (value: unknown) => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 export const sourceKey = (name: string) => name.trim().toLowerCase();
 export const entityKey = (source: string, id: string) => `item-${hashValue([source, id.trim().toLowerCase()]).slice(0, 24)}`;
 
+const identityToken = (value: string) => value.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+const tokenSet = (value: string) => new Set(identityToken(value).split(/\s+/).filter(Boolean));
+function tokenSimilarity(left: string, right: string) {
+  const a = tokenSet(left); const b = tokenSet(right); if (!a.size || !b.size) return 0;
+  const overlap = [...a].filter(token => b.has(token)).length; return overlap / new Set([...a, ...b]).size;
+}
+function identityCandidate(incoming: CatalogEntity, existing: CatalogEntity[], allowAutomatic: boolean): { entity: CatalogEntity; confidence: number; method: SourceIdentityMatch['method']; status: SourceIdentityMatch['status']; reason: string } | undefined {
+  const name = identityToken(incoming.name); const kind = identityToken(incoming.kind);
+  if (!name || !kind) return undefined;
+  const identified = existing.filter(entity => identityToken(entity.kind) === kind && identityToken(entity.name) === name
+    && incoming.identifiers?.some(identifier => ['registration', 'isbn', 'gtin', 'publisher-id'].includes(identifier.scheme)
+      && entity.identifiers?.some(other => identifier.scheme === other.scheme && identifier.value === other.value))
+    && Object.entries(incoming.attributes).some(([field, value]) => value !== null && value !== '' && entity.attributes[field] === value)
+    && !Object.entries(incoming.attributes).some(([field, value]) => value !== null && entity.attributes[field] != null && entity.attributes[field] !== value));
+  if (allowAutomatic && identified.length === 1) return { entity: identified[0], confidence: 1, method: 'identifier-corroborated', status: 'auto', reason: 'A scoped identifier, name, type and supplied attribute agree, with no contradictory shared attributes. This is a deterministic match score, not calibrated certainty.' };
+  const exact = existing.filter(entity => identityToken(entity.name) === name && identityToken(entity.kind) === kind);
+  if (exact.length) return { entity: exact[0], confidence: 1, method: 'exact-name-kind', status: 'review', reason: `Name and type match${exact.length > 1 ? ' multiple records' : ''}, but do not establish identity. Review identifiers and source details before merging.` };
+  const alias = existing.filter(entity => (entity.aliases ?? []).some(value => identityToken(value) === name) && identityToken(entity.kind) === kind);
+  if (alias.length) return { entity: alias[0], confidence: 1, method: 'alias', status: 'review', reason: 'An alternate label and type match. An alias alone does not establish this source record’s identity.' };
+  const fuzzy = existing.map(entity => ({ entity, confidence: tokenSimilarity(incoming.name, entity.name) })).filter(item => item.confidence >= 0.86).sort((a, b) => b.confidence - a.confidence);
+  if (fuzzy.length && (fuzzy.length === 1 || fuzzy[0].confidence > fuzzy[1].confidence + 0.08)) return { entity: fuzzy[0].entity, confidence: fuzzy[0].confidence, method: 'token-similarity', status: 'review', reason: 'A high token similarity was found; publisher review is required before consolidation.' };
+  return undefined;
+}
+
 type KnowledgeField = 'name' | 'kind' | 'summary' | `attributes.${string}`;
 const updateId = z.string().min(1).max(80).regex(/^[A-Za-z0-9_-]+$/);
+export const sourceIdentityMatchSchema = z.object({ id: updateId, sourceKey: z.string().min(1).max(255), incomingId: updateId, canonicalEntityId: updateId,
+  incomingName: z.string().max(160), canonicalName: z.string().max(160), confidence: z.number().finite().min(0).max(1),
+  method: z.enum(['identifier-corroborated', 'exact-name-kind', 'alias', 'token-similarity']), status: z.enum(['auto', 'review']), decision: z.enum(['pending', 'approved', 'rejected']).optional(), reason: z.string().max(500) }).strict();
+export const identityMatchDecisionSchema = z.object({ id: updateId, action: z.enum(['approve', 'reject', 'alias']), alias: z.string().trim().min(1).max(160).optional() }).strict().superRefine((decision, context) => {
+  if (decision.action === 'alias' && !decision.alias) context.addIssue({ code: 'custom', message: 'An alias is required.' });
+  if (decision.action !== 'alias' && decision.alias) context.addIssue({ code: 'custom', message: 'Aliases are only accepted with an alias action.' });
+});
+export type IdentityMatchDecision = z.infer<typeof identityMatchDecisionSchema>;
 const choiceSchema = z.enum(['keep', 'incoming']);
 const sourceReferenceSchema = z.object({ sourceName: z.string().max(500), anchorId: updateId }).strict();
 const updateValueSchema = z.union([z.string().max(1600), z.number().finite(), z.boolean(), z.null()]);
 export const updateAnchorsSchema = z.array(sourceAnchorSchema).max(400);
-export const updateContextSchema = z.object({ collections: z.array(catalogCollectionSchema).max(48), relationships: z.array(catalogRelationshipSchema).max(400), capabilities: z.array(capabilityDefinitionSchema).max(20) }).strict();
+export const updateContextSchema = z.object({ collections: z.array(catalogCollectionSchema).max(48), relationships: z.array(catalogRelationshipSchema).max(400), facts: z.array(catalogFactSchema).max(2000).optional(), capabilities: z.array(capabilityDefinitionSchema).max(20) }).strict();
 export type SourceUpdateContext = z.infer<typeof updateContextSchema>;
 export function validateKnowledgeUpdateContext(input: unknown): SourceUpdateContext {
   const context = updateContextSchema.parse(input);
-  for (const entries of Object.values(context)) if (new Set(entries.map(item => item.id)).size !== entries.length) throw new AppError('Source update references contain duplicate identifiers.');
+  for (const entries of Object.values(context)) if (entries && new Set(entries.map(item => item.id)).size !== entries.length) throw new AppError('Source update references contain duplicate identifiers.');
   return context;
 }
 export const sourceUpdateSchema = z.object({
@@ -50,6 +91,43 @@ export const sourceUpdateSchema = z.object({
 export type SourceUpdate = z.infer<typeof sourceUpdateSchema>;
 export const sourceUpdateDecisionSchema = z.object({ id: updateId, choice: choiceSchema }).strict();
 export type SourceUpdateDecision = z.infer<typeof sourceUpdateDecisionSchema>;
+
+const graphValueSchema = z.union([catalogFactSchema, catalogRelationshipSchema, z.null()]);
+export const graphUpdateSchema = z.object({
+  id: updateId, targetType: z.enum(['fact', 'relationship']), kind: z.enum(['fact_changed', 'fact_conflict', 'fact_missing', 'fact_added', 'relationship_changed', 'relationship_conflict', 'relationship_missing', 'relationship_added']),
+  targetId: updateId, entityName: z.string().max(160), previous: graphValueSchema, current: graphValueSchema, incoming: graphValueSchema,
+  defaultChoice: choiceSchema, choice: choiceSchema.optional(), previousSource: sourceReferenceSchema.optional(), incomingSource: sourceReferenceSchema.optional(),
+}).strict().superRefine((update, context) => {
+  if (update.kind.split('_', 1)[0] !== update.targetType) context.addIssue({ code: 'custom', message: 'Graph update kind does not match its target type.' });
+  for (const value of [update.previous, update.current, update.incoming]) if (value && (update.targetType === 'fact' ? !('field' in value) : !('fromEntityId' in value))) context.addIssue({ code: 'custom', message: 'Graph update contains the wrong assertion type.' });
+  const expected = update.kind.endsWith('_changed') || update.kind.endsWith('_added') ? 'incoming' : 'keep';
+  if (update.defaultChoice !== expected) context.addIssue({ code: 'custom', message: 'Graph update has an invalid default.' });
+});
+export const graphCorrectionSchema = z.object({
+  id: updateId, targetType: z.enum(['fact', 'relationship']), targetId: updateId, sourceKey: z.string().min(1).max(255),
+  action: z.enum(['source-added', 'source-updated', 'source-removed', 'publisher-kept', 'source-accepted', 'publisher-corrected']),
+  before: graphValueSchema, after: graphValueSchema, sourceName: z.string().max(255).optional(), anchorIds: z.array(updateId).max(8).optional(), recordedAt: z.number().int().nonnegative(),
+}).strict();
+export function validateGraphCorrections(input: unknown): GraphCorrection[] {
+  const history = graphCorrectionSchema.array().max(500).parse(input);
+  if (new Set(history.map(item => item.id)).size !== history.length) throw new AppError('Knowledge correction history contains duplicate identifiers.');
+  return history;
+}
+export function validateGraphUpdates(input: unknown, _catalog?: KnowledgeCatalog, anchors?: SourceAnchor[]): GraphUpdate[] {
+  const updates = graphUpdateSchema.array().max(2000).parse(input);
+  if (new Set(updates.map(update => update.id)).size !== updates.length) throw new AppError('Graph source updates contain duplicate identifiers.');
+  const knownAnchors = anchors ? new Set(anchors.map(anchor => anchor.id)) : undefined;
+  for (const update of updates) {
+    for (const reference of [update.previousSource, update.incomingSource]) if (reference && knownAnchors && !knownAnchors.has(reference.anchorId)) throw new AppError('A graph source update references an unavailable excerpt.');
+    const values = [update.previous, update.current, update.incoming].filter((value): value is Exclude<GraphValue, null> => value !== null);
+    for (const value of values) {
+      if (update.targetType === 'fact') catalogFactSchema.parse(value); else catalogRelationshipSchema.parse(value);
+      // Saved alternatives can refer to a removed entity. Validate their shape,
+      // then validate references only when an alternative becomes current state.
+    }
+  }
+  return updates;
+}
 
 export function validateKnowledgeUpdates(input: unknown, catalog?: KnowledgeCatalog, context?: SourceUpdateContext, anchors?: SourceAnchor[]): SourceUpdate[] {
   const updates = sourceUpdateSchema.array().max(2700).parse(input);
@@ -79,7 +157,7 @@ export function validateKnowledgeUpdates(input: unknown, catalog?: KnowledgeCata
       if (update.current !== (update.currentEntity?.name ?? null) || update.incoming !== (update.incomingEntity?.name ?? null)) throw new AppError('An item update label does not match its saved value.');
       for (const entity of [update.currentEntity, update.incomingEntity]) if (entity) {
         if (entity.id !== update.entityId) throw new AppError('A source update cannot change item identity.');
-        if (catalog) validateCatalog({ ...catalog, entities: [entity], collections: [], relationships: [], capabilities: [] });
+        if (catalog) validateCatalog({ ...catalog, entities: [entity], collections: [], relationships: [], facts: [], capabilities: [] });
       }
     }
   }
@@ -91,7 +169,8 @@ function sameEntity(left: CatalogEntity | null | undefined, right: CatalogEntity
   if (!left || !right) return !left && !right;
   return ['id', 'name', 'kind', 'summary'].every(field => left[field as keyof Omit<CatalogEntity, 'attributes'>] === right[field as keyof Omit<CatalogEntity, 'attributes'>])
     && Object.keys(left.attributes).length === Object.keys(right.attributes).length
-    && Object.entries(left.attributes).every(([key, value]) => Object.hasOwn(right.attributes, key) && right.attributes[key] === value);
+    && Object.entries(left.attributes).every(([key, value]) => Object.hasOwn(right.attributes, key) && right.attributes[key] === value)
+    && JSON.stringify(left.aliases ?? []) === JSON.stringify(right.aliases ?? []) && JSON.stringify(left.identifiers ?? []) === JSON.stringify(right.identifiers ?? []);
 }
 function sourceReference(origin: SourceOrigin | undefined, entityId: string, field: string | undefined, anchors: Map<string, SourceAnchor>): { sourceName: string; anchorId: string } | undefined {
   const reference = origin?.provenance?.fields.find(item => item.entityId === entityId && item.field === (field ?? 'name'));
@@ -100,6 +179,32 @@ function sourceReference(origin: SourceOrigin | undefined, entityId: string, fie
   const anchorId = `anchor-${hashValue([origin!.key, origin!.hash, anchor.id]).slice(0, 32)}`;
   anchors.set(anchorId, { ...structuredClone(anchor), id: anchorId });
   return { sourceName: origin!.name, anchorId };
+}
+
+function graphSourceReference(origin: SourceOrigin | undefined, targetType: 'fact' | 'relationship', targetId: string, anchors: Map<string, SourceAnchor>): { sourceName: string; anchorId: string } | undefined {
+  const references: SourceGraphReference[] = targetType === 'fact' ? origin?.provenance?.facts ?? [] : origin?.provenance?.relationships ?? [];
+  const reference = references.find(item => item.targetId === targetId);
+  const anchor = origin?.provenance?.anchors.find(item => reference?.anchorIds.includes(item.id));
+  if (!anchor) return undefined;
+  const anchorId = `anchor-${hashValue([origin!.key, origin!.hash, anchor.id]).slice(0, 32)}`;
+  anchors.set(anchorId, { ...structuredClone(anchor), id: anchorId });
+  return { sourceName: origin!.name, anchorId };
+}
+
+function graphEqual(left: GraphValue | null | undefined, right: GraphValue | null | undefined) {
+  const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => [key, canonical(child)])) : value;
+  return JSON.stringify(canonical(left ?? null)) === JSON.stringify(canonical(right ?? null));
+}
+
+function temporalOverlap(left: { validFrom?: string; validTo?: string }, right: { validFrom?: string; validTo?: string }) {
+  const leftFrom = left.validFrom ?? ''; const rightFrom = right.validFrom ?? '';
+  const leftTo = left.validTo ?? '\uffff'; const rightTo = right.validTo ?? '\uffff';
+  return leftFrom <= rightTo && rightFrom <= leftTo;
+}
+
+function graphHistoryEntry(key: string, sourceName: string, targetType: 'fact' | 'relationship', targetId: string, action: GraphCorrection['action'], before: GraphValue | null, after: GraphValue | null, references: { previousSource?: { anchorId: string }; incomingSource?: { anchorId: string } } = {}): GraphCorrection {
+  return { id: `correction-${randomUUID()}`, targetType, targetId, sourceKey: key, action,
+    before: before ? structuredClone(before) : null, after: after ? structuredClone(after) : null, sourceName, anchorIds: [...new Set([references.previousSource?.anchorId, references.incomingSource?.anchorId].filter((id): id is string => !!id))], recordedAt: Date.now() };
 }
 
 export function claimKnowledgeJob(ledger: KnowledgeLedger, input: Omit<KnowledgeJob, 'status' | 'stage' | 'claim' | 'startedAt' | 'updatedAt' | 'message'>, now = Date.now()) {
@@ -134,26 +239,59 @@ export function resolveSourceOrigin(current: KnowledgeArtifact | null, source: {
 }
 
 /** Three-way source merge: unchanged imported fields update; publisher overrides survive. */
-export function mergeKnowledge(current: KnowledgeArtifact | null, incoming: KnowledgeCatalog, source: { fileId: string; name: string; hash: string; provenance?: SourceProvenance; replacesSourceKey?: string }): KnowledgeArtifact {
+export function mergeKnowledge(current: KnowledgeArtifact | null, incoming: KnowledgeCatalog, source: { fileId: string; name: string; hash: string; provenance?: SourceProvenance; replacesSourceKey?: string; modelInterpreted?: boolean }): KnowledgeArtifact {
   const previous = resolveSourceOrigin(current, source);
   // Keep the original namespace when a publisher explicitly replaces a renamed file.
   const key = previous?.key ?? sourceKey(source.name);
   const notes: string[] = [];
   const updates: SourceUpdate[] = [];
-  const anchors = new Map<string, SourceAnchor>();
+  const retainedAnchorIds = new Set(current?.correctionHistory?.flatMap(entry => entry.anchorIds ?? []) ?? []);
+  const anchors = new Map<string, SourceAnchor>((current?.updateAnchors ?? []).filter(anchor => retainedAnchorIds.has(anchor.id)).map(anchor => [anchor.id, anchor]));
   const imported = validateCatalog(incoming);
-  const map = new Map(imported.entities.map(entity => [entity.id, entityKey(key, entity.id)]));
+  const identityMatches: SourceIdentityMatch[] = [];
+  const existingEntities = current?.catalog.entities ?? [];
+  const map = new Map<string, string>();
+  const matchedCanonicalIds = new Set<string>();
+  for (const entity of imported.entities) {
+    const generated = entityKey(key, entity.id);
+    // A source replacement keeps its deterministic source namespace whenever
+    // possible. If an earlier cross-source match consolidated that namespace,
+    // recover the saved canonical ID, never guess it from a renamed label.
+    const retained = previous?.entityMap && Object.hasOwn(previous.entityMap, entity.id) ? previous.entityMap[entity.id] : previous?.baseline.entities.some(item => item.id === generated) ? generated : undefined;
+    if (retained) { map.set(entity.id, retained); continue; }
+    if (existingEntities.some(item => item.id === generated)) { map.set(entity.id, generated); continue; }
+    // A model-supplied identifier is itself a claim awaiting review.
+    const match = identityCandidate(entity, existingEntities, !source.modelInterpreted);
+    if (match) {
+      const matchRecord: SourceIdentityMatch = { id: `identity-${hashValue([key, entity.id, match.entity.id]).slice(0, 32)}`, sourceKey: key,
+        incomingId: entity.id, canonicalEntityId: match.entity.id, incomingName: entity.name, canonicalName: match.entity.name,
+        confidence: Number(match.confidence.toFixed(4)), method: match.method, status: match.status, reason: match.reason };
+      const prior = current?.identityMatches?.find(item => item.id === matchRecord.id);
+      if (prior?.decision === 'rejected') { map.set(entity.id, generated); continue; }
+      if (!(match.status === 'auto' && matchedCanonicalIds.has(match.entity.id))) {
+        identityMatches.push(matchRecord);
+        if (match.status === 'auto') { matchedCanonicalIds.add(match.entity.id); map.set(entity.id, match.entity.id); continue; }
+      }
+    }
+    map.set(entity.id, generated);
+  }
   const entities = imported.entities.map(entity => ({ ...entity, id: map.get(entity.id)! }));
+  const relationIds = new Map(imported.relationships.map(relation => [relation.id, `relation-${hashValue([key, relation.id]).slice(0, 24)}`]));
+  const factIds = new Map((imported.facts ?? []).map(fact => [fact.id, `fact-${hashValue([key, fact.id]).slice(0, 24)}`]));
   const sourceCatalog = validateCatalog({ ...imported, id: randomUUID(), entities,
     collections: imported.collections.map(collection => ({ ...collection, id: `group-${hashValue([key, collection.id]).slice(0, 24)}`, entityIds: collection.entityIds.map(id => map.get(id)!) })),
-    relationships: imported.relationships.map(relation => ({ ...relation, id: `relation-${hashValue([key, relation.id]).slice(0, 24)}`, fromEntityId: map.get(relation.fromEntityId)!, toEntityId: map.get(relation.toEntityId)! })),
+    relationships: imported.relationships.map(relation => ({ ...relation, id: relationIds.get(relation.id)!, fromEntityId: map.get(relation.fromEntityId)!, toEntityId: map.get(relation.toEntityId)! })),
+    facts: imported.facts?.map(fact => ({ ...fact, id: factIds.get(fact.id)!, entityId: map.get(fact.entityId)! })),
     jobs: imported.jobs.map(job => ({ ...job, id: `job-${hashValue([key, job.id]).slice(0, 24)}` })),
     capabilities: [],
   });
   const provenance = source.provenance ? validateSourceProvenance(source.provenance, imported) : undefined;
   const nextOrigin: SourceOrigin = { key, fileId: source.fileId, name: source.name, hash: source.hash,
-    entityIds: sourceCatalog.entities.map(entity => entity.id), baseline: sourceCatalog,
-    ...(provenance ? { provenance: { ...provenance, fields: provenance.fields.map(field => ({ ...field, entityId: map.get(field.entityId)! })) } } : {}),
+    entityIds: sourceCatalog.entities.map(entity => entity.id), entityMap: Object.fromEntries(map), baseline: sourceCatalog,
+    ...(provenance ? { provenance: { ...provenance, fields: provenance.fields.map(field => ({ ...field, entityId: map.get(field.entityId)! })),
+      ...(provenance.facts ? { facts: provenance.facts.map(reference => ({ ...reference, targetId: factIds.get(reference.targetId)! })) } : {}),
+      ...(provenance.relationships ? { relationships: provenance.relationships.map(reference => ({ ...reference, targetId: relationIds.get(reference.targetId)! })) } : {}),
+    } } : {}),
   };
   const addUpdate = (kind: SourceUpdate['kind'], entity: CatalogEntity, baseline: CatalogEntity | undefined, existing: CatalogEntity | undefined, incomingEntity: CatalogEntity | undefined, field?: KnowledgeField) => {
     const before = field && baseline ? fieldValue(baseline, field) : baseline?.name;
@@ -168,7 +306,7 @@ export function mergeKnowledge(current: KnowledgeArtifact | null, incoming: Know
       ...(priorReference ? { previousSource: priorReference } : {}), ...(nextReference ? { incomingSource: nextReference } : {}),
     });
   };
-  const result = current ? structuredClone(current.catalog) : { ...sourceCatalog, entities: [], collections: [], relationships: [] };
+  const result = current ? structuredClone(current.catalog) : { ...sourceCatalog, entities: [], collections: [], relationships: [], facts: [] };
   const definitions = new Map(result.attributes.map(attribute => [attribute.id, attribute]));
   for (const attribute of sourceCatalog.attributes) {
     const existing = definitions.get(attribute.id);
@@ -188,7 +326,21 @@ export function mergeKnowledge(current: KnowledgeArtifact | null, incoming: Know
       } else { if (current) addUpdate('added', entity, undefined, undefined, entity); result.entities.push(entity); }
       continue;
     }
-    if (!baseline) { notes.push(`Review the matching item “${entity.name}”; the existing record was retained.`); continue; }
+    if (!baseline) {
+      const identityMatch = identityMatches.find(match => match.status === 'auto' && match.canonicalEntityId === entity.id);
+      if (identityMatch) {
+        for (const [field, value] of Object.entries(entity.attributes)) {
+          if (!Object.hasOwn(existing.attributes, field) || existing.attributes[field] === null) existing.attributes[field] = value;
+          else if (value !== null && existing.attributes[field] !== value) notes.push(`The consolidated item “${existing.name}” has a conflicting ${field} value; the existing approved value was retained.`);
+        }
+        if (entity.summary && !existing.summary) existing.summary = entity.summary;
+        existing.aliases = [...new Set([...(existing.aliases ?? []), ...(entity.aliases ?? [])])];
+        if (existing.aliases.length > 12) throw new AppError('Consolidation exceeds 12 aliases. Review the source labels; none were truncated.');
+        notes.push(`Automatically consolidated “${entity.name}” with “${existing.name}” using a scoped identifier and corroborating fields.`);
+        continue;
+      }
+      notes.push(`Review the matching item “${entity.name}”; the existing record was retained.`); continue;
+    }
     for (const field of ['name', 'summary', 'kind'] as const) {
       if (entity[field] !== baseline[field] && entity[field] !== existing[field]) addUpdate(existing[field] === baseline[field] ? 'changed' : 'conflict', entity, baseline, existing, entity, field);
       if (existing[field] === baseline[field]) existing[field] = entity[field];
@@ -222,21 +374,68 @@ export function mergeKnowledge(current: KnowledgeArtifact | null, incoming: Know
     else if (!baseline || JSON.stringify(result.collections[index]) === JSON.stringify(baseline)) result.collections[index] = collection;
     else notes.push(`Kept your collection correction for “${result.collections[index].name}”.`);
   }
-  result.relationships = result.relationships.filter(relation => {
-    const baseline = previous?.baseline.relationships.find(item => item.id === relation.id);
-    if (!baseline || sourceCatalog.relationships.some(item => item.id === relation.id)) return true;
-    const keep = JSON.stringify(relation) !== JSON.stringify(baseline);
-    notes.push(keep ? `Kept your edited relationship “${relation.label}”, which is absent from the new source.` : `Removed the unchanged source relationship “${relation.label}”, which is absent from the new source.`);
-    return keep;
-  });
-  for (const relation of sourceCatalog.relationships) {
-    if (!entityIds.has(relation.fromEntityId) || !entityIds.has(relation.toEntityId)) continue;
-    const index = result.relationships.findIndex(item => item.id === relation.id);
-    const baseline = previous?.baseline.relationships.find(item => item.id === relation.id);
-    if (index < 0) { if (!baseline) result.relationships.push(relation); }
-    else if (!baseline || JSON.stringify(result.relationships[index]) === JSON.stringify(baseline)) result.relationships[index] = relation;
-    else notes.push(`Kept your relationship correction for “${result.relationships[index].label}”.`);
-  }
+  const graphUpdates: GraphUpdate[] = [];
+  const correctionHistory = [...(current?.correctionHistory ?? [])];
+  const addGraphUpdate = (targetType: GraphUpdate['targetType'], kind: GraphUpdate['kind'], targetId: string, entityName: string, previousValue: GraphValue | null, currentValue: GraphValue | null, incomingValue: GraphValue | null, previousSource?: { sourceName: string; anchorId: string }, incomingSource?: { sourceName: string; anchorId: string }) => {
+    graphUpdates.push({ id: `graph-update-${hashValue([key, source.hash, targetType, targetId, kind]).slice(0, 32)}`, targetType, kind, targetId, entityName,
+      previous: previousValue ? structuredClone(previousValue) : null, current: currentValue ? structuredClone(currentValue) : null, incoming: incomingValue ? structuredClone(incomingValue) : null,
+      defaultChoice: kind.endsWith('_changed') || kind.endsWith('_added') ? 'incoming' : 'keep', ...(previousSource ? { previousSource } : {}), ...(incomingSource ? { incomingSource } : {}) });
+  };
+  const relationshipLabel = (relation: CatalogRelationship) => result.entities.find(entity => entity.id === relation.fromEntityId)?.name ?? relation.fromEntityId;
+  const relationshipKey = (relation: CatalogRelationship) => `${relation.fromEntityId}|${relation.toEntityId}|${relation.kind ?? relation.label}`;
+  const factKey = (fact: CatalogFact) => `${fact.entityId}|${fact.field}`;
+  const mergeGraphCollection = <T extends GraphValue>(targetType: 'fact' | 'relationship', incomingValues: T[], baselineValues: T[], currentValues: T[], keyFor: (value: T) => string, allowed: (value: T) => boolean) => {
+    const target = targetType === 'fact' ? (result.facts ??= []) : result.relationships;
+    const incomingIds = new Set(incomingValues.map(value => value.id));
+    const baselineById = new Map(baselineValues.map(value => [value.id, value]));
+    const sourceNameFor = (value: T) => targetType === 'fact' ? (value as CatalogFact).entityId : relationshipLabel(value as CatalogRelationship);
+    for (const old of baselineValues) if (!incomingIds.has(old.id)) {
+      const index = target.findIndex(value => value.id === old.id); if (index < 0) continue;
+      const currentValue = target[index] as T;
+      const previousSource = graphSourceReference(previous, targetType, old.id, anchors);
+      addGraphUpdate(targetType, `${targetType}_missing`, old.id, sourceNameFor(old), old, currentValue, null, previousSource);
+      notes.push(`The ${targetType} “${sourceNameFor(old)}” is absent from the replacement. Review whether to retain it.`);
+    }
+    for (const incoming of incomingValues) {
+      if (!allowed(incoming)) continue;
+      const index = target.findIndex(value => value.id === incoming.id); const baseline = baselineById.get(incoming.id); const currentValue = index >= 0 ? target[index] as T : undefined;
+      const previousSource = baseline ? graphSourceReference(previous, targetType, baseline.id, anchors) : undefined;
+      const incomingSource = graphSourceReference(nextOrigin, targetType, incoming.id, anchors);
+      if (index < 0) {
+        // A source replacement cannot silently resurrect a publisher deletion.
+        if (baseline) {
+          if (!graphEqual(baseline, incoming)) addGraphUpdate(targetType, `${targetType}_conflict`, incoming.id, sourceNameFor(incoming), baseline, null, incoming, previousSource, incomingSource);
+          continue;
+        }
+        // Different sources can assert the same fact/edge under different IDs.
+        // Overlapping temporal assertions with different values become an explicit review item.
+        const collision = currentValues.find(value => keyFor(value) === keyFor(incoming) && temporalOverlap(value, incoming) && !graphEqual({ ...value, id: incoming.id }, incoming));
+        if (collision) {
+          addGraphUpdate(targetType, `${targetType}_conflict`, collision.id, sourceNameFor(incoming), collision, collision, incoming, undefined, incomingSource);
+          continue;
+        }
+        if (targetType === 'fact') (result.facts ??= []).push(structuredClone(incoming as CatalogFact));
+        else result.relationships.push(structuredClone(incoming as CatalogRelationship));
+      } else if (!baseline) {
+        if (!graphEqual(currentValue, incoming)) {
+          addGraphUpdate(targetType, `${targetType}_conflict`, incoming.id, sourceNameFor(incoming), null, currentValue ?? null, incoming, undefined, incomingSource);
+        }
+      } else if (graphEqual(incoming, baseline)) {
+        // No source change. Keep a publisher correction or the current assertion.
+      } else if (graphEqual(currentValue, baseline)) {
+        addGraphUpdate(targetType, `${targetType}_changed`, incoming.id, sourceNameFor(incoming), baseline, currentValue ?? null, incoming, previousSource, incomingSource);
+        if (targetType === 'fact') (result.facts ??= [])[index] = structuredClone(incoming as CatalogFact);
+        else result.relationships[index] = structuredClone(incoming as CatalogRelationship);
+        correctionHistory.push(graphHistoryEntry(key, source.name, targetType, incoming.id, 'source-updated', baseline, incoming, { previousSource, incomingSource }));
+      } else if (!graphEqual(currentValue, incoming)) {
+        addGraphUpdate(targetType, `${targetType}_conflict`, incoming.id, sourceNameFor(incoming), baseline, currentValue ?? null, incoming, previousSource, incomingSource);
+      }
+    }
+    if (targetType === 'fact') result.facts = target as CatalogFact[]; else result.relationships = target as CatalogRelationship[];
+  };
+  mergeGraphCollection('relationship', sourceCatalog.relationships, previous?.baseline.relationships ?? [], structuredClone(current?.catalog.relationships ?? []),
+    relation => relationshipKey(relation as CatalogRelationship), relation => entityIds.has((relation as CatalogRelationship).fromEntityId) && entityIds.has((relation as CatalogRelationship).toEntityId));
+  mergeGraphCollection('fact', sourceCatalog.facts ?? [], previous?.baseline.facts ?? [], structuredClone(current?.catalog.facts ?? []), fact => factKey(fact as CatalogFact), fact => entityIds.has((fact as CatalogFact).entityId));
   result.jobs = result.jobs.filter(job => {
     const baseline = previous?.baseline.jobs.find(item => item.id === job.id);
     return !baseline || sourceCatalog.jobs.some(item => item.id === job.id) || JSON.stringify(job) !== JSON.stringify(baseline);
@@ -272,12 +471,116 @@ export function mergeKnowledge(current: KnowledgeArtifact | null, incoming: Know
     for (const capability of savedCapabilities) capabilities.set(capability.id, structuredClone(capability));
     update.restoration = { index: index < 0 ? catalog.entities.length : index, collectionIds: savedCollections.map(item => item.id), relationshipIds: savedRelationships.map(item => item.id), capabilityIds: savedCapabilities.map(item => item.id) };
   }
-  const updateContext = validateKnowledgeUpdateContext({ collections: [...collections.values()], relationships: [...relationships.values()], capabilities: [...capabilities.values()] });
+  const updateContext = validateKnowledgeUpdateContext({ collections: [...collections.values()], relationships: [...relationships.values()], facts: [...new Map([...(catalog.facts ?? []), ...(sourceCatalog.facts ?? [])].map(fact => [fact.id, fact])).values()], capabilities: [...capabilities.values()] });
   const updateAnchors = updateAnchorsSchema.parse([...anchors.values()]);
-  return { schemaVersion: 1, id: catalog.id, catalog, notes, updates: validateKnowledgeUpdates(updates, catalog, updateContext, updateAnchors), updateContext, updateAnchors, origins: [
+  const previousIdentityMatches = current?.identityMatches ?? [];
+  const allIdentityMatches = [...previousIdentityMatches.filter(match => !identityMatches.some(next => next.id === match.id)), ...identityMatches]
+    .filter(match => catalog.entities.some(entity => entity.id === match.canonicalEntityId));
+  const identityRemaps = { ...(current?.identityRemaps ?? {}), ...Object.fromEntries([...map].filter(([raw, canonical]) => entityKey(key, raw) !== canonical).map(([raw, canonical]) => [entityKey(key, raw), canonical])) };
+  return { schemaVersion: 1, id: catalog.id, catalog, notes, identityRemaps, updates: validateKnowledgeUpdates(updates, catalog, updateContext, updateAnchors), updateContext, updateAnchors,
+    ...(allIdentityMatches.length ? { identityMatches: allIdentityMatches } : {}), ...(graphUpdates.length ? { graphUpdates: validateGraphUpdates(graphUpdates, catalog, updateAnchors) } : {}),
+    ...(correctionHistory.length ? { correctionHistory: validateGraphCorrections(correctionHistory) } : {}), origins: [
     ...(current?.origins.filter(origin => origin.key !== key) ?? []),
     nextOrigin,
   ] };
+}
+
+function remapEntityInOrigin(origin: SourceOrigin, fromId: string, toId: string): SourceOrigin {
+  const remap = (value: KnowledgeCatalog): KnowledgeCatalog => validateCatalog({ ...value, entities: [...new Map(value.entities.map(entity => [entity.id === fromId ? toId : entity.id, { ...entity, id: entity.id === fromId ? toId : entity.id }])).values()],
+    collections: value.collections.map(collection => ({ ...collection, entityIds: [...new Set(collection.entityIds.map(id => id === fromId ? toId : id))] })),
+    relationships: value.relationships.map(relation => ({ ...relation, fromEntityId: relation.fromEntityId === fromId ? toId : relation.fromEntityId, toEntityId: relation.toEntityId === fromId ? toId : relation.toEntityId })).filter(relation => relation.fromEntityId !== relation.toEntityId),
+    facts: value.facts?.map(fact => ({ ...fact, entityId: fact.entityId === fromId ? toId : fact.entityId })), capabilities: value.capabilities?.map(capability => ({ ...capability, entityIds: [...new Set(capability.entityIds.map(id => id === fromId ? toId : id))] })), });
+  const baseline = remap(origin.baseline);
+  const fields = new Map<string, SourceProvenance['fields'][number]>();
+  for (const field of origin.provenance?.fields ?? []) {
+    const entityId = field.entityId === fromId ? toId : field.entityId;
+    const key = `${entityId}/${field.field}`;
+    const retained = fields.get(key);
+    fields.set(key, { ...field, entityId, anchorIds: [...new Set([...(retained?.anchorIds ?? []), ...field.anchorIds])] });
+  }
+  const provenance = origin.provenance ? validateSourceProvenance({ ...origin.provenance, fields: [...fields.values()], relationships: origin.provenance.relationships?.filter(reference => baseline.relationships.some(relation => relation.id === reference.targetId)) }, baseline) : undefined;
+  return { ...origin, entityIds: [...new Set(origin.entityIds.map(id => id === fromId ? toId : id))], entityMap: Object.fromEntries(Object.entries(origin.entityMap ?? {}).map(([raw, id]) => [raw, id === fromId ? toId : id])), baseline, ...(provenance ? { provenance } : {}) };
+}
+
+export function remappedEntityId(id: string, remaps: Record<string, string> = {}): string {
+  const seen = new Set<string>();
+  while (Object.hasOwn(remaps, id)) {
+    if (seen.has(id) || seen.size >= 100) throw new AppError('Identity remaps contain a cycle or exceed the supported bound.');
+    seen.add(id); id = remaps[id];
+  }
+  return id;
+}
+
+function remapGraphValue(value: GraphValue | null, fromId: string, toId: string): GraphValue | null {
+  if (!value) return null;
+  if ('entityId' in value) return { ...value, entityId: value.entityId === fromId ? toId : value.entityId };
+  const fromEntityId = value.fromEntityId === fromId ? toId : value.fromEntityId;
+  const toEntityId = value.toEntityId === fromId ? toId : value.toEntityId;
+  return fromEntityId === toEntityId ? null : { ...value, fromEntityId, toEntityId };
+}
+
+/** Apply a publisher decision to one review-only identity suggestion or add an explicit alias. */
+export function resolveKnowledgeIdentity(artifact: KnowledgeArtifact, decisions: IdentityMatchDecision[]): KnowledgeArtifact {
+  const parsed = identityMatchDecisionSchema.array().min(1).max(500).parse(decisions);
+  if (new Set(parsed.map(decision => decision.id)).size !== parsed.length) throw new AppError('Choose each identity suggestion only once.');
+  const matches = (artifact.identityMatches ?? []).map(match => ({ ...match }));
+  for (const decision of parsed) if (!matches.some(match => match.id === decision.id)) throw new AppError('This identity suggestion is no longer available. Reload the proposal.', 409);
+  const next = structuredClone(artifact);
+  const catalog = structuredClone(artifact.catalog);
+  const notes = [...artifact.notes];
+  for (const decision of parsed) {
+    const match = matches.find(item => item.id === decision.id)!;
+    const canonical = catalog.entities.find(entity => entity.id === match.canonicalEntityId);
+    if (!canonical) throw new AppError('The suggested canonical item is no longer available. Reload the proposal.', 409);
+    if (decision.action === 'alias') {
+      const alias = decision.alias!.trim();
+      if (identityToken(alias) === identityToken(canonical.name) || canonical.aliases?.some(value => identityToken(value) === identityToken(alias))) continue;
+      if ((canonical.aliases?.length ?? 0) >= 12) throw new AppError(`The item “${canonical.name}” already has the maximum number of aliases.`);
+      canonical.aliases = [...new Set([...(canonical.aliases ?? []), alias])];
+      notes.push(`Added “${alias}” as an approved alternate label for “${canonical.name}”.`);
+      continue;
+    }
+    if (match.status !== 'review' || match.decision && match.decision !== 'pending') throw new AppError('This identity suggestion has already been decided. Reload the proposal.', 409);
+    match.decision = decision.action === 'approve' ? 'approved' : 'rejected';
+    if (decision.action === 'reject') { notes.push(`Rejected the suggested identity match “${match.incomingName}” → “${match.canonicalName}”.`); continue; }
+    const incomingId = entityKey(match.sourceKey, match.incomingId);
+    const incoming = catalog.entities.find(entity => entity.id === incomingId);
+    if (!incoming || incoming.id === canonical.id) throw new AppError('The suggested incoming item is no longer available. Reload the proposal.', 409);
+    for (const [field, value] of Object.entries(incoming.attributes)) if (!Object.hasOwn(canonical.attributes, field) || canonical.attributes[field] === null) canonical.attributes[field] = value;
+    if (!canonical.summary && incoming.summary) canonical.summary = incoming.summary;
+    canonical.aliases = [...new Map([...(canonical.aliases ?? []), incoming.name, ...(incoming.aliases ?? [])].filter(alias => identityToken(alias) !== identityToken(canonical.name)).map(alias => [identityToken(alias), alias])).values()];
+    if (canonical.aliases.length > 12) throw new AppError('Consolidation would exceed 12 aliases. Review alternate labels first.');
+    catalog.collections = catalog.collections.map(collection => ({ ...collection, entityIds: [...new Set(collection.entityIds.map(id => id === incomingId ? canonical.id : id))] }));
+    catalog.relationships = catalog.relationships.map(relation => ({ ...relation, fromEntityId: relation.fromEntityId === incomingId ? canonical.id : relation.fromEntityId, toEntityId: relation.toEntityId === incomingId ? canonical.id : relation.toEntityId })).filter(relation => relation.fromEntityId !== relation.toEntityId);
+    catalog.facts = catalog.facts?.map(fact => ({ ...fact, entityId: fact.entityId === incomingId ? canonical.id : fact.entityId }));
+    catalog.capabilities = catalog.capabilities?.map(capability => ({ ...capability, entityIds: [...new Set(capability.entityIds.map(id => id === incomingId ? canonical.id : id))] }));
+    catalog.entities = catalog.entities.filter(entity => entity.id !== incomingId);
+    next.origins = next.origins.map(origin => remapEntityInOrigin(origin, incomingId, canonical.id));
+    next.identityRemaps = { ...next.identityRemaps, [incomingId]: canonical.id };
+    // Recorded history is immutable. Its historical entity IDs resolve through
+    // identityRemaps; never rewrite what a publisher previously reviewed.
+    next.updates = next.updates?.filter(update => update.entityId !== incomingId && update.entityId !== canonical.id);
+    if (next.updateContext) next.updateContext = {
+      ...next.updateContext,
+      collections: next.updateContext.collections.map(collection => ({ ...collection, entityIds: [...new Set(collection.entityIds.map(id => id === incomingId ? canonical.id : id))] })),
+      relationships: next.updateContext.relationships.map(value => remapGraphValue(value, incomingId, canonical.id)).filter((value): value is CatalogRelationship => !!value),
+      facts: next.updateContext.facts?.map(value => ({ ...value, entityId: value.entityId === incomingId ? canonical.id : value.entityId })),
+      capabilities: next.updateContext.capabilities.map(value => ({ ...value, entityIds: [...new Set(value.entityIds.map(id => id === incomingId ? canonical.id : id))] })),
+    };
+    next.graphUpdates = next.graphUpdates?.map(update => ({ ...update,
+      previous: remapGraphValue(update.previous, incomingId, canonical.id), current: remapGraphValue(update.current, incomingId, canonical.id), incoming: remapGraphValue(update.incoming, incomingId, canonical.id),
+    }));
+    notes.push(`Approved and consolidated “${incoming.name}” with “${canonical.name}”.`);
+  }
+  catalog.id = randomUUID();
+  const updatedMatches = matches.filter(match => catalog.entities.some(entity => entity.id === match.canonicalEntityId));
+  const result = { ...next, id: catalog.id, catalog: validateCatalog(catalog), notes, identityMatches: updatedMatches };
+  if (artifact.assertionReviews) {
+    result.assertionReviews = remapAssertionReviews(artifact, result, id => remappedEntityId(id, result.identityRemaps));
+    const aliasTargets = new Set(parsed.filter(decision => decision.action === 'alias').map(decision => `${remappedEntityId(matches.find(match => match.id === decision.id)!.canonicalEntityId, result.identityRemaps)}/aliases`));
+    result.assertionReviews = result.assertionReviews.map(review => review.targetType === 'field' && aliasTargets.has(review.targetId) ? { ...review, origin: 'publisher', support: 'publisher', status: 'approved' } : review);
+  }
+  return result;
 }
 
 /** Resolve only recorded source alternatives; callers never submit replacement facts. */
@@ -287,9 +590,19 @@ export function resolveKnowledgeUpdates(artifact: KnowledgeArtifact, decisions: 
   const context = validateKnowledgeUpdateContext(artifact.updateContext ?? { collections: [], relationships: [], capabilities: [] });
   const anchors = updateAnchorsSchema.parse(artifact.updateAnchors ?? []);
   const updates = validateKnowledgeUpdates(artifact.updates ?? [], artifact.catalog, context, anchors);
-  if (parsed.some(decision => !updates.some(update => update.id === decision.id))) throw new AppError('This source update is no longer available. Reload the proposal.', 409);
+  const graphUpdates = validateGraphUpdates(artifact.graphUpdates ?? [], artifact.catalog, anchors);
+  // An unqualified field mirror and its fact are one decision, not two values
+  // that can disagree after a publisher chooses a source alternative.
+  for (const decision of [...parsed]) {
+    const field = updates.find(update => update.id === decision.id && update.field);
+    if (!field) continue;
+    for (const graph of graphUpdates) if (graph.targetType === 'fact' && graph.current && 'field' in graph.current && graph.incoming && 'field' in graph.incoming
+      && graph.current.entityId === field.entityId && graph.current.field === field.field && !graph.current.qualifiers?.length && !graph.current.validFrom && !graph.current.validTo
+      && graph.current.value === field.current && graph.incoming.value === field.incoming && !parsed.some(item => item.id === graph.id)) parsed.push({ id: graph.id, choice: decision.choice });
+  }
+  if (parsed.some(decision => !updates.some(update => update.id === decision.id) && !graphUpdates.some(update => update.id === decision.id))) throw new AppError('This source update is no longer available. Reload the proposal.', 409);
   const catalog = structuredClone(artifact.catalog);
-  for (const update of updates) {
+  for (const update of updates.filter(update => parsed.some(decision => decision.id === update.id))) {
     const actual = catalog.entities.find(entity => entity.id === update.entityId);
     const priorChoice = update.choice ?? update.defaultChoice;
     if (update.field) {
@@ -301,8 +614,19 @@ export function resolveKnowledgeUpdates(artifact: KnowledgeArtifact, decisions: 
       if (!sameEntity(actual, expected)) throw new AppError('This item was edited after its source update. Review the current proposal before resolving it.', 409);
     }
   }
-  for (const decision of parsed) updates.find(update => update.id === decision.id)!.choice = decision.choice;
-  for (const update of updates) {
+  for (const update of graphUpdates.filter(update => parsed.some(decision => decision.id === update.id))) {
+    const values = update.targetType === 'fact' ? catalog.facts ?? [] : catalog.relationships;
+    const priorChoice = update.choice ?? update.defaultChoice;
+    const expected = priorChoice === 'keep' ? update.current : update.incoming;
+    const actual = values.find(value => value.id === (expected?.id ?? update.targetId)) ?? null;
+    if (!graphEqual(actual, expected)) throw new AppError('This graph assertion was edited after its source update. Review the current proposal before resolving it.', 409);
+  }
+  for (const decision of parsed) {
+    const fieldUpdate = updates.find(update => update.id === decision.id);
+    if (fieldUpdate) fieldUpdate.choice = decision.choice;
+    else graphUpdates.find(update => update.id === decision.id)!.choice = decision.choice;
+  }
+  for (const update of updates.filter(update => parsed.some(decision => decision.id === update.id))) {
     const choice = update.choice ?? update.defaultChoice;
     if (update.field) {
       const entity = catalog.entities.find(entity => entity.id === update.entityId)!;
@@ -320,14 +644,37 @@ export function resolveKnowledgeUpdates(artifact: KnowledgeArtifact, decisions: 
       else catalog.entities.splice(Math.min(update.restoration!.index, catalog.entities.length), 0, structuredClone(entity));
     }
   }
+  const correctionHistory = [...(artifact.correctionHistory ?? [])];
+  for (const update of graphUpdates.filter(update => parsed.some(decision => decision.id === update.id))) {
+    const choice = update.choice ?? update.defaultChoice;
+    const values = update.targetType === 'fact' ? catalog.facts ?? (catalog.facts = []) : catalog.relationships;
+    const index = values.findIndex(value => value.id === update.targetId || value.id === update.incoming?.id);
+    const selected = choice === 'keep' ? update.current : update.incoming;
+    if (index >= 0) values.splice(index, 1);
+    if (selected) {
+      // A source assertion may use a new stable ID after replacement. Remove
+      // the target before inserting it so IDs and temporal alternatives remain
+      // unambiguous in the published graph.
+      const duplicate = values.findIndex(value => value.id === selected.id);
+      if (duplicate >= 0) values.splice(duplicate, 1);
+      if (update.targetType === 'fact') (catalog.facts ??= []).push(structuredClone(selected as CatalogFact));
+      else catalog.relationships.push(structuredClone(selected as CatalogRelationship));
+    }
+    correctionHistory.push(graphHistoryEntry('publisher-review', update.incomingSource?.sourceName ?? update.previousSource?.sourceName ?? 'source', update.targetType, selected?.id ?? update.targetId,
+      choice === 'incoming' ? 'source-accepted' : 'publisher-kept', update.current, selected, { previousSource: update.previousSource, incomingSource: update.incomingSource }));
+    update.choice = choice;
+  }
   if (!catalog.entities.length) throw new AppError('Keep at least one item in this proposal. To remove all knowledge, use Remove knowledge from draft.');
   const entityIds = new Set(catalog.entities.map(entity => entity.id));
-  for (const update of updates) if (!update.field && entityIds.has(update.entityId)) {
+  for (const update of updates.filter(update => parsed.some(decision => decision.id === update.id))) if (!update.field && entityIds.has(update.entityId)) {
+    for (const fact of context.facts ?? []) if (fact.entityId === update.entityId && !catalog.facts?.some(item => item.id === fact.id)) (catalog.facts ??= []).push(structuredClone(fact));
     for (const collection of context.collections.filter(item => update.restoration!.collectionIds.includes(item.id))) {
       const index = catalog.collections.findIndex(item => item.id === collection.id);
       if (index >= 0) catalog.collections[index].entityIds = [...new Set([...collection.entityIds, ...catalog.collections[index].entityIds])]; else catalog.collections.push(structuredClone(collection));
     }
-    for (const relation of context.relationships.filter(item => update.restoration!.relationshipIds.includes(item.id))) if (!catalog.relationships.some(item => item.id === relation.id)) catalog.relationships.push(structuredClone(relation));
+    // A retained edge may have been pooled by its other endpoint's update.
+    // Restore only edges touching the item being restored, not every old edge.
+    for (const relation of context.relationships.filter(item => item.fromEntityId === update.entityId || item.toEntityId === update.entityId)) if (!catalog.relationships.some(item => item.id === relation.id)) catalog.relationships.push(structuredClone(relation));
     for (const capability of context.capabilities.filter(item => update.restoration!.capabilityIds.includes(item.id))) {
       const index = catalog.capabilities?.findIndex(item => item.id === capability.id) ?? -1;
       if (index >= 0) catalog.capabilities![index].entityIds = [...new Set([...capability.entityIds, ...catalog.capabilities![index].entityIds])]; else (catalog.capabilities ??= []).push(structuredClone(capability));
@@ -335,7 +682,10 @@ export function resolveKnowledgeUpdates(artifact: KnowledgeArtifact, decisions: 
   }
   catalog.collections = catalog.collections.map(collection => ({ ...collection, entityIds: collection.entityIds.filter(id => entityIds.has(id)) })).filter(collection => collection.entityIds.length);
   catalog.relationships = catalog.relationships.filter(relation => entityIds.has(relation.fromEntityId) && entityIds.has(relation.toEntityId));
+  catalog.facts = catalog.facts?.filter(fact => entityIds.has(fact.entityId));
   catalog.capabilities = catalog.capabilities?.filter(capability => !capability.entityIds.length || capability.entityIds.some(id => entityIds.has(id))).map(capability => ({ ...capability, entityIds: capability.entityIds.filter(id => entityIds.has(id)) }));
   catalog.id = randomUUID();
-  return { ...structuredClone(artifact), id: catalog.id, catalog: validateCatalog(catalog), updates };
+  const result = { ...structuredClone(artifact), id: catalog.id, catalog: validateCatalog(catalog), updates, graphUpdates, correctionHistory: validateGraphCorrections(correctionHistory) };
+  if (artifact.assertionReviews) result.assertionReviews = refreshAssertionReviews(result, 'publisher');
+  return result;
 }

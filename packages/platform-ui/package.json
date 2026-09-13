@@ -8,6 +8,8 @@
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
     "./contracts": { "types": "./dist/contracts.d.ts", "import": "./dist/contracts.js" },
     "./catalog": { "types": "./dist/catalog.d.ts", "import": "./dist/catalog.js" },
+    "./knowledge": { "types": "./dist/knowledge.d.ts", "import": "./dist/knowledge.js" },
+    "./workspace": { "types": "./dist/workspace.d.ts", "import": "./dist/workspace.js" },
     "./interaction": { "types": "./dist/interaction.d.ts", "import": "./dist/interaction.js" },
     "./media": { "types": "./dist/media.d.ts", "import": "./dist/media.js" },
     "./styles.css": "./dist/styles.css"

@@ -4,6 +4,8 @@ import { AppError } from './errors';
 import { retainedMediaReferences, updateDraft, type StoredSite } from './local-store';
 import { contentSchema } from './site-model';
 import { proposeEdit } from './demo-editor';
+import { publicationContent } from './site-opening';
+import { pruneGreetingSources } from './site-greeting';
 
 const revision = z.number().int().positive();
 export const commandSchema = z.discriminatedUnion('action', [
@@ -23,7 +25,8 @@ export function applyCommand(site: StoredSite, command: z.infer<typeof commandSc
     case 'save':
       if (command.content.knowledgeRevisionId !== site.draft.knowledgeRevisionId) throw new AppError('Use Knowledge review to change the catalog in this draft.');
       if (command.content.mediaRevisionId !== site.draft.mediaRevisionId) throw new AppError('Use Photos review to change the media library in this draft.');
-      updateDraft(site, command.content); break;
+      // Source removals prune only source selections here; graph refs are checked by the host.
+      updateDraft(site, pruneGreetingSources(command.content)); break;
     case 'chat': {
       const reply = proposeEdit(site, command.text, site.files);
       if (reply.proposal) contentSchema.parse(reply.proposal.content);
@@ -38,17 +41,17 @@ export function applyCommand(site: StoredSite, command: z.infer<typeof commandSc
       if (command.action === 'apply') {
         if (proposal.baseContent !== JSON.stringify(site.draft)) throw new AppError('Your draft has changed since this proposal. Ask for a fresh edit.', 409);
         if (proposal.content.mediaRevisionId !== site.draft.mediaRevisionId) throw new AppError('Use Photos review to change the media library in this draft.');
-        updateDraft(site, proposal.content);
+        updateDraft(site, pruneGreetingSources(proposal.content));
       }
       proposal.status = command.action === 'apply' ? 'applied' : 'discarded';
       break;
     }
-    case 'publish': site.published = structuredClone(site.draft); site.publishedAt = new Date().toISOString(); break;
+    case 'publish': site.published = structuredClone(publicationContent(site.draft)); site.publishedAt = new Date().toISOString(); break;
     case 'undo': {
       const previous = site.history.pop();
       if (!previous) throw new AppError('There are no draft changes to undo.');
       if (previous.logoAssetId && !site.files.some(file => file.id === previous.logoAssetId)) previous.logoAssetId = null;
-      site.draft = previous;
+      site.draft = pruneGreetingSources(previous);
       break;
     }
     case 'use-logo': updateDraft(site, { ...site.draft, logoAssetId: command.fileId }); break;

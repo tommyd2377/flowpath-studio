@@ -1,4 +1,5 @@
 'use client';
+import LoadingIndicator from './LoadingIndicator';
 
 import Image from 'next/image';
 
@@ -8,6 +9,7 @@ import type { Site, SiteContent } from '@/lib/site-model';
 import type { WorkspaceUser } from '@/lib/firebase/types';
 import type { EditorStatus } from '@/lib/editor-types';
 import GreetingSettings from './GreetingSettings';
+import { SITE_PALETTES } from '@/lib/site-style';
 import VisitorSettings from './VisitorSettings';
 import ExploreSettings from './ExploreSettings';
 import OpeningSettings from './OpeningSettings';
@@ -41,7 +43,13 @@ export function EditorPanels({ editor, mode, panel, site, content, setContent, b
     <div className="field"><span>Brand accent</span><div className="color-row"><input disabled={busy} type="color" aria-label="Brand color" value={content.accent} onChange={e => change('accent', e.target.value)}/><span className="color-code">{content.accent.toUpperCase()}</span></div>
       <div className="palette">{['#c8ac85', '#a9bf99', '#829de5', '#b2a2e3', '#dfa4b7', '#87c6be'].map(color => <button disabled={busy} aria-label={`Use color ${color}`} aria-pressed={content.accent === color} key={color} style={{ background: color }} onClick={() => change('accent', color)}>{content.accent === color && <Check size={16}/>}</button>)}</div>
     </div>
-    <div className="info-note"><CircleHelp size={16}/><p>Your accent appears on borders, highlighted content, and small details in the shared Voice layout.</p></div>
+    <div className="info-note"><CircleHelp size={16}/><p>Your accent appears on borders, highlighted content, and small details in the shared FlowPath layout.</p></div>
+    <label className="field">Visitor layout<select disabled={busy} value={content.style?.layout ?? 'balanced'} onChange={event => change('style', { palette: content.style?.palette ?? 'midnight', layout: event.target.value })}>
+      <option value="balanced">Balanced · equal objects</option><option value="editorial">Editorial · generous reading</option><option value="compact">Compact · more at a glance</option>
+    </select></label>
+    <label className="field">Visitor palette<select disabled={busy} value={content.style?.palette ?? 'midnight'} onChange={event => change('style', { layout: content.style?.layout ?? 'balanced', palette: event.target.value })}>
+      {Object.entries(SITE_PALETTES).map(([id, palette]) => <option key={id} value={id}>{palette.label}</option>)}
+    </select><span className="field-help">Three accessible palettes share the same content, controls, and motion. Save and publish to update visitors.</span></label>
     {saveBar}
   </div>;
 
@@ -51,7 +59,7 @@ export function EditorPanels({ editor, mode, panel, site, content, setContent, b
     <label className="field">Contact information<input disabled={busy} value={content.contact} maxLength={180} onChange={e => change('contact', e.target.value)}/></label>
     <VisitorSettings content={content} setContent={setContent} busy={busy}/>
     <ExploreSettings content={content} setContent={setContent} busy={busy}/>
-    <GreetingSettings key={site.id} content={content} setContent={setContent} busy={busy}/>
+    <GreetingSettings key={site.id} siteId={site.id} content={content} setContent={setContent} busy={busy}/>
     <OpeningSettings siteId={site.id} content={content} setContent={setContent} busy={busy}/>
     <div className="section-heading"><h3>Content sections</h3><span>{content.sections.length} / 12</span></div>
     {content.sections.map((section, index) => <div className="section-editor" key={section.id}>
@@ -67,12 +75,12 @@ export function EditorPanels({ editor, mode, panel, site, content, setContent, b
     <div className="panel-heading"><span className="eyebrow">Your source material</span><h2>Files</h2><p>Keep photos, logos, documents, and information together.</p></div>
     <MediaPanel site={site} blocked={busy || unsaved} connected={editor.mode === 'openai'} upload={upload} onBusyChange={onMediaBusyChange} onSiteChange={onMediaSiteChange} onDirtyChange={onMediaDirtyChange}/>
     <div className="media-files-heading"><h3>Documents & original uploads</h3><p>Keep reference material and choose a site logo here.</p></div>
-    <button className="upload-zone" disabled={busy || unsaved} onClick={() => input.current?.click()}><Upload size={24}/><strong>Choose files to upload</strong><span>Images · 10 MB. PDF · 2 MB. CSV or text · 256 KB.</span></button>
-    <input hidden aria-label="Upload source files" multiple ref={input} type="file" accept="image/png,image/jpeg,image/webp,application/pdf,text/plain,text/csv,.txt,.csv" onChange={e => { void upload(e.target.files); e.target.value = ''; }}/>
-    <p className="field-help">{cloud ? 'Files are saved in your Firebase workspace' : 'Files stay on this computer'}, with up to 100 photos, 20 documents, and 100 MB of total storage per site. Open Knowledge to interpret CSV, text, and text-bearing PDFs. {editor.mode === 'openai' ? 'Choose up to three text files in the editor to include in your next AI message. Uploads are not sent to OpenAI automatically.' : editor.mode === 'demo' ? 'Text files can be added to your site through the demo editor.' : 'AI editing is unavailable. You can still manage your files here.'}</p>
+    <button className="upload-zone" disabled={busy || unsaved} onClick={() => input.current?.click()}><Upload size={24}/><strong>Choose files to upload</strong><span>Images · 10 MB. PDF, DOCX, XLSX or HTML · 2 MB. CSV or text · 256 KB.</span></button>
+    <input hidden aria-label="Upload source files" multiple ref={input} type="file" accept="image/png,image/jpeg,image/webp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/html,text/plain,text/csv,.docx,.xlsx,.html,.htm,.txt,.csv" onChange={e => { void upload(e.target.files); e.target.value = ''; }}/>
+    <p className="field-help">{cloud ? 'Files are saved in your Firebase workspace' : 'Files stay on this computer'}, with up to 100 photos, 20 documents, and 100 MB of total storage per site. Open Knowledge to interpret CSV, text, DOCX, XLSX, HTML, OCR images and text-bearing PDFs. {editor.mode === 'openai' ? 'Choose up to three text files in the editor to include in your next AI message. Uploads are not sent to OpenAI automatically.' : editor.mode === 'demo' ? 'Text files can be added to your site through the demo editor.' : 'AI editing is unavailable. You can still manage your files here.'}</p>
     <div className="file-list">{site.files.length ? site.files.map(file => <div className="file-row" key={file.id}>
       <div className="file-icon">{file.kind === 'image' ? <ImageIcon size={20}/> : <FileText size={20}/>}</div>
-      <div className="file-info"><a href={`/api/files/${site.id}/${file.id}`} target="_blank" rel="noopener noreferrer">{file.name}</a><span>{Math.max(1, Math.round(file.size / 1024))} KB · {file.kind === 'pdf' ? 'Ready for Knowledge interpretation' : file.kind === 'text' ? (editor.mode === 'openai' ? 'Available to select for chat' : editor.mode === 'demo' ? 'Ready for demo chat' : 'Stored') : 'Ready to use'}</span>
+      <div className="file-info"><a href={`/api/files/${site.id}/${file.id}`} target="_blank" rel="noopener noreferrer">{file.name}</a><span>{Math.max(1, Math.round(file.size / 1024))} KB · {file.kind === 'pdf' || /(?:docx|xlsx|html?)$/i.test(file.name) ? 'Ready for Knowledge interpretation' : file.kind === 'text' ? (editor.mode === 'openai' && /^text\/(?:plain|csv)$/.test(file.mime) ? 'Available to select for chat' : editor.mode === 'demo' ? 'Ready for demo chat' : 'Stored') : file.kind === 'image' ? 'Available for OCR or photos' : 'Ready to use'}</span>
         {file.kind === 'image' && <button className="text-button" disabled={busy || unsaved || site.draft.logoAssetId === file.id} onClick={() => void command({ action: 'use-logo', fileId: file.id })}>{site.draft.logoAssetId === file.id ? 'Current logo' : 'Use as logo'}</button>}
       </div><button className="icon-button" aria-label={`Delete ${file.name}`} title={site.published?.logoAssetId === file.id ? "Replace or remove this published logo and publish before deleting it." : mediaPending ? 'Apply or discard photo changes before deleting original uploads.' : undefined} disabled={busy || unsaved || mediaPending || site.published?.logoAssetId === file.id} onClick={() => void command({ action: 'remove-file', fileId: file.id })}><Trash2 size={16}/></button>
     </div>) : <div className="empty-files"><FileText size={28}/><h3>A home for your files</h3><p>Add a logo or a text document to try your first upload.</p></div>}</div>
@@ -110,7 +118,7 @@ export function CreateSiteDialog({ mode = 'demo', busy, error, onClose, onCreate
       <label className="field">Site address<input disabled={busy} required minLength={3} maxLength={50} pattern="[a-z0-9]+(-[a-z0-9]+)*" value={slug} onChange={e => { setSlug(e.target.value); setCustomSlug(true); }}/><span className="field-help">{mode === 'firebase' ? 'Site path' : 'Local address'}: /s/{slug || 'your-site'}</span></label>
       <label className="field">Starting content<select disabled={busy} value={kind} onChange={e => setKind(e.target.value)}><option value="general">Start from my content</option><option value="photographer">Photographer sample</option><option value="florist">Flower studio</option></select></label>
       {error && <p role="alert" className="form-error">{error}</p>}
-      <button type="submit" className="button primary" disabled={busy}>{busy ? 'Creating…' : 'Create site'}<ArrowUpRight size={16}/></button>
+      <button type="submit" className="button primary" disabled={busy}>{busy ? <LoadingIndicator label="Creating…"/> : 'Create site'}<ArrowUpRight size={16}/></button>
     </form>
   </dialog>;
 }

@@ -1,3 +1,4 @@
+import { visitorDiagnostic, diagnosticError } from '@/lib/visitor-diagnostics';
 import { createHash, randomUUID } from 'node:crypto';
 import { z, ZodError } from 'zod';
 import { after } from 'next/server';
@@ -7,13 +8,14 @@ import { assertSameOrigin } from '@/lib/firebase/session';
 import { slugSchema } from '@/lib/site-store';
 import { visitorAccess } from '@/lib/visitor-store';
 import { VisitorAttemptError } from '@/lib/visitor-quota';
-import { getPublishedKnowledge } from '@/lib/knowledge-store';
+import { getPublishedKnowledgeSnapshot } from '@/lib/knowledge-store';
 import { getPublishedMedia } from '@/lib/media-store';
 import { validateCatalogState } from '@/lib/catalog-presentation';
 import { visitorRequestSchema } from '@/lib/visitor-request';
 import { recordPlatformEvent } from '@/lib/platform-events';
 import { validateVisitorOffer, visitorRealtimeSession } from '@/lib/visitor-realtime-session';
 import { validateVisitorContext, visitorContextSchema, visitorHistorySchema } from '@/lib/visitor-realtime-context';
+import { visitorSettings } from '@/lib/visitor-model';
 import { assertNoStripeTestPaidAi } from '@/lib/billing-ai-guard';
 import { authorizedExplore } from '@/lib/explore-service';
 
@@ -33,6 +35,8 @@ const globals = globalThis as typeof globalThis & {
 const gate = globals.visitorRealtimeGate ??= { active: 0, blocked: false, until: 0, starts: 0 };
 
 export async function POST(request: Request, { params }: { params: Promise<{ slug: string }> }) {
+  let traceId: string = randomUUID();
+  const startedAt = performance.now();
   let slot = false;
   const release = () => { if (slot) { slot = false; gate.active--; } };
   try {
@@ -42,16 +46,20 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
     if (++gate.starts > 30 || gate.active >= 4) throw new AppError('Voice is busy. Please try again shortly.', 429);
     const slug = slugSchema.parse((await params).slug);
     const input = inputSchema.parse(await readJson(request));
+    traceId = input.requestId;
+    visitorDiagnostic({ traceId, channel: 'server', stage: 'session_request', status: 'started' });
     validateVisitorOffer(input.sdp);
     if (request.signal.aborted) throw new AppError('Voice request cancelled.', 499);
     const preview = await visitorAccess(slug);
     if (!preview.availability.live) throw new AppError('Continuous voice is unavailable in the demo preview.', 503);
     await assertNoStripeTestPaidAi(preview.siteId);
-    const catalog = await getPublishedKnowledge(preview.siteId, preview.content.knowledgeRevisionId);
-    const media = await getPublishedMedia(preview.siteId, preview.content.mediaRevisionId);
+    const [catalog, media] = await Promise.all([
+      getPublishedKnowledgeSnapshot(preview.siteId, preview.content.knowledgeRevisionId),
+      getPublishedMedia(preview.siteId, preview.content.mediaRevisionId),
+    ]);
     const context = validateVisitorContext(input.context ?? (input.catalogState ? { catalogState: input.catalogState } : {}), preview.content, catalog ?? undefined, media ?? undefined);
     if (input.context?.catalogState && input.catalogState && JSON.stringify(input.catalogState) !== JSON.stringify(input.context.catalogState)) throw new AppError('The current view is inconsistent. Reload and try again.', 400);
-    const catalogState = catalog ? validateCatalogState(context.catalogState, catalog) : undefined;
+    const catalogState = catalog ? validateCatalogState(context.catalogState, catalog, media) : undefined;
     if (!catalog && input.catalogState) throw new AppError('This site changed. Reload to continue.', 409);
     // Recheck after asynchronous validation before taking a process-local slot.
     if (gate.blocked || gate.active >= 4) throw new AppError('Voice is temporarily unavailable.', 503);
@@ -87,19 +95,21 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
     const key = process.env.OPENAI_API_KEY?.trim();
     if (!key) throw new AppError('Voice is temporarily unavailable.', 503);
     return visitorRealtimeSession({
-      offer: input.sdp, apiKey: key, signal: request.signal,
+      offer: input.sdp, apiKey: key, signal: request.signal, traceId: input.requestId,
       content: preview.content, catalog: catalog ?? undefined, media: media ?? undefined, catalogState,
       context, history: input.history,
+      idleTimeoutMs: visitorSettings(preview.content).voiceIdleTimeoutSeconds * 1000,
       mailbox: { slug, siteId: preview.siteId, publicationKey: createHash('sha256').update(snapshot).digest('hex') },
       availability, reservationChecksPublication: true, reserveTurn: () => reserve(randomUUID()), assertCurrent,
-      search: async (query, kind, signal) => (await authorizedExplore(slug, { query, kind, requestId: randomUUID() }, signal, snapshot)).result,
+      search: async (query, kind, signal, annotationTarget) => (await authorizedExplore(slug, { query, kind, requestId: randomUUID(), ...(annotationTarget ? { annotationTarget } : {}) }, signal, snapshot)).result,
       onTiming: (stage, durationMs) => { void recordPlatformEvent(preview.siteId, { ...observed, type: 'provider_usage', status: 'observed', operationId: `latency_${stage}`, durationMs }).catch(() => undefined); },
-      onUsage: (usage, source) => { void recordPlatformEvent(preview.siteId, { ...observed, type: 'provider_usage', status: 'observed', ...(source === 'transcription' ? { operationId: 'input_transcription' } : { requestId: currentRequestId }), usage }).catch(() => undefined); },
+      onUsage: (usage, source) => { void recordPlatformEvent(preview.siteId, { ...observed, type: 'provider_usage', status: 'observed', operationId: source === 'live' ? 'gpt_live_duration' : source === 'backend' ? 'luna_backend' : 'input_transcription', requestId: currentRequestId, usage }).catch(() => undefined); },
       onCleanupFailure: () => { gate.blocked = true; }, onClosed: release,
       retainCleanup: work => { after(() => work); },
     });
   } catch (error) {
     release();
+    visitorDiagnostic({ traceId, channel: 'server', stage: 'session_request', status: request.signal.aborted ? 'cancelled' : 'failed', durationMs: performance.now() - startedAt, ...diagnosticError(error) });
     return Response.json({ error: error instanceof AppError ? error.message : error instanceof ZodError ? 'The voice connection request is invalid.' : 'Voice is temporarily unavailable.',
       ...(error instanceof VisitorAttemptError ? { availability: error.availability } : {}) }, {
       status: error instanceof AppError ? error.status : error instanceof ZodError ? 400 : 502,

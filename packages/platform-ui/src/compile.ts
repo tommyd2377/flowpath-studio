@@ -14,10 +14,11 @@ function literal(value: unknown) {
 export function compilePresentation(catalog: KnowledgeCatalog, value: PresentationPlan, snapshotId = catalog.id, media?: MediaLibrary | null): string {
   const plan = validatePlan(value, catalog, snapshotId, media);
   const components = plan.components.filter(component => component.type !== 'criteria');
-  const definitions = components.map(component => {
+  const statementId = (index: number) => plan.identityMode === 'instances' ? `object_${index}` : components[index].type;
+  const definitions = components.map((component, index) => {
     if (component.type === 'criteria') throw new Error('Filter controls have been retired.');
     const args = [component.entityIds, component.attributeIds, component.variant, component.collectionId ?? '', component.capabilityIds ?? [], component.assetIds ?? [], component.albumId ?? ''];
-    return `${component.type} = ${COMPONENT_NAMES[component.type]}(${args.map(literal).join(', ')})`;
+    return `${statementId(index)} = ${COMPONENT_NAMES[component.type]}(${args.map(literal).join(', ')})`;
   });
-  return `root = CatalogCanvas([${components.map(component => component.type).join(', ')}])\n${definitions.join('\n')}`;
+  return `root = CatalogCanvas([${components.map((_, index) => statementId(index)).join(', ')}])\n${definitions.join('\n')}`;
 }

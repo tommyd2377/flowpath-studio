@@ -1,18 +1,19 @@
 'use client';
 
-import { createContext, forwardRef, useContext, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { createContext, forwardRef, useContext, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { AnimatePresence, motion, useIsPresent, useReducedMotion, useScroll, useSpring, type HTMLMotionProps } from 'motion/react';
 import { z } from 'zod';
 import { createLibrary, defineComponent, useTriggerAction, type ElementNode } from './openui.js';
 import { formatAttribute, filterEntities, knownAttributes } from './catalog.js';
 import type { AttributeDefinition, KnowledgeCatalog, PresentationPlan } from './contracts.js';
-import type { CatalogInteractionState } from './interaction.js';
+import type { CatalogInteractionState, FocusReference, ReturnAnchor } from './interaction.js';
 import { Disclosure, MotionHeight, SemanticSurface, feedbackTransition, motionTiming, revealTransition, sequenceItemVariants, sequenceVariants, surfaceTransition } from './motion.js';
 import { EntityMedia, MediaGallery } from './MediaViews.js';
 
 export type RuntimeContextValue = { spotlightId?: string | null; catalog: KnowledgeCatalog; state: CatalogInteractionState; plan: PresentationPlan;
   onLinkClick?: (event: { kind: 'link_click'; entityId?: string; capabilityId: string }) => void;
   onInteraction?: () => void;
+  onMediaFocusChange?: (reference: FocusReference | null, origin?: ReturnAnchor | null) => void;
 };
 export const RuntimeContext = createContext<RuntimeContextValue | null>(null);
 function useCatalog() {
@@ -23,6 +24,124 @@ function useCatalog() {
 function useAction() {
   const trigger = useTriggerAction();
   return (type: string, params: Record<string, unknown> = {}) => trigger('Update this view', undefined, { type, params });
+}
+
+/** Shared non-modal orchestration shell for a focused entity or photo. */
+export function FocusStage({ children, context, focused = false, onClose, label = 'Focused content', managed = false }: { children?: ReactNode; context?: ReactNode; focused?: boolean; onClose?: () => void; label?: string; managed?: boolean }) {
+  const reduced = useReducedMotion();
+  const hasContext = context !== undefined && context !== null;
+  const [layerActive, setLayerActive] = useState(focused);
+  const focusActive = focused || layerActive;
+  const showChildren = focused || !hasContext && layerActive;
+  const stage = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const element = stage.current;
+    if (!element || managed) return;
+    const properties = ['--platform-focus-top', '--platform-focus-right', '--platform-focus-bottom', '--platform-focus-left'];
+    const clear = () => properties.forEach(property => element.style.removeProperty(property));
+    if (!focused) { if (!layerActive) clear(); return; }
+    const root = element.closest<HTMLElement>('[data-visitor-site], .platform-explorer') ?? element;
+    const scrollParent = (() => {
+      for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+        if (/(auto|scroll)/.test(getComputedStyle(parent).overflowY) && parent.scrollHeight > parent.clientHeight) return parent;
+      }
+      return null;
+    })();
+    const update = () => {
+      const viewport = window.visualViewport;
+      const viewportLeft = viewport?.offsetLeft ?? 0;
+      const viewportTop = viewport?.offsetTop ?? 0;
+      const viewportRight = viewportLeft + (viewport?.width ?? window.innerWidth);
+      const viewportBottom = viewportTop + (viewport?.height ?? window.innerHeight);
+      const visible = scrollParent?.getBoundingClientRect();
+      const rootBounds = root.getBoundingClientRect();
+      const top = Math.max(viewportTop, visible?.top ?? viewportTop);
+      const right = Math.min(viewportRight, visible?.right ?? viewportRight, rootBounds.right);
+      const bottom = Math.min(viewportBottom, visible?.bottom ?? viewportBottom);
+      const left = Math.max(viewportLeft, visible?.left ?? viewportLeft, rootBounds.left);
+      if (![top, right, bottom, left].every(Number.isFinite) || right <= left || bottom <= top) return;
+      element.style.setProperty('--platform-focus-top', `${top}px`);
+      element.style.setProperty('--platform-focus-right', `${Math.max(0, viewportRight - right)}px`);
+      element.style.setProperty('--platform-focus-bottom', `${Math.max(0, viewportBottom - bottom)}px`);
+      element.style.setProperty('--platform-focus-left', `${left}px`);
+    };
+    update();
+    const resize = () => update();
+    window.addEventListener('resize', resize);
+    window.addEventListener('scroll', resize, { passive: true, capture: true });
+    scrollParent?.addEventListener('scroll', resize, { passive: true });
+    window.visualViewport?.addEventListener('resize', resize);
+    window.visualViewport?.addEventListener('scroll', resize);
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(resize);
+    observer?.observe(root);
+    if (scrollParent) observer?.observe(scrollParent);
+    const clearOnCleanup = !focused || !layerActive;
+    return () => {
+      window.removeEventListener('resize', resize);
+      window.removeEventListener('scroll', resize, true);
+      scrollParent?.removeEventListener('scroll', resize);
+      window.visualViewport?.removeEventListener('resize', resize);
+      window.visualViewport?.removeEventListener('scroll', resize);
+      observer?.disconnect();
+      if (clearOnCleanup) clear();
+    };
+  }, [focused, layerActive, managed]);
+  if (managed) return <section ref={stage} className="platform-workspace-stage" data-focus-stage="true" data-focus-active={focused} aria-label={label}>{context}{children}</section>;
+  return <section ref={stage} className="platform-focus-stage" data-focus-stage="true" data-focus-active={focusActive || undefined} aria-label={label} onKeyDown={event => {
+    if (event.key === 'Escape' && focused && onClose) { event.preventDefault(); onClose(); }
+  }}>
+    {context && <motion.div className="platform-focus-context" data-focus-context="true" inert={focusActive || undefined} aria-hidden={focusActive || undefined} initial={false} animate={focused ? { opacity: 0.34, ...(reduced ? {} : { filter: 'saturate(0.72)' }) } : { opacity: 1, filter: 'saturate(1)' }} transition={reduced ? { duration: 0 } : surfaceTransition}>{context}</motion.div>}
+    <motion.div className="platform-focus-surface-layer" data-focus-layer="true" layout={false} onPointerDown={event => {
+      if (focused && onClose && event.target === event.currentTarget) { event.preventDefault(); onClose(); }
+    }}>
+      {focusActive && <motion.div className="platform-focus-scrim" data-focus-scrim="true" aria-hidden="true" initial={{ opacity: 0 }} animate={{ opacity: focused ? 1 : 0 }} transition={{ ...revealTransition, duration: reduced ? 0 : .45 }} onAnimationStart={() => { if (focused) setLayerActive(true); }} onPointerDown={event => {
+        if (focused && onClose) { event.preventDefault(); event.stopPropagation(); onClose(); }
+      }}/>}
+      <AnimatePresence initial={false} onExitComplete={() => { if (!focused) setLayerActive(false); }}>
+        {showChildren ? children : null}
+      </AnimatePresence>
+    </motion.div>
+  </section>;
+}
+
+/** A composed, page-region focus surface. It is intentionally not a dialog. */
+export function FocusSurface({ children, reference, onClose, title, returnLabel = 'Back to results', managed = false }: { children: ReactNode; reference?: FocusReference | null; onClose?: () => void; title?: string; returnLabel?: string; managed?: boolean }) {
+  const present = useIsPresent();
+  const reduced = useReducedMotion();
+  if (managed) return <section className="platform-workspace-focus-content" data-focus-surface="true" data-focus-reference-kind={reference?.kind} data-focus-reference-id={reference?.id} aria-label={title}>
+    {onClose && <ReturnAnchor onReturn={onClose} label={returnLabel}/>} {children}
+  </section>;
+  return <motion.section className="platform-focus-surface" data-focus-surface="true" data-focus-reference-kind={reference?.kind} data-focus-reference-id={reference?.id} aria-label={title ? `${title} focused surface` : undefined}
+    layout={reduced ? false : 'position'} inert={!present || undefined} aria-hidden={!present || undefined}
+    initial={false} animate={{ opacity: 1 }}
+    // Hold the surface visually opaque for the reverse layout pass. A tiny
+    // opacity delta keeps AnimatePresence mounted for the same workspace
+    // duration without introducing a fade that would break card identity.
+    exit={{ opacity: reduced ? 1 : 0.999, transition: { ...revealTransition, duration: reduced ? 0 : motionTiming.workspace, layout: reduced ? { duration: 0 } : surfaceTransition } }}
+    transition={{ ...revealTransition, duration: reduced ? 0 : motionTiming.workspace, layout: reduced ? { duration: 0 } : surfaceTransition }}>
+    {onClose && <ReturnAnchor onReturn={onClose} label={returnLabel}/>} {children}
+  </motion.section>;
+}
+
+/** Stable return affordance shared by entity and photo focused surfaces. */
+export function ReturnAnchor({ onReturn, label = 'Back to results' }: { onReturn: () => void; label?: string }) {
+  return <button type="button" className="platform-return-anchor" data-return-anchor="true" onClick={onReturn}><Icon name="back" size={14}/><span>{label}</span></button>;
+}
+
+/** Semantic, interruptible evidence disclosure used by focused surfaces. */
+export function DisclosureStack({ children, label = 'More context', defaultOpen = false, open: controlledOpen, onOpenChange }: { children: ReactNode; label?: string; defaultOpen?: boolean; open?: boolean; onOpenChange?: (open: boolean) => void }) {
+  const [localOpen, setOpen] = useState(defaultOpen);
+  const open = controlledOpen ?? localOpen;
+  const contentId = useId();
+  return <div className="platform-disclosure-stack" data-disclosure-stack="true">
+    <button type="button" className="platform-text-button" aria-expanded={open} aria-controls={contentId} onClick={() => { setOpen(!open); onOpenChange?.(!open); }}>{open ? 'Show less' : label}<Icon name={open ? 'close' : 'arrow'} size={13}/></button>
+    <AnimatePresence initial={false}>{open && <Disclosure name="evidence"><div id={contentId} className="platform-disclosure-content">{children}</div></Disclosure>}</AnimatePresence>
+  </div>;
+}
+
+/** Shared status bridge for voice/chat intent acknowledgement. */
+export function VoiceFocusBridge({ status, reference, children }: { status?: string; reference?: FocusReference | null; children?: ReactNode }) {
+  return <div className="platform-voice-focus-bridge" data-voice-focus-bridge="true" data-voice-focus-open={reference ? 'true' : undefined} data-voice-focus-kind={reference?.kind} data-voice-focus-id={reference?.id}>{children}<span className="platform-sr-only" role="status" aria-live="polite" aria-atomic="true">{status || ''}</span></div>;
 }
 
 export function Icon({ name, size = 17 }: { name: 'arrow' | 'plus' | 'check' | 'close' | 'back' | 'filter' | 'compare' | 'spark'; size?: number }) {
@@ -98,14 +217,14 @@ function CollectionContent({ entityIds, attributeIds, variant, collectionId }: C
         const selectDisabled = !selected && state.selectedIds.length >= 6;
         const details = cardAttributes(catalog, entity, attributes);
         const layout = variant !== 'list' && index === 0 ? 'feature' : details.length === 0 ? 'narrative' : details.length === 1 ? 'spotlight' : 'details';
-        return <PresentCard key={`item-${entity.id}`} layoutId={`entity-card-${entity.id}`} className="platform-item" data-entity-id={entity.id} data-spotlight={spotlightId === entity.id} data-expanded={spotlightId === entity.id} data-selected={selected} data-detail-count={details.length} data-layout={layout}>
+        return <PresentCard key={`item-${entity.id}`} layoutId={`entity-card-${entity.id}`} className="platform-item" data-entity-id={entity.id} data-card-focus={`entity:${entity.id}`} data-spotlight={spotlightId === entity.id} data-expanded={spotlightId === entity.id} data-selected={selected} data-detail-count={details.length} data-layout={layout}
+          onClick={event => { if (event.target instanceof Element && event.target.closest('button, a, input, select, textarea, [role="button"]')) return; action('focus', { id: entity.id }); }}>
           <EntityMedia targetId={entity.id}/>
           <div className="platform-item-kicker"><span>{entity.kind}</span><span>{String(index + 1).padStart(2, '0')}</span></div>
-          <button className="platform-item-open" type="button" onClick={() => action('focus', { id: entity.id })}><motion.h4 layoutId={`entity-title-${entity.id}`}>{entity.name}</motion.h4><Icon name="arrow"/></button>
+          <button className="platform-item-open" type="button" data-focus-key={`entity:${entity.id}`} onClick={() => action('focus', { id: entity.id })}><motion.h4 layoutId={`entity-title-${entity.id}`}>{entity.name}</motion.h4><Icon name="arrow"/></button>
           <p className="platform-item-summary">{entity.summary}</p>
           {!!details.length && <dl className="platform-item-attributes">{details.map(attribute => <div key={attribute.id}><dt>{attribute.label}</dt><dd>{formatAttribute(entity.attributes[attribute.id], attribute)}</dd></div>)}</dl>}
-          <div className="platform-item-bottom"><button className="platform-text-button" type="button" onClick={() => action('focus', { id: entity.id })}>Take a closer look <Icon name="arrow" size={13}/></button>
-            <button className="platform-select" type="button" aria-pressed={selected} disabled={selectDisabled} aria-label={`${selected ? 'Remove' : 'Select'} ${entity.name} ${selected ? 'from' : 'for'} comparison`} onClick={() => action('select', { id: entity.id })}><Icon name={selected ? 'check' : 'plus'} size={15}/><span>{selected ? 'Selected' : 'Compare'}</span></button></div>
+          <div className="platform-item-bottom"><button className="platform-select" type="button" aria-pressed={selected} disabled={selectDisabled} aria-label={`${selected ? 'Remove' : 'Select'} ${entity.name} ${selected ? 'from' : 'for'} comparison`} onClick={() => action('select', { id: entity.id })}><Icon name={selected ? 'check' : 'plus'} size={15}/><span>{selected ? 'Selected' : 'Compare'}</span></button></div>
         </PresentCard>;
       })}</AnimatePresence>
     </motion.div></MotionHeight>
@@ -131,7 +250,7 @@ function DetailContent({ entityIds, attributeIds }: ComponentProps) {
   return <motion.section ref={detail} layoutId={`entity-card-${entity.id}`} layout="position" className="platform-detail" data-entity-id={entity.id} aria-label={`Details of ${entity.name}`} transition={{ layout: surfaceTransition }}>
     <DetailProgress target={detail}/><span className="platform-eyebrow">{entity.kind} · A CLOSER LOOK</span><motion.h3 layoutId={`entity-title-${entity.id}`} tabIndex={-1} data-platform-focus>{entity.name}</motion.h3><p className="platform-detail-summary">{entity.summary}</p>
     <EntityMedia targetId={entity.id} variant="detail" includeExamples/>
-    {!!details.length && <dl className="platform-detail-attributes">{details.map(attribute => <div key={attribute.id}><dt>{attribute.label}</dt><dd>{formatAttribute(entity.attributes[attribute.id], attribute)}</dd></div>)}</dl>}
+    {!!details.length && <DisclosureStack defaultOpen label="Show published details"><dl className="platform-detail-attributes">{details.map(attribute => <div key={attribute.id}><dt>{attribute.label}</dt><dd>{formatAttribute(entity.attributes[attribute.id], attribute)}</dd></div>)}</dl></DisclosureStack>}
     <button className="platform-button" type="button" aria-pressed={selected} disabled={!selected && state.selectedIds.length >= 6} onClick={() => action('select', { id: entity.id })}><Icon name={selected ? 'check' : 'plus'}/>{selected ? 'Selected for comparison' : 'Add to comparison'}</button>
   </motion.section>;
 }
@@ -184,7 +303,11 @@ const AttributeComparison = defineComponent({ name: 'AttributeComparison', descr
 const SelectionTray = defineComponent({ name: 'SelectionTray', description: 'Runtime-owned comparison selections.', props: componentProps(), component: () => <SelectionContent/> });
 const RelatedEntities = defineComponent({ name: 'RelatedEntities', description: 'Explicit relationships between published entities.', props: componentProps(), component: ({ props }) => <RelationshipsContent {...props}/> });
 const ActionGroup = defineComponent({ name: 'ActionGroup', description: 'Explicit publisher-registered destinations only.', props: componentProps(), component: ({ props }) => <ActionsContent {...props}/> });
-const PhotoGallery = defineComponent({ name: 'PhotoGallery', description: 'Published photos in publisher order, filtered only by approved references.', props: componentProps(), component: ({ props }) => <MediaGallery assetIds={props.assetIds.length ? props.assetIds : undefined} albumId={props.albumId || undefined} entityIds={props.entityIds.length ? props.entityIds : undefined} variant={props.variant === 'list' ? 'list' : 'grid'} showAlbums={!props.assetIds.length && !props.entityIds.length}/> });
+function PhotoGalleryContent({ props }: { props: ComponentProps }) {
+  const { onMediaFocusChange } = useCatalog();
+  return <MediaGallery assetIds={props.assetIds.length ? props.assetIds : undefined} albumId={props.albumId || undefined} entityIds={props.entityIds.length ? props.entityIds : undefined} variant={props.variant === 'list' ? 'list' : 'grid'} showAlbums={!props.assetIds.length && !props.entityIds.length} onFocusChange={onMediaFocusChange}/>;
+}
+const PhotoGallery = defineComponent({ name: 'PhotoGallery', description: 'Published photos in publisher order, filtered only by approved references.', props: componentProps(), component: ({ props }) => <PhotoGalleryContent props={props}/> });
 const CatalogCanvas = defineComponent({ name: 'CatalogCanvas', description: 'A stable semantic composition with shared platform motion.',
   props: z.object({ sections: z.array(z.union([CollectionView.ref, EntityDetail.ref, AttributeComparison.ref, SelectionTray.ref, RelatedEntities.ref, ActionGroup.ref, PhotoGallery.ref])) }),
   component: function Canvas({ props, renderNode }) {
@@ -193,7 +316,9 @@ const CatalogCanvas = defineComponent({ name: 'CatalogCanvas', description: 'A s
     return <MotionHeight className="platform-canvas-frame" duration={workspace ? motionTiming.workspace : motionTiming.reflow}>
       <div className="platform-canvas" data-operation={plan.operation} data-has-criteria={false} data-has-collection={plan.components.some(component => component.type === 'collection')}><AnimatePresence initial={false} mode="popLayout">{props.sections.map(section => {
       const node = section as ElementNode;
-      const name = node.statementId ?? node.typeName;
+      const statement = node.statementId ?? node.typeName;
+      const componentIndex = /^object_(\d+)$/.exec(statement)?.[1];
+      const name = plan.identityMode && componentIndex !== undefined ? plan.components[Number(componentIndex)]?.id ?? statement : statement;
       const entity = node.typeName === 'EntityDetail' ? String((node.props.entityIds as string[])[0]) : '';
       const intent = !plan.transition.targetComponentId || plan.transition.targetComponentId === name ? plan.transition.type : 'none';
       return <SemanticSurface key={`${name}${entity ? `-${entity}` : ''}`} name={name} intent={intent}>{renderNode(section)}</SemanticSurface>;

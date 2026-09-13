@@ -1,4 +1,4 @@
-export type ProviderUsage = { inputTokens?: number; outputTokens?: number; totalTokens?: number };
+export type ProviderUsage = { voiceSeconds?: number; finalized?: boolean; inputTokens?: number; outputTokens?: number; totalTokens?: number };
 
 /** Provider-reported counts only. Missing usage is unknown, never zero or a price. */
 export function measuredUsage(input: unknown): ProviderUsage | undefined {

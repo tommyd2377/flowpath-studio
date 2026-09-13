@@ -85,10 +85,11 @@ export const SemanticSurface = forwardRef<HTMLDivElement, { children: ReactNode;
   const duration = intent === 'workspace-shift' || intent === 'restore' || intent === 'focus' ? motionTiming.workspace : motionTiming.reveal;
   const movement = intent === 'restore' ? -1 : intent === 'workspace-shift' ? 1 : 0;
   const rise = intent === 'reveal' ? 12 : intent === 'expand' ? 4 : 0;
+  const focusExit = intent === 'focus' && !reduced;
   return <motion.div ref={ref} layout={reduced ? false : 'position'} className={`platform-slot platform-slot-${name}`} data-platform-slot={name}
     inert={!present} aria-hidden={!present || undefined}
     initial={still ? false : { opacity: 0, x: movement * 14, y: rise }}
-    animate={{ opacity: 1, x: 0, y: 0 }} exit={{ opacity: 0, x: still ? 0 : movement * -10, y: 0, transition: { ...revealTransition, duration: reduced ? 0 : motionTiming.exit } }}
+    animate={{ opacity: 1, x: 0, y: 0 }} exit={{ opacity: focusExit ? 0.999 : 0, x: still ? 0 : movement * -10, y: 0, transition: { ...revealTransition, duration: focusExit ? motionTiming.workspace : reduced ? 0 : motionTiming.exit, layout: reduced ? { duration: 0 } : surfaceTransition } }}
     transition={{ ...revealTransition, duration: reduced ? 0 : duration, opacity: { duration: reduced ? 0 : motionTiming.feedback }, layout: reduced ? { duration: 0 } : surfaceTransition }}>
     {children}
   </motion.div>;

@@ -19,7 +19,9 @@ export async function readUpload(request: Request): Promise<{ revision: number; 
     || mime === 'image/webp' && data.toString('ascii', 0, 4) === 'RIFF' && data.toString('ascii', 8, 12) === 'WEBP';
   const validPdf = mime === 'application/pdf' && data.toString('ascii', 0, 5) === '%PDF-';
   const validText = ['text/plain', 'text/csv'].includes(mime) && data.length <= 256 * 1024 && !data.includes(0);
-  if (!validImage && !validPdf && !validText) throw new AppError('Use PNG, JPEG or WebP photos up to 10 MB, PDFs up to 2 MB, or CSV and text files up to 256 KB.');
+  const validOffice = ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'].includes(mime) && data.length <= 2 * 1024 * 1024;
+  const validHtml = ['text/html', 'application/xhtml+xml'].includes(mime) && data.length <= 2 * 1024 * 1024 && !data.includes(0);
+  if (!validImage && !validPdf && !validText && !validOffice && !validHtml) throw new AppError('Use PNG, JPEG or WebP photos up to 10 MB, PDFs, DOCX, XLSX or HTML up to 2 MB, or CSV and text files up to 256 KB.');
   if (validImage) {
     const { display, thumbnail, image } = await processImage(data);
     return { revision, file: { id: randomUUID(), name, mime: 'image/webp', kind: 'image', uploadedAt: new Date().toISOString(),
@@ -27,13 +29,13 @@ export async function readUpload(request: Request): Promise<{ revision: number; 
       data: display.toString('base64'), thumbnailData: thumbnail.toString('base64'), originalData: data.toString('base64') } };
   }
   let text: string | undefined;
-  if (validText) {
+  if (validText || validHtml) {
     try { text = new TextDecoder('utf-8', { fatal: true }).decode(data).slice(0, 20000); }
     catch { throw new AppError('Text files must use UTF-8 encoding.'); }
   }
   return { revision, file: { id: randomUUID(), name, mime, size: data.length,
     kind: validImage ? 'image' : validPdf ? 'pdf' : 'text', uploadedAt: new Date().toISOString(),
-    data: data.toString('base64'), ...(validText ? { text } : {}) } };
+    data: data.toString('base64'), ...((validText || validHtml) ? { text } : {}) } };
 }
 
 export function assertUploadAllowed(site: StoredSite, revision: number, file: StoredFile) {
