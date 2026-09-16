@@ -8,6 +8,7 @@ next-env.d.ts
 packages/*/dist/
 test-results/
 playwright-report/
+.visitor-recordings/
 
 # Local tooling, reports and archives
 .codex/

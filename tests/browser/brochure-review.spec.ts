@@ -35,7 +35,6 @@ test('publisher reviews grouped prose, explicitly approves and browses full topi
   expect(site.published).toBeNull();
   await post(`/api/sites/${site.id}`, { action: 'publish', revision: site.revision });
   await page.goto(`/s/${site.slug}`);
-  await page.getByRole('button', { name: 'Browse published content', exact: true }).click();
   const website = page.getByRole('region', { name: 'Browse approved information' });
   await expect(website.getByText('Read the entire history with this final detail.', { exact: true })).toBeVisible();
   await expect(page.locator('[data-voice-dock]')).toHaveCSS('--opening-progress', '0');
@@ -46,9 +45,9 @@ test('publisher reviews grouped prose, explicitly approves and browses full topi
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('brochure-mobile.png'), fullPage: true });
   await website.getByRole('button', { name: 'Open Local history', exact: true }).click();
-  const focus = page.locator('[data-workspace-focused]:not([inert])');
+  const focus = page.getByRole('dialog', { name: 'Local history', exact: true });
   await expect(focus).toContainText('Read the entire history with this final detail.');
-  await focus.getByRole('button', { name: 'Home', exact: true }).click();
-  await expect(focus).toHaveCount(0);
+  await focus.getByRole('button', { name: 'Close detail', exact: true }).click();
+  await expect(focus).not.toBeVisible();
   expect(errors).toEqual([]);
 });

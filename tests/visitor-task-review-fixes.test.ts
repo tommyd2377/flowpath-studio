@@ -71,7 +71,7 @@ test('viewport observations reject stale ordinals and evidence without changing 
       session = await store.read(session.id, publication);
       return executeVisitorCapability({ sessionId: session.id, store, index, signal: new AbortController().signal, assertCurrent: async () => {}, call: { capabilityId, input, bindings, operationId: randomUUID(), expectedRevision: session.revision } });
     };
-    const displayed = await execute('query.activate', { queryId: session.activeQueryId });
+    const displayed = await execute('query.activate', { queryId: session.queries[0].current.queryId });
     const ack = { operationId: displayed.view.operationId!, queryId: displayed.view.query.queryId, queryRevision: displayed.view.query.revision, resultSetId: displayed.view.result.resultSetId, sceneRevision: 1, recordIds: ['record-00000', 'record-00001'] };
     await acknowledgeTaskDisplay(store, session.id, publication, ack);
     session = await store.read(session.id, publication);

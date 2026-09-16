@@ -1,6 +1,23 @@
 import { z } from 'zod';
 
 const id = z.string().min(1).max(80).regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/);
+export const videoSchema = z.object({
+  id, title: z.string().trim().min(1).max(160), description: z.string().max(3000),
+  source: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('file'), fileId: id }).strict(),
+    z.object({ kind: z.literal('youtube'), videoId: z.string().regex(/^[A-Za-z0-9_-]{11}$/) }).strict(),
+    z.object({ kind: z.literal('url'), url: z.string().url().max(2000).refine(value => { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && /\.mp4$/i.test(url.pathname); }, 'Use a public HTTPS MP4 URL.') }).strict(),
+  ]),
+  posterAssetId: id.optional(), autoplay: z.boolean().default(false),
+  transcript: z.array(z.object({ start: z.number().min(0).max(86400), end: z.number().min(0).max(86400), text: z.string().max(1000) }).strict().refine(cue => cue.end > cue.start)).max(120).optional(),
+}).strict();
+export type PublishedVideo = z.infer<typeof videoSchema>;
+export function youtubeVideoId(value: string): string | null {
+  try { const url = new URL(value); if (url.protocol !== 'https:' || url.username || url.password) return null;
+    const candidate = url.hostname === 'youtu.be' ? url.pathname.slice(1) : ['youtube.com', 'www.youtube.com', 'm.youtube.com'].includes(url.hostname) ? url.searchParams.get('v') ?? url.pathname.match(/^\/(?:embed|shorts)\/([^/]+)$/)?.[1] : null;
+    return candidate && /^[A-Za-z0-9_-]{11}$/.test(candidate) ? candidate : null;
+  } catch { return null; }
+}
 export const mediaAssetSchema = z.object({
   id, width: z.number().int().min(1).max(20000), height: z.number().int().min(1).max(20000),
   caption: z.string().max(2000), alt: z.string().max(1000), credit: z.string().max(300).optional(),
@@ -16,6 +33,7 @@ export const mediaAssociationSchema = z.object({
 /** Published descriptions and references only. Storage paths and inferred identities stay host-owned. */
 export const mediaLibrarySchema = z.object({
   schemaVersion: z.literal(1), id, assets: z.array(mediaAssetSchema).max(100),
+  videos: z.array(videoSchema).max(20).optional(),
   albums: z.array(mediaAlbumSchema).max(24), associations: z.array(mediaAssociationSchema).max(300),
 }).strict();
 export type MediaAsset = z.infer<typeof mediaAssetSchema>;
@@ -49,6 +67,8 @@ export function validateMediaLibrary(input: unknown, context?: { entityIds?: rea
   }
   const library = mediaLibrarySchema.parse(input);
   unique(library.assets.map(asset => asset.id), 'asset identifiers');
+  unique((library.videos ?? []).map(video => video.id), 'video identifiers');
+  if (library.videos?.some(video => video.posterAssetId && !library.assets.some(asset => asset.id === video.posterAssetId))) invalid('A video poster must be an approved library image.');
   unique(library.albums.map(album => album.id), 'album identifiers');
   unique(library.associations.map(association => association.id), 'association identifiers');
   const assets = new Set(library.assets.map(asset => asset.id));

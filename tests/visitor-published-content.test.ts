@@ -106,9 +106,10 @@ test('the actual chat stream reads published section content without navigation 
     const response = visitorChatTask({ slug: site.slug, siteId: site.id, content, signal: new AbortController().signal,
       request: { kind: 'chat', text: 'What services do you have?', requestId: randomUUID(), history: [], context: { workspace } },
       availability: { enabled: true, live: true, mode: 'both', chatRemaining: 10, voiceRemaining: 10, resetsAt: '' }, onUsage: () => {} });
-    const events: { type: string; text?: string }[] = [];
+    const events: { type: string; text?: string; stage?: string }[] = [];
     await readVisitorChatEvents(response.body!, new AbortController().signal, async event => { events.push(event); });
-    assert.equal(calls, 2); assert.deepEqual(events.map(event => event.type), ['control', 'done']);
-    assert.equal(events[1].text, 'We offer portrait sessions and editorial photography.');
+    assert.equal(calls, 2); assert.deepEqual(events.filter(event => event.type !== 'progress').map(event => event.type), ['control', 'done']);
+    assert.ok(events.some(event => event.type === 'progress' && event.stage === 'retrieving'));
+    assert.equal(events.find(event => event.type === 'done')?.text, 'We offer portrait sessions and editorial photography.');
   } finally { process.env = previous; await rm(directory, { recursive: true, force: true }); }
 });

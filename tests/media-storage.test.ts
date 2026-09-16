@@ -52,6 +52,16 @@ test('photo route lifecycle separates private originals, reviewed revisions and 
     const publishedResponse = await sitePost(json(`/api/sites/${id}`, { action: 'publish', revision: applied.site.revision }), context);
     assert.equal(publishedResponse.status, 200); const published = (await publishedResponse.json()).site;
     assert.equal((await getPublishedMedia(id, applied.library.id))?.assets[0].caption, 'Reviewed photo');
+    const { activeCarouselImage } = await import('../lib/visitor-active-image');
+    const { visitorDiagnostics } = await import('../lib/visitor-diagnostics');
+    const { carouselContextSchema } = await import('@thevoice/platform-ui/carousel');
+    const photoContext = { carousel: carouselContextSchema.parse({ version: 1, open: true, revision: 1, cards: [{ id: 'photo', kind: 'photo', title: 'Reviewed photo', referenceIds: [fileId] }], activeId: 'photo', previousId: null, lastNarratedId: null, expanded: false, reading: { scrollTop: 0, blockId: null }, media: null }) };
+    const imageTrace = randomUUID(), imageSignal = new AbortController().signal;
+    const preparedImage = await activeCarouselImage(stored.slug, photoContext, applied.library, imageSignal, 'What objects surround the subject?', imageTrace);
+    assert.ok(preparedImage?.image_url.startsWith('data:image/jpeg;base64,'), 'Unfamiliar visual questions keep image context');
+    assert.deepEqual(await activeCarouselImage(stored.slug, photoContext, applied.library, imageSignal, 'Describe it', imageTrace), preparedImage);
+    assert.deepEqual(visitorDiagnostics().filter(event => event.traceId === imageTrace).map(event => event.cacheHit), [false, true]);
+    assert.equal(await activeCarouselImage(stored.slug, photoContext, applied.library, imageSignal, 'What are the opening hours?', imageTrace), undefined);
     const publicResponse = await publicGet(new Request(`${origin}/api/public-files/${stored.slug}/${fileId}?size=thumb`), { params: Promise.resolve({ slug: stored.slug, fileId }) });
     assert.equal(publicResponse.status, 200); assert.equal(publicResponse.headers.get('content-type'), 'image/webp');
     const publicBytes = new Uint8Array(await publicResponse.arrayBuffer()); assert.equal((await sharp(publicBytes).metadata()).height, 480);
@@ -66,6 +76,7 @@ test('photo route lifecycle separates private originals, reviewed revisions and 
     const replaced = await sitePost(json(`/api/sites/${id}`, { action: 'publish', revision: empty.site.revision }), context); assert.equal(replaced.status, 200);
     const current = (await replaced.json()).site;
     await assert.rejects(() => downloadPublishedFile(stored.slug, fileId), /not found/);
+    await assert.rejects(() => activeCarouselImage(stored.slug, photoContext, applied.library, imageSignal, 'Describe it', imageTrace), /no longer published/);
     await assert.rejects(() => modifySite(user, id, current.revision, site => applyCommand(site, { action: 'remove-file', revision: site.revision, fileId })), /retained Undo history/);
     const restored = await modifySite(user, id, current.revision, site => applyCommand(site, { action: 'undo', revision: site.revision }));
     assert.equal(restored.draft.mediaRevisionId, applied.library.id); assert.equal(restored.published?.mediaRevisionId, empty.library.id);

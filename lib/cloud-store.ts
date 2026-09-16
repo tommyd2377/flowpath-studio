@@ -50,7 +50,7 @@ function publishedSnapshot(site: StoredSite): PublishedSite {
   const descriptor = (file: StoredFile): StoredFile => ({ id: file.id, name: file.name, mime: file.mime, size: file.size, kind: file.kind,
     uploadedAt: file.uploadedAt, ...(file.objectPath ? { objectPath: file.objectPath } : {}), ...(file.thumbnailObjectPath ? { thumbnailObjectPath: file.thumbnailObjectPath } : {}) });
   return { siteId: site.id, slug: site.slug, content: site.published!, publishedAt: site.publishedAt!,
-    logo: file ? descriptor(file) : null, mediaFiles: site.files.filter(file => file.kind === 'image' && mediaIds.includes(file.id)).map(descriptor) };
+    logo: file ? descriptor(file) : null, mediaFiles: site.files.filter(file => ['image', 'video'].includes(file.kind) && mediaIds.includes(file.id)).map(descriptor) };
 }
 
 export async function listCloudSites(uid: string): Promise<SiteSummary[]> {
@@ -170,7 +170,7 @@ export async function uploadCloudFile(uid: string, id: string, revision: number,
   const path = variants ? `${base}/display.webp` : base;
   const stored: StoredFile = { id: file.id, name: file.name, mime: file.mime, size: file.size,
     kind: file.kind, uploadedAt: file.uploadedAt, objectPath: path, ...(file.text === undefined ? {} : { text: file.text }),
-    ...(file.image ? { image: file.image } : {}), ...(variants ? { thumbnailObjectPath: `${base}/thumb.webp`, originalObjectPath: `${base}/original`, originalSize: file.originalSize! } : {}) };
+    ...(file.image ? { image: file.image } : {}), ...(file.video ? { video: file.video } : {}), ...(variants ? { thumbnailObjectPath: `${base}/thumb.webp`, originalObjectPath: `${base}/original`, originalSize: file.originalSize! } : {}) };
   await bucket().file(path).save(Buffer.from(file.data!, 'base64'), {
     resumable: false, validation: 'crc32c', preconditionOpts: { ifGenerationMatch: 0 },
     metadata: { contentType: file.mime, cacheControl: 'private, no-store' },
@@ -205,12 +205,12 @@ export async function getCloudPublished(slug: string): Promise<PublishedSite | n
 
 export async function downloadCloudPublishedImage(site: PublishedSite, fileId: string, size: 'display' | 'thumb' = 'display') {
   const file = site.logo?.id === fileId ? site.logo : site.mediaFiles?.find(file => file.id === fileId);
-  if (!file || file.id !== fileId || file.kind !== 'image' || !file.objectPath
+  if (!file || file.id !== fileId || !['image', 'video'].includes(file.kind) || !file.objectPath
     || !new RegExp(`^owners/[a-f0-9]{64}/sites/${site.siteId}/${file.id}(?:/display\\.webp)?$`).test(file.objectPath)) throw new AppError('File not found.', 404);
   const path = size === 'thumb' && file.thumbnailObjectPath ? file.thumbnailObjectPath : file.objectPath;
   if (path !== file.objectPath && path !== file.objectPath.replace(/\/display\.webp$/, '/thumb.webp')) throw new AppError('File not found.', 404);
   const [bytes] = await bucket().file(path).download();
-  if (file.thumbnailObjectPath) return { file, bytes: new Uint8Array(bytes) };
+  if (file.kind === 'video' || file.thumbnailObjectPath) return { file, bytes: new Uint8Array(bytes) };
   const sanitized = await processImage(bytes);
   return { file: { ...file, mime: 'image/webp' }, bytes: new Uint8Array(size === 'thumb' ? sanitized.thumbnail : sanitized.display) };
 }

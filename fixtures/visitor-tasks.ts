@@ -37,3 +37,21 @@ export function taskFixture(vocabulary = publisherVocabularies[0], count = 8): P
 export function fixtureQuery(space: PublicationSpace, where: Expression = { kind: 'all', id: 'criteria', children: [] }): QuerySpec {
   return querySpecSchema.parse({ version: 2, publication: space.publication, queryId: 'query-1', revision: 0, scope: { collectionId: space.rootId, traversal: 'descendants', path: [space.rootId] }, where, preferences: [], order: [], asOf: '2026-09-13', timeZone: 'America/New_York' });
 }
+
+/** Cross-domain publication fixtures for website composition, with overlap and an unknown price. */
+export function websiteTaskFixture(kind: 'products' | 'services', count = 40): PublicationSpace {
+  const products = kind === 'products';
+  const space = taskFixture({ name: products ? 'Celebration cakes' : 'Design services', type: products ? 'product' : 'service', branch: kind, field: products ? 'size' : 'duration', tag: products ? 'flavor' : 'format' }, count);
+  const category = space.fields[1]; category.label = products ? 'Flavor' : 'Format'; category.cardinality = 'one'; category.operations = ['eq']; category.values = products ? ['chocolate', 'vanilla', 'lemon'] : ['remote', 'studio', 'hybrid'];
+  const amount = space.fields[0]; amount.label = products ? 'Size' : 'Duration'; amount.unit = products ? 'cm' : 'minutes';
+  space.fields.push({ id: 'price', label: 'Price', type: 'money', cardinality: 'one', aliases: ['cost'], recordTypes: [products ? 'product' : 'service'], currency: 'USD', basis: products ? 'item' : 'session', operations: ['eq', 'lt', 'lte', 'gt', 'gte'], filter: true, sort: true, facet: false, coverage: { known: count - 1, total: count } });
+  space.records.forEach((record, i) => {
+    const value = String(category.values![i % 3]); record.name = `${value[0].toUpperCase()}${value.slice(1)} ${products ? 'cake' : 'design session'} ${i}`;
+    record.summary = `${products ? 'A celebration cake' : 'A design consultation'} with published options and measurements.`;
+    record.assertions[0].value = { type: 'number', value: 10 + i, unit: amount.unit };
+    record.assertions[1].value = { type: 'enum', value };
+    record.assertions.push({ id: `price-${i}`, fieldId: 'price', value: i === 0 ? null : { type: 'money', value: 20 + i, currency: 'USD', basis: products ? 'item' : 'session' }, polarity: 'affirmed', conditions: [], authority: 'publisher' });
+    record.blocks = [{ id: `description-${i}`, kind: 'paragraph', text: `Published detail for ${record.name}.` }];
+  });
+  return publicationSpaceSchema.parse(space);
+}

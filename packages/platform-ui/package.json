@@ -5,6 +5,8 @@
   "files": ["dist"],
   "sideEffects": ["**/*.css", "./dist/openui-compat.js"],
   "exports": {
+    "./site-design": { "types": "./dist/site-design.d.ts", "import": "./dist/site-design.js" },
+    "./carousel": { "types": "./dist/carousel.d.ts", "import": "./dist/carousel.js" },
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
     "./contracts": { "types": "./dist/contracts.d.ts", "import": "./dist/contracts.js" },
     "./catalog": { "types": "./dist/catalog.d.ts", "import": "./dist/catalog.js" },

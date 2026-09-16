@@ -2,6 +2,8 @@
 
 Design date: 2026-09-13. Status: chosen architecture; M0–M6 now have a local implementation. See the [implementation and evidence report](implementation-report.md) for the actual code map, migration, measured limits, technical adjustments and live authorization boundary. Read with [implementation plan](implementation-plan.md) and [implementation prompt](codex-prompt.md).
 
+The [whole-website filtering implementation](whole-website-filtering.md) supersedes the detached collection-surface design below. It documents the authoritative confirmed visitor view, integrated native renderer, Home/Back/reset semantics and current verification.
+
 ## 1. Decision and product contract
 
 Extend the existing website assistant into a general task system. Keep fast navigation, the semantic graph, controlled React components and Motion. Add hierarchical publication spaces, a first-class query layer and reusable capability execution beneath voice, chat and direct manipulation.

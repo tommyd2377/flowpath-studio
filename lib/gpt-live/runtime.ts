@@ -4,7 +4,8 @@ import { liveSessionUrl, liveText, type LiveAudioState, type LiveHistory, type L
 export type LiveSocket = Pick<WebSocket, 'readyState' | 'send' | 'close' | 'terminate' | 'on'>;
 export type LiveRuntimeOptions = {
   sessionId: string; apiKey: string; history?: LiveHistory; signal?: AbortSignal;
-  delegate: (context: { transcripts: LiveTranscript[]; history: LiveHistory }, signal: AbortSignal) => Promise<{ text: string; silent?: boolean }>;
+  acceptDelegation?: () => boolean;
+  delegate: (context: { transcripts: LiveTranscript[]; history: LiveHistory; report: (kind: 'thinking' | 'commentary', text: string) => void }, signal: AbortSignal) => Promise<{ text: string; silent?: boolean }>;
   onTranscript?: (fragment: LiveTranscript) => void;
   onUsage?: (usage: LiveUsage) => void; onBusy?: (busy: boolean) => void;
   onTaskError?: (message: string) => void;
@@ -90,18 +91,24 @@ export function createLiveRuntime(options: LiveRuntimeOptions) {
   function abort() { void close(); }
   async function run(id: string) {
     if (!enabled || closing) { pending = id; return; }
+    // Reject status/backchannel or stale delegations before touching active work.
+    if (options.acceptDelegation?.() === false) return;
     task?.abort();
     const controller = new AbortController(); task = controller;
     const version = ++epoch;
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(options.taskTimeoutMs ?? 35_000)]);
+    let rejectAbort!: () => void;
+    const aborted = new Promise<never>((_, reject) => { rejectAbort = () => reject(signal.reason); });
+    signal.addEventListener('abort', rejectAbort, { once: true });
     options.onBusy?.(true);
     try {
       // A delegation is a task signal, not text. Preserve exact transcript fragments.
-      const context = { history: options.history ?? [], transcripts: transcripts.map(item => ({ ...item })) };
+      const context = { history: options.history ?? [], transcripts: transcripts.map(item => ({ ...item })),
+        report: (kind: 'thinking' | 'commentary', text: string) => { if (!closing && version === epoch && !signal.aborted) append(kind, text, id); } };
       if (!context.transcripts.some(item => item.role === 'user')) {
         append('commentary', 'Please repeat what you would like help with.', id); return;
       }
-      const result = await options.delegate(context, signal);
+      const result = await Promise.race([options.delegate(context, signal), aborted]);
       signal.throwIfAborted();
       if (closing || version !== epoch) return;
       if (!result.silent) append('commentary', result.text, id);
@@ -112,6 +119,7 @@ export function createLiveRuntime(options: LiveRuntimeOptions) {
         append('commentary', `${message} You can try another question or use the page controls.`, id);
       }
     } finally {
+      signal.removeEventListener('abort', rejectAbort);
       if (version === epoch) { task = undefined; options.onBusy?.(false); }
     }
   }

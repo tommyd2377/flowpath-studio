@@ -238,12 +238,45 @@ html[data-theme="dark"] .media-files-heading p{color:#a6b4cf}
 .website-design-preview .platform-website { padding: 20px; }
 .website-preview summary { cursor: pointer; padding-block: 12px; font-weight: 600; }
 .website-preview-detail { padding: 24px; white-space: pre-wrap; border-top: 1px solid var(--platform-line); }
-/* Imported websites keep the assistant invitation behind the explicit Home action. */
-.voice-template[data-website-entry=website]:has(.visitor-workspace[data-browsing=true]) [data-voice-dock] { display: none; }
-
 /* Publisher review reads as content first; detailed evidence remains accessible. */
 .knowledge-content-review { display: grid; gap: 12px; margin: 16px 0; }
 .knowledge-content-review > article { padding: 18px; border: 1px solid var(--border, #343537); border-radius: 12px; overflow-wrap: anywhere; }
 .knowledge-content-review p { line-height: 1.65; white-space: pre-wrap; }
 .knowledge-review-confirm { display: grid; gap: 14px; padding: 18px; margin: 18px 0; border: 1px solid var(--border, #343537); border-radius: 12px; }
 .knowledge-review-confirm label { line-height: 1.6; font-size: 14px; }
+
+/* Independent website beneath the voice/chat carousel. No background scene observation. */
+.voice-template[data-visitor-site] { container-type: normal; }
+.website-detail { color: var(--platform-text, #292620); background: var(--platform-bg, #f8f3e9); border: 1px solid var(--platform-line, #d3caba); border-radius: 18px; padding: 0; width: min(860px, calc(100vw - 32px)); max-height: 88dvh; box-shadow: 0 30px 90px #0004; }
+.website-detail::backdrop { background: #12171080; backdrop-filter: blur(5px); }
+.website-detail article { padding: clamp(24px, 4vw, 48px); }
+.website-detail h2 { font: 400 clamp(30px, 4vw, 48px)/1.15 Georgia, serif; }
+.website-detail p { white-space: pre-line; line-height: 1.8; }
+.website-detail .platform-media-image { width: 100%; max-height: 55dvh; }
+.website-detail-close { float: right; min-height: 44px; color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 24px; padding: 8px 18px; cursor: pointer; }
+
+/* Source review and template detail additions. */
+.knowledge-related-files { margin: 16px 0; }
+.knowledge-related-files label { display: flex; gap: 12px; align-items: start; padding: 10px 0; font-size: 14px; overflow-wrap: anywhere; }
+.source-management-row { display: grid; gap: 8px; padding: 16px 0; border-top: 1px solid var(--line); }
+.source-file-progress { list-style: none; padding: 0; }
+.source-file-progress li { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.source-file-progress span { display: block; font-size: 13px; color: var(--muted); margin-top: 5px; }
+.source-impact { padding: 20px; margin: 20px 0; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.source-impact dl { display: grid; gap: 14px; }
+.source-impact dt { font-weight: 600; font-size: 13px; }
+.source-impact dd { margin: 5px 0 0; font-size: 14px; color: var(--muted); }
+.source-impact p, .source-partial p, .source-partial label { font-size: 13px; line-height: 1.65; }
+.source-partial { padding: 16px; border: 1px solid var(--line); margin: 16px 0; }
+[data-site-template] .website-detail { border-radius: var(--platform-radius); }
+[data-site-template] .website-detail article { padding: calc(32px * var(--platform-space-scale)); }
+[data-site-template] .website-detail h2 { font-family: var(--platform-heading-font); font-weight: var(--platform-heading-weight); }
+[data-site-template] .website-detail p { font-size: calc(16px * var(--platform-text-scale)); }
+[data-site-template] .website-detail-close { background: var(--platform-accent); color: var(--platform-on-accent); border: 0; border-radius: var(--platform-radius); }
+[data-site-template] .website-detail { font-family: var(--platform-body-font); }
+[data-site-template=editorial] .website-detail h2 { border-bottom: 3px double var(--platform-border); padding-bottom: 24px; }
+[data-site-template=showcase] .website-detail { width: min(1040px, calc(100vw - 32px)); }
+[data-site-template=showcase] .website-detail h2 { font-size: clamp(32px, 5vw, 64px); letter-spacing: -.045em; }
+[data-site-template=clarity] .website-detail { background: var(--platform-surface); }
+[data-site-template=clarity] .website-detail h2 { padding-left: 20px; border-left: 4px solid var(--platform-accent); }
+.voice-template[data-site-template] { background: var(--platform-bg); }

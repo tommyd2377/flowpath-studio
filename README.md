@@ -7,6 +7,8 @@ A general-purpose, AI-native website publishing platform. Publishers supply thei
 
 Studio turns source material into reviewable knowledge and media, then publishes an immutable snapshot. Visitors explore it through controlled React components, typed requests and optional voice. Models select approved content and interface components; they do not generate arbitrary HTML/CSS or invent business capabilities.
 
+**Editorial, Showcase and Clarity** provide three distinct website templates, with actual-content previews and simple palette, typography, text-size and spacing controls in Branding. Related files share one review, and source withdrawal preserves supported facts and publisher corrections. Existing sites opt in without migration or reimport. See the [implementation and publisher guide](docs/templates-and-source-lifecycle.md) and [visual evidence](docs/screenshots/templates/README.md).
+
 **Status:** working local pilot with semantic ingestion, publisher correction, photos/albums and a shared visitor runtime. Firebase and direct model integrations are implemented but require separate configuration and live verification. This is not yet a complete commercial hosting or billing service.
 
 The application displays **FlowPath Studio**. Existing identifiers (`voice-platform`, `@thevoice/platform-ui`, `VOICE_*`) are retained. The separate FlowPath/news application is a reference implementation and test publisher, not a dependency or a template for this platform.
@@ -33,10 +35,10 @@ The demo is a single local owner with Git-ignored storage under `data/`. It is f
 
 1. Create a site using **Start from my content**, or explore an existing sample.
 2. In **Files**, upload a synthetic CSV or labeled TXT file from [`fixtures/source-packs`](fixtures/source-packs). Text-bearing PDFs, DOCX, XLSX, HTML and OCR-capable images are also supported.
-3. Open **Knowledge → Interpret source**. Review discovered entities, attributes, collections, relationships and likely visitor needs. Correct fields directly, or try an exact-name rename through the demo correction controls.
+3. Open **Knowledge → Interpret source**, or include up to five related files for a combined review. Review file results, changes, entities, attributes, collections, relationships and likely visitor needs. Correct fields directly, or try an exact-name rename through the demo correction controls.
 4. **Apply to draft**. In **Files → Photos**, add individual images, a batch or a folder. Review album names, labels and connections to knowledge items or information sections. Mark illustrative images as examples.
 5. Configure **Content → Opening experience** with highlights, featured items and tone. Choose chat, voice or both under **Visitor conversations**. Browsing never requires voice; the current conversation setting initially defaults to voice.
-6. Review the desktop/mobile preview and **Publish**. The saved snapshot appears at `/s/{slug}`. Later draft changes remain private until republished; **Undo** restores prior draft content.
+6. Choose a template and basic styling in **Branding**, save the draft, review the desktop/mobile preview and **Publish**. The saved snapshot appears at `/s/{slug}`. Later draft changes remain private until republished; **Undo** restores prior draft content.
 7. Explore cards, filters, comparisons, details, relationships and photo galleries. Manual controls and `/lab` use the same shared component library without model calls.
 
 Local interpretation supports CSV and compatible multi-sheet XLSX tables, labeled TXT/DOCX/HTML structures and text-bearing PDFs. Free-form interpretation and broader conversational correction require a configured model. OCR uses local Tesseract when installed or an explicitly configured/injected worker; this repository does not deploy that worker. Scanned PDF pages, unsupported Office structures and incomplete extraction fail explicitly. Review exact source locations, singleton facts, conditions and identity suggestions before Apply; publishing remains separate.
@@ -46,8 +48,9 @@ Local interpretation supports CSV and compatible multi-sheet XLSX tables, labele
 | Area | Current behavior |
 | --- | --- |
 | Studio | Multiple sites, chat proposals, branding/content editing, draft and published previews, approval, publication and Undo |
+| Templates | Editorial, Showcase and Clarity; actual-content previews, independent style controls, accessible palettes, local licensed fonts and compatible legacy styles |
 | Website import | Bounded public HTML/sitemap discovery, selected-page imports, original-quality image downloads, saved knowledge and native design review, mobile preview, separate Apply/Publish; JavaScript execution is not migrated. See [website import](docs/website-import.md). |
-| Knowledge | Bounded multi-format ingestion, private field/fact/relationship evidence, singleton/temporal assertions, identity review, correction history and publication-scoped retrieval |
+| Knowledge | Bounded multi-format and related-file ingestion, explicit partial review, source replacement/withdrawal, private field/fact/relationship evidence, singleton/temporal assertions, identity review, correction history and publication-scoped retrieval |
 | Media | PNG/JPEG/WebP upload, folder albums, optional group context, captions/alt/credit, actual/example connections, covers and lead images |
 | Visitor interface | Controlled cards, conversational filtering, details, comparisons, selections, relationships, explicit links and galleries; typed requests and bounded continuous voice that preserves manual browsing |
 | Reliability | Schema/reference validation, local OpenUI parsing, stale-response protection, manual-interaction cancellation, fallbacks and reduced motion |
@@ -94,8 +97,11 @@ npm run test:browser
 | `npm test` | Server/contract and React rendering tests |
 | `npm run test:package` | Pack and consume the shared package from a separate temporary project |
 | `npm run test:browser` | Production browser suite on port 3225 with isolated temporary demo data |
+| `npm run test:recorder` | Development-only local recording controls, timeline and export in an isolated browser on port 3225 |
 
 The browser suite rejects unexpected external browser requests and microphone access. Storage/provider transports are mocked in unit tests; image decoding, PDF extraction, local persistence, OpenUI parsing and browser rendering are exercised locally. Passing tests does not establish live model quality, hosted Firebase behavior or billing accuracy.
+
+For local voice/chat investigations, use the opt-in [test recorder and timeline](docs/local-visitor-testing.md) to capture transcripts, actual model inputs, actions and screen acknowledgments with timestamped problem markers. It is disabled in production and does not add model calls.
 
 An optional [manual validation workflow example](docs/examples/github-actions-validate.yml) is included as documentation. It is not installed in `.github/workflows`, so no GitHub Actions job runs from this repository. An authorized maintainer can review and copy it there later using a GitHub login with workflow permissions. The example uses explicit manual launch, read-only repository permissions and no deployment step. See [GitHub's manual workflow guide](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
 
@@ -137,4 +143,4 @@ This repository is private. No open-source license is included; visibility, lice
 
 ## Visitor task system
 
-Hierarchical publication spaces now support shared records, nested collections, conversational and manual filtering, persistent selections, typed capability composition, editable artifacts and synthetic commerce/scheduling reviews. The v2 path streams and reviews up to 10,000 records without hydrating the public page or model context with the full catalog. Existing v1 publications remain readable. See the [implementation report](docs/visitor-task-system/implementation-report.md) for migration, constraints, offline/browser evidence and separate live acceptance steps.
+Hierarchical publication spaces support shared records, nested collections, conversational and manual filtering, persistent selections, typed capability composition, editable artifacts and synthetic commerce/scheduling reviews. The normal website is independent. Voice and chat open a shared carousel layer above it; filtering, details and Back operate within that layer and retain its criteria and ordering. The v2 path streams and reviews up to 10,000 records without hydrating the public page or model context with the full catalog. Existing v1 publications remain readable. See [the AI carousel layer](docs/visitor-task-system/ai-layer-implementation.md) for current state, rendering and verification, and the [implementation report](docs/visitor-task-system/implementation-report.md) for earlier migration and capability work.

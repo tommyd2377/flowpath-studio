@@ -68,6 +68,70 @@ async function ask(page: Page, text: string) {
 }
 async function settled(page: Page) { await expect(focus(page)).toHaveAttribute('data-workspace-transition', 'settled'); }
 
+for (const mobile of [false, true]) test(`typed chat navigates the complete panel lifecycle${mobile ? ' on mobile' : ''}`, async ({ page }, info) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  if (mobile) { await page.setViewportSize({ width: 390, height: 844 }); await page.emulateMedia({ reducedMotion: 'reduce' }); }
+  await page.route(/^https?:\/\//, route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort('blockedbyclient'));
+  let site: Site = (await post(page, '/api/sites', { name: 'Panel navigation walkthrough', slug: `panel-chat-${randomUUID().slice(0, 10)}`, kind: 'photographer' })).site;
+  site = (await post(page, `/api/sites/${site.id}`, { action: 'save', revision: site.revision, content: { ...site.draft,
+    visitorSpeaksFirst: true, visitor: { ...site.draft.visitor, enabled: true, mode: 'chat' },
+  } })).site;
+  site = (await post(page, `/api/sites/${site.id}`, { action: 'publish', revision: site.revision })).site;
+  await page.goto(`/s/${site.slug}`);
+  await ask(page, 'Open Wedding stories'); await settled(page);
+  await expect(focus(page).getByRole('heading', { name: 'Wedding stories', exact: true })).toBeVisible();
+  await ask(page, 'Open Portrait sessions'); await settled(page);
+  await expect(cards(page)).toHaveCount(2);
+  await expect(focus(page).getByRole('heading', { name: 'Portrait sessions', exact: true })).toBeVisible();
+  await page.screenshot({ path: info.outputPath('01-two-panels.png') });
+  await ask(page, 'Go back to the workspace');
+  await expect(page.locator('[data-workspace-focused]')).toHaveCount(0);
+  await expect(cards(page)).toHaveCount(2);
+  await page.screenshot({ path: info.outputPath('02-workspace-overview.png') });
+  await ask(page, 'Open Wedding stories'); await settled(page);
+  await ask(page, 'Close Portrait sessions');
+  await expect(cards(page)).toHaveCount(1);
+  await expect(focus(page).getByRole('heading', { name: 'Wedding stories', exact: true })).toBeVisible();
+  // Repeating a named close must not substitute the remaining foreground panel.
+  await page.getByRole('textbox', { name: 'What would you like to see?', exact: true }).fill('Close Portrait sessions');
+  await page.getByRole('button', { name: 'Show me', exact: true }).click();
+  await expect(page.locator('.visitor-workspace [role="alert"]')).toContainText('Which open object do you mean?');
+  await expect(cards(page)).toHaveCount(1);
+  await expect(focus(page).getByRole('heading', { name: 'Wedding stories', exact: true })).toBeVisible();
+  await ask(page, 'Expand this panel'); await expect(cards(page).first()).toHaveAttribute('data-expanded', 'true');
+  await ask(page, 'Collapse this panel');
+  await expect(page.locator('[data-workspace-focused]')).toHaveCount(0);
+  await expect(cards(page).first()).toHaveAttribute('data-expanded', 'false');
+  await ask(page, 'Open Portrait sessions'); await settled(page);
+  await ask(page, 'Close this panel'); await expect(cards(page)).toHaveCount(1);
+  await expect(page.locator('[data-workspace-focused]')).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('03-partial-close.png') });
+  await ask(page, 'Close all panels');
+  await expect(cards(page)).toHaveCount(0); await expect(page.locator('[data-workspace-focused]')).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('04-cleared.png') });
+  await ask(page, 'Open Contact'); await settled(page);
+  await expect(focus(page)).toContainText('hello@sophie.example');
+  await ask(page, 'Go home'); await expect(cards(page)).toHaveCount(0);
+  await ask(page, 'Browse the website'); await expect(page.locator('[data-published-website]')).toBeVisible();
+  await ask(page, 'Open Wedding stories'); await settled(page);
+  await ask(page, 'Go back to the workspace');
+  await expect(page.locator('[data-workspace-focused]')).toHaveCount(0);
+  await expect(page.locator('[data-published-website]')).toHaveCount(0);
+  await expect(cards(page)).toHaveCount(1);
+  await page.screenshot({ path: info.outputPath('05-reopened.png') });
+  // Exercise keyboard focus/return on these same panels, independently of the
+  // catalog's website-query surface. The mobile case has reduced motion enabled.
+  await expect(page.locator('.platform-conversation-backdrop')).toHaveCount(0);
+  const opener = cards(page).first().locator('[data-workspace-open]');
+  await opener.scrollIntoViewIfNeeded(); await opener.focus(); await opener.press('Enter'); await settled(page);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('[data-workspace-focused]')).toHaveCount(0);
+  await expect(opener).toBeFocused();
+  await expect(cards(page)).toHaveCount(1);
+  expect(errors).toEqual([]);
+});
+
 test('address/email/photo/map objects coexist, return symmetrically, and keyboard lightbox is modal', async ({ page }, info) => {
   const { site, ids } = await prepare(page);
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
@@ -285,7 +349,7 @@ test('integration: real CSV Apply and Publish exposes separately controlled cont
   expect((await (await page.request.get(`/s/${site.slug}`)).text()).includes('independent-contact.csv')).toBe(false);
 });
 
-test('integration: an oversized detail retains the workspace and permits ordinary browsing of a narrow fact', async ({ page }) => {
+test('integration: long published details use bounded native field pages', async ({ page }) => {
   await prepare(page, 'studio', graph => {
     for (let i = 0; i < 23; i++) {
       graph.attributes.push({ id: `long-${i}`, label: `Long field ${i}`, type: 'text' });
@@ -296,14 +360,17 @@ test('integration: an oversized detail retains the workspace and permits ordinar
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.getByRole('button', { name: 'Browse published content' }).click();
   const directory = page.getByRole('region', { name: 'Browse approved information' });
-  await directory.getByRole('textbox').fill('Blue Bowl');
-  await directory.getByRole('button', { name: 'Open Blue Bowl', exact: true }).click(); await settled(page);
-  await expect(focus(page)).toContainText('This view is too large or unavailable');
-  await focus(page).getByRole('button', { name: 'Back to workspace' }).click(); await expect(focus(page)).toHaveCount(0);
-  await directory.getByRole('textbox').fill('Long field 0');
-  await directory.getByRole('button', { name: 'Open Long field 0 · Blue Bowl', exact: true }).click(); await settled(page);
-  await expect(focus(page)).toContainText('Long approved description.');
-  await expect(cards(page)).toHaveCount(2); expect(errors).toEqual([]);
+  await ask(page, 'Search for Blue Bowl');
+  await expect(directory.getByRole('region', { name: 'Website content' })).toHaveAttribute('aria-busy', 'false');
+  await directory.getByRole('button', { name: 'Open Blue Bowl', exact: true }).click();
+  const detail = directory.getByRole('region', { name: 'Record detail' });
+  await expect(detail).toContainText('Long field 0'); await expect(detail).toContainText('Long approved description.');
+  await expect(directory.getByRole('region', { name: 'Website content' })).toHaveAttribute('aria-busy', 'false');
+  await detail.getByRole('button', { name: 'More published details' }).click();
+  await expect(detail).toContainText('Long field 22');
+  await expect(directory.getByRole('region', { name: 'Website content' })).toHaveAttribute('aria-busy', 'false');
+  await directory.getByRole('button', { name: 'Back to results' }).click();
+  await expect(detail).toHaveCount(0); expect(errors).toEqual([]);
 });
 
 test('explicit v2 migration keeps publisher links and shared photo albums in query browsing', async ({ page }) => {
@@ -312,13 +379,14 @@ test('explicit v2 migration keeps publisher links and shared photo albums in que
   expect(migration.review.metadata.links[0].id).toBe('publisher-contact');
   site = (await post(page, `/api/sites/${site.id}/collections`, { action: 'apply', reviewId: migration.review.id, revision: migration.review.revision, siteRevision: site.revision })).site;
   site = (await post(page, `/api/sites/${site.id}`, { action: 'publish', revision: site.revision })).site;
-  await page.goto(`/s/${site.slug}`); await page.getByRole('button', { name: 'Browse and filter collections' }).click();
-  const results = page.getByRole('region', { name: 'Collection results', exact: true });
+  await page.goto(`/s/${site.slug}`); await page.getByRole('button', { name: 'Browse published content' }).click();
+  const results = page.getByRole('region', { name: 'Website content', exact: true });
   await expect(results.getByRole('link', { name: 'Publisher contact' })).toHaveAttribute('href', 'https://example.com/contact');
-  await results.getByRole('button', { name: 'Published photos', exact: true }).click();
-  await expect(results.getByRole('status')).toHaveText('2 matching records');
+  await ask(page, 'Show me Published photos');
+  await expect(results.getByRole('status')).toHaveText('2 matching items');
+  await expect(results).toHaveAttribute('aria-busy', 'false');
   await expect(results.getByRole('img', { name: 'Synthetic approved item 1', exact: true })).toBeVisible();
-  await expect(results.getByText('Illustrative example', { exact: true })).toBeVisible();
-  await results.getByRole('button', { name: 'Items', exact: true }).click();
+  await expect(results.getByText('Example photo', { exact: true })).toBeVisible();
+  await ask(page, 'Show me Items');
   await expect(results.locator('[data-task-record]')).toHaveCount(2);
 });

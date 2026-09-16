@@ -31,7 +31,7 @@ test('prose retains complete reading text, bounded blocks and stable identity wi
 
 test('topics become reading sections, leaf collections organize names and all references remain addressable', () => {
   const graph = withDocumentReading(catalog(), { format: 'pdf', text: 'Complete source text' });
-  const content = { ...initialSite('general').draft, sections: [], knowledgeRevisionId: graph.id };
+  const content = { ...initialSite('general').draft, style: undefined, sections: [], knowledgeRevisionId: graph.id };
   const authority = publishedWorkspace(content, graph);
   const sections = websiteSections(authority, content, graph);
   assert.equal(sections[0].kind, 'stories');
@@ -53,7 +53,7 @@ test('reviewed business photos are spread between sections without inventing ite
     associations: Array.from({ length: 14 }, (_, index) => ({ id: `association-${index}`, assetId: `photo-${index}`, targetType: index === 2 ? 'entity' : 'site', ...(index === 2 ? { targetId: 'history' } : {}), primary: index === 1, role: index === 3 ? 'example' : 'depicts' })),
   });
   const original = structuredClone(media);
-  const content = { ...initialSite('general').draft, sections: [], logoAssetId: 'photo-0', knowledgeRevisionId: graph.id };
+  const content = { ...initialSite('general').draft, style: undefined, sections: [], logoAssetId: 'photo-0', knowledgeRevisionId: graph.id };
   const authority = publishedWorkspace(content, graph, media);
   const sections = websiteSections(authority, content, graph, media);
   const highlights = sections.filter(section => section.navigation === false);

@@ -3,12 +3,7 @@ import { useState } from 'react';
 import { visitorArtifactSchema, type VisitorArtifact } from './artifacts.js';
 import { fakeQuoteSchema, fakeBookingSchema, fakeReceiptSchema, fakeSlotSchema, fakeLineSchema } from './business.js';
 import { ExternalSearchResults, type ExternalSearchResult } from './ExternalSearchResults.js';
-import { EntityMedia, MediaImage } from './MediaViews.js';
-import type { TaskRecordCard } from './task-view.js';
 
-export function QueryCollection({ records, selected, view, busy, onDetail, onSelect }: { records: TaskRecordCard[]; selected: string[]; view: string; busy: boolean; onDetail: (id: string) => void; onSelect: (id: string, selected: boolean) => void }) {
-  return <div className="platform-query-records" data-view={view}>{records.map(record => <article key={record.id} data-task-record={record.id} className="platform-query-card"><>{record.media ? <figure><MediaImage assetId={record.media.assetId}/>{record.media.role === 'example' && <figcaption>Illustrative example</figcaption>}</figure> : <EntityMedia targetId={record.id} includeExamples/>}</><span>{record.code} · {record.type}</span><h3><button type="button" className="text-button" onClick={() => onDetail(record.id)}>{record.name}</button></h3><p>{record.summary}</p><dl>{record.values.map(field => <div key={field.fieldId}><dt>{field.label}</dt><dd>{field.text}</dd></div>)}</dl><button type="button" className="button secondary" aria-disabled={busy} aria-pressed={selected.includes(record.id)} onClick={() => { if (!busy) onSelect(record.id, !selected.includes(record.id)); }}>{selected.includes(record.id) ? 'Remove from selection' : 'Select'} {record.name}</button></article>)}</div>;
-}
 export function TaskProgress({ busy, label }: { busy: boolean; label: string }) { return <div role="status" aria-live="polite">{busy ? 'Updating collection…' : label}</div>; }
 type Run = (capability: string, input: unknown) => void;
 function ArtifactEditor({ artifact, busy, run, exportArtifact }: { artifact: VisitorArtifact; busy: boolean; run: Run; exportArtifact: (id: string) => void }) {

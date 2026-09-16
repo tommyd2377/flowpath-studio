@@ -18,10 +18,10 @@ class Socket extends EventEmitter {
   frame(value: object) { this.emit('message', Buffer.from(JSON.stringify(value))); }
 }
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));
-function harness(delegate: Parameters<typeof createLiveRuntime>[0]['delegate'], onTaskError?: (message: string) => void) {
+function harness(delegate: Parameters<typeof createLiveRuntime>[0]['delegate'], onTaskError?: (message: string) => void, overrides: Partial<Parameters<typeof createLiveRuntime>[0]> = {}) {
   const socket = new Socket(), failures: string[] = [];
   const live = createLiveRuntime({ sessionId: 'live_test', apiKey: 'synthetic', delegate, closeTimeoutMs: 10,
-    onFatal: message => failures.push(message), onTaskError, socketFactory: (url) => { assert.equal(url, 'wss://api.openai.com/v1/live/sessions/live_test/attach'); return socket as unknown as LiveSocket; } });
+    onFatal: message => failures.push(message), onTaskError, socketFactory: (url) => { assert.equal(url, 'wss://api.openai.com/v1/live/sessions/live_test/attach'); return socket as unknown as LiveSocket; }, ...overrides });
   socket.open(); live.start();
   return { live, socket, failures };
 }
@@ -86,6 +86,30 @@ test('a newer delegation invalidates a pending answer, including late backend re
   transcript(h.socket, 'Actually new', 600); delegate(h.socket, 'item_new'); await flush(); complete({ text: 'Old answer' }); await flush();
   assert.ok(!h.socket.sent.some(x => x.content === 'Old answer')); assert.ok(h.socket.sent.some(x => x.content === 'New answer'));
   await h.live.close();
+});
+
+test('progress belongs to its request and a rejected delegation preserves active work', async () => {
+  let accepted = true, finish!: (result: { text: string }) => void, signal!: AbortSignal;
+  let report!: Parameters<Parameters<typeof createLiveRuntime>[0]['delegate']>[0]['report'];
+  const busy: boolean[] = [];
+  const h = harness(async (context, current) => { signal = current; report = context.report; return new Promise(resolve => { finish = resolve; }); }, undefined,
+    { acceptDelegation: () => accepted, onBusy: value => busy.push(value) });
+  transcript(h.socket, 'Research this.'); delegate(h.socket); await flush();
+  report('commentary', 'Working.'); accepted = false; delegate(h.socket, 'status'); await flush();
+  assert.equal(signal.aborted, false); assert.deepEqual(busy, [true]);
+  assert.ok(h.socket.sent.some(event => event.content === 'Working.' && event.delegation_id === 'item_task'));
+  h.live.interrupt(); report('commentary', 'Stale progress'); finish({ text: 'Stale answer' }); await flush();
+  assert.equal(h.socket.sent.some(event => String(event.content).startsWith('Stale')), false);
+  assert.deepEqual(busy, [true, false]); await h.live.close();
+});
+
+test('the task deadline clears busy state even if the backend ignores abort', async () => {
+  const busy: boolean[] = [], errors: string[] = [];
+  const h = harness(async () => new Promise(() => {}), message => errors.push(message), { taskTimeoutMs: 10, onBusy: value => busy.push(value) });
+  transcript(h.socket, 'Research this.'); delegate(h.socket);
+  await new Promise(resolve => setTimeout(resolve, 25));
+  assert.deepEqual(busy, [true, false]); assert.deepEqual(errors, ['That request took too long to complete.']);
+  assert.equal(h.live.busy, false); await h.live.close();
 });
 
 test('duration updates are cumulative and finalization requires session.closed', async () => {

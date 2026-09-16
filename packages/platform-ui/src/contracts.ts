@@ -79,7 +79,7 @@ export const capabilityDefinitionSchema = z.object({
 export const knowledgeCatalogSchema = z.object({
   schemaVersion: z.literal(1), id, name: label, description: z.string().max(3000),
   attributes: z.array(attributeDefinitionSchema).max(24),
-  entities: z.array(catalogEntitySchema).min(1).max(100),
+  entities: z.array(catalogEntitySchema).max(100),
   collections: z.array(catalogCollectionSchema).max(24),
   relationships: z.array(catalogRelationshipSchema).max(200),
   facts: z.array(catalogFactSchema).max(2000).optional(),

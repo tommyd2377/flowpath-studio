@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { greetingPointSchema, WELCOME_MESSAGE_MAX_LENGTH } from './site-greeting';
 import { visitorSettingsSchema } from './visitor-model';
 import { exploreSettingsSchema } from './explore-model';
+import { siteDesignSchema } from '@thevoice/platform-ui/site-design';
 
 export const sectionSchema = z.object({
   id: z.string().trim().min(1).max(80),
@@ -25,6 +26,7 @@ const openingSchema = z.object({
 
 export const contentSchema = z.object({
   name: z.string().trim().min(1).max(80),
+  tagline: z.string().trim().max(180).optional(),
   headline: z.string().trim().min(1).max(140),
   description: z.string().trim().max(1500),
   hours: z.string().trim().max(180),
@@ -33,7 +35,7 @@ export const contentSchema = z.object({
   logoAssetId: z.string().uuid().nullable(),
   welcomeMessage: z.string().trim().max(WELCOME_MESSAGE_MAX_LENGTH).optional(),
   greetingPoints: z.array(greetingPointSchema.nullable()).length(3).optional(),
-  style: z.object({ layout: z.enum(['balanced', 'editorial', 'compact']), palette: z.enum(['midnight', 'forest', 'parchment']), entry: z.enum(['assistant', 'website']).optional() }).strict().optional(),
+  style: siteDesignSchema.optional(),
   visitorSpeaksFirst: z.boolean().optional(),
   visitor: visitorSettingsSchema.optional(),
   explore: exploreSettingsSchema.optional(),
@@ -53,7 +55,8 @@ export function nativeWebsiteContent<T>(content: T): T {
 }
 
 export type SiteContent = z.infer<typeof contentSchema>;
-export type SiteFile = { id: string; name: string; mime: string; size: number; uploadedAt: string; kind: 'image' | 'text' | 'pdf';
+export type SiteFile = { id: string; name: string; mime: string; size: number; uploadedAt: string; kind: 'image' | 'text' | 'pdf' | 'video';
+  video?: { duration: number; width: number; height: number };
   image?: { width: number; height: number; hash: string; caption?: string; credit?: string } };
 export type Change = { label: string; before: string; after: string };
 export type ChatMessage = {
@@ -78,7 +81,7 @@ export function summarize(site: Site): SiteSummary {
 }
 
 export function describeChanges(before: SiteContent, after: SiteContent): Change[] {
-  const labels: Record<Exclude<keyof SiteContent, 'sections'>, string> = { name: 'Site name', headline: 'Headline', description: 'Introduction',
+  const labels: Record<Exclude<keyof SiteContent, 'sections'>, string> = { name: 'Site name', tagline: 'Tagline', headline: 'Headline', description: 'Introduction',
     hours: 'Opening hours', contact: 'Contact', accent: 'Brand color', logoAssetId: 'Logo',
     welcomeMessage: 'Welcome message', greetingPoints: 'Spoken greeting points', style: 'Visitor style', visitorSpeaksFirst: 'Conversation opening', visitor: 'Visitor conversations', explore: 'Search and explore', knowledgeRevisionId: 'Knowledge revision', catalogPublicationId: 'Collection publication', mediaRevisionId: 'Photos and albums', opening: 'Opening experience' };
   const display = (content: SiteContent, key: keyof typeof labels) => key === 'visitor'

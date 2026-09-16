@@ -10,6 +10,7 @@ import { annotationMatches, exploreCommandSchema, exploreResultSchema, exploreSe
 import { validateWorkspace, workspaceBatchSchema, workspaceRecord, referenceKey } from '@thevoice/platform-ui/workspace';
 import { publishedWorkspace } from './visitor-workspace';
 import { visitorTaskViewSchema } from '@thevoice/platform-ui/task-view';
+import { carouselNavigationSchema } from './visitor-carousel-control';
 
 export { visitorScreenSchema, visitorContextSchema, visitorHistorySchema } from './visitor-request';
 export type { VisitorContext, VisitorHistory } from './visitor-request';
@@ -25,12 +26,15 @@ export type VisitorControlUpdate = z.infer<typeof visitorControlSchema>;
 export const visitorControlCapabilitySchema = z.object({ id: z.string().uuid(), token: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict();
 export type VisitorControlCapability = z.infer<typeof visitorControlCapabilitySchema>;
 export const visitorNavigationSchema = z.discriminatedUnion('kind', [
+  carouselNavigationSchema.extend({ kind: z.literal('carousel') }).strict(),
+  z.object({ kind: z.literal('answer'), text: z.string().max(2000) }).strict(),
   z.object({ kind: z.literal('task'), view: visitorTaskViewSchema }).strict(),
   z.object({ kind: z.literal('workspace'), batch: workspaceBatchSchema }).strict(),
   z.object({ kind: z.literal('explore'), result: exploreResultSchema.optional(), command: exploreCommandSchema.optional() }).strict().refine(value => Boolean(value.result) !== Boolean(value.command), 'Supply one search view or command.'),
-  z.object({ kind: z.enum(['open', 'expand', 'spotlight']), id: z.string().min(1).max(100) }).strict(),
+  z.object({ kind: z.enum(['open', 'focus', 'expand', 'spotlight']), id: z.string().min(1).max(100) }).strict(),
+  z.object({ kind: z.enum(['close', 'collapse']), id: z.string().min(1).max(100).optional() }).strict(),
   z.object({ kind: z.literal('compare'), ids: z.array(z.string().min(1).max(100)).min(2).max(6) }).strict(),
-  z.object({ kind: z.enum(['home', 'browse', 'clear', 'back', 'collapse', 'up', 'down', 'next_section', 'previous_section']) }).strict(),
+  z.object({ kind: z.enum(['home', 'browse', 'clear', 'back', 'unfocus', 'up', 'down', 'next_section', 'previous_section']) }).strict(),
   z.object({ kind: z.literal('top') }).strict(), z.object({ kind: z.literal('bottom') }).strict(),
   z.object({ kind: z.literal('entity'), id: z.string().min(1).max(100) }).strict(),
   z.object({ kind: z.literal('source'), id: z.string().min(1).max(100) }).strict(),
@@ -40,6 +44,17 @@ export const visitorNavigationSchema = z.discriminatedUnion('kind', [
 export function validateVisitorContext(value: unknown, content: SiteContent, catalog?: KnowledgeCatalog, media?: MediaLibrary): VisitorContext {
   try {
     const context = visitorContextSchema.parse(value ?? {});
+    if (context.carousel) {
+      const authority = publishedWorkspace(content, catalog, media, context.externalResults);
+      for (const card of [...context.carousel.cards, ...context.carousel.recentCards ?? []]) {
+        const known = card.referenceIds.flatMap(id => authority.records.filter(record => referenceKey(record.reference) === id || record.reference.id === id));
+        if (known.length) card.title = known.map(record => record.name).join(' / ').slice(0, 200);
+        else if (card.referenceIds.length && !context.taskSession) throw new Error();
+      }
+      if (context.carousel.media && !media?.videos?.some(video => video.id === context.carousel!.media!.id)) throw new Error();
+      // The carousel replaces page observation; never carry a stale background snapshot.
+      delete context.screen; delete context.expandedSourceIds;
+    }
     if (context.externalResults) {
       const settings = exploreSettings(content);
       if (!settings.enabled || new Set(context.externalResults.map(result => result.resultId)).size !== context.externalResults.length

@@ -26,6 +26,7 @@ export default function KnowledgeReview({ site, blocked, onBusyChange, onSiteCha
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [fileId, setFileId] = useState('');
+  const [relatedFiles, setRelatedFiles] = useState<string[]>([]);
   const [replacesSourceKey, setReplacesSourceKey] = useState('');
   const [editing, setEditing] = useState(false);
   const [deleteReview, setDeleteReview] = useState(false);
@@ -54,6 +55,13 @@ export default function KnowledgeReview({ site, blocked, onBusyChange, onSiteCha
     return () => controller.abort();
   }, [site.id, site.revision]);
 
+  useEffect(() => {
+    if (!busy) return;
+    const controller = new AbortController();
+    const timer = setInterval(() => { void fetch('/api/sites/' + site.id + '/knowledge', { cache: 'no-store', signal: controller.signal }).then(response => response.ok ? response.json() : null).then(body => { if (body && !controller.signal.aborted) setState(current => current ? { ...current, jobs: body.jobs } : body); }).catch(() => {}); }, 1200);
+    return () => { clearInterval(timer); controller.abort(); };
+  }, [busy, site.id]);
+
   async function act(action: Record<string, unknown>) {
     if (running.current || blocked) return;
     running.current = true; setBusy(true); onBusyChange(true); setError(''); setResolvedAssertion(undefined);
@@ -68,14 +76,14 @@ export default function KnowledgeReview({ site, blocked, onBusyChange, onSiteCha
         if (action.action === 'assertions') setResolvedAssertion(resolvedUpdate.current ?? undefined);
       }
       setState(body);
-      if (['analyze-website','repair-website'].includes(String(action.action)) && body.candidates?.length) setSelected(body.candidates.at(-1).id);
+      if (['analyze', 'analyze-files', 'remove-source', 'review', 'analyze-website','repair-website'].includes(String(action.action)) && body.candidates?.length) setSelected(body.candidates.at(-1).id);
       if (body.site) onSiteChange(body.site);
     } catch (error) { setError(error instanceof Error ? error.message : 'The request could not finish.'); }
     finally { running.current = false; setBusy(false); onBusyChange(false); }
   }
 
   return <div className="settings-panel knowledge-panel" ref={reviewRoot} aria-busy={busy}>
-    {busy && <LoadingIndicator label="Interpreting and saving knowledge…"/>}
+    {busy && <LoadingIndicator label={state?.jobs.at(-1)?.message || "Preparing the source review…"}/>}
     {!state && !error && !busy && <LoadingIndicator label="Loading knowledge…"/>}
     <div className="panel-heading"><span className="eyebrow">Turn source material into a useful site</span><h2>Knowledge</h2><p>Add your source material, review what we found, then choose what appears on your site.</p></div>
     <ol className="field-help" aria-label="Knowledge workflow"><li><strong>Add a source.</strong> Upload a file in Files, then choose it below, or import a website.</li><li><strong>Review the information.</strong> Check the suggested items and correct anything that is wrong.</li><li><strong>Apply to draft, then Publish.</strong> Applying saves your review; publishing updates what visitors can see.</li></ol>
@@ -89,16 +97,19 @@ export default function KnowledgeReview({ site, blocked, onBusyChange, onSiteCha
         <button className="text-button" disabled={busy} onClick={() => { setDeleteReview(false); setDeleteName(''); }}>Cancel</button>
       </div>}
     </div>}
+    {!!state?.sources?.length && <details className="knowledge-source-material"><summary>Manage contributing sources ({state.sources.length})</summary><p className="field-help">Removing a contribution prepares a review proposal. Other supporting sources and publisher corrections are retained. Original uploads are deleted separately in Files.</p>{state.sources.map(source => <div className="source-management-row" key={source.key}><strong>{source.name}</strong><button className="text-button" disabled={busy || blocked || editing} onClick={() => void act({ action: 'remove-source', sourceKey: source.key, requestId: crypto.randomUUID() })}>Review removal of {source.name}</button></div>)}</details>}
     <h3>Add information from a file</h3>
     {state?.catalog && <button className="button secondary" disabled={busy || blocked || editing} onClick={() => void act({ action: 'review', requestId: crypto.randomUUID() })}>Review draft knowledge</button>}
     <label className="field">Source file<select value={sourceFile?.id || ''} disabled={blocked || busy || editing || !sources.length} onChange={event => { setFileId(event.target.value); setReplacesSourceKey(''); }}>{!sources.length && <option value="">Upload a file first</option>}{sources.map(file => <option key={file.id} value={file.id}>{file.name}</option>)}</select></label>
     {!!state?.sources?.length && <label className="field">How should this file be used?<select value={replacesSourceKey} disabled={blocked || busy || editing} onChange={event => setReplacesSourceKey(event.target.value)}><option value="">{matchingSource ? `Update ${matchingSource.name} (same filename)` : 'Add as new source'}</option>{state.sources.map(source => <option key={source.key} value={source.key}>Replace {source.name}</option>)}</select><span className="field-help">Choose Replace when a renamed file updates an existing source. Other files are kept separate.</span></label>}
-    <button className="button secondary" disabled={blocked || busy || editing || !sources.length} onClick={() => void act({ action: 'analyze', fileId: sourceFile?.id, requestId: crypto.randomUUID(), ...(replacesSourceKey ? { replacesSourceKey } : {}) })}><FileSearch size={16}/>{busy ? 'Working…' : sourceFile?.kind === 'image' ? 'OCR and interpret source' : 'Interpret source'}</button>
+    {sources.length > 1 && <details className="knowledge-related-files"><summary>Include related files in this review</summary><p className="field-help">Combine up to six related PDFs, documents, tables or OCR images into one proposal. Each file keeps its own source evidence. A renamed replacement must be reviewed on its own.</p>{sources.filter(file => file.id !== sourceFile?.id).map(file => <label key={file.id}><input type="checkbox" checked={relatedFiles.includes(file.id)} disabled={blocked || busy || editing || !!replacesSourceKey || relatedFiles.length >= 5 && !relatedFiles.includes(file.id)} onChange={event => setRelatedFiles(current => event.target.checked ? [...current, file.id] : current.filter(id => id !== file.id))}/>{file.name}</label>)}</details>}
+    <button className="button secondary" disabled={blocked || busy || editing || !sources.length} onClick={() => { const ids = [...new Set([sourceFile!.id, ...(replacesSourceKey ? [] : relatedFiles)])]; void act(ids.length > 1 ? { action: 'analyze-files', sources: ids.map(fileId => ({ fileId })), requestId: crypto.randomUUID() } : { action: 'analyze', fileId: sourceFile?.id, requestId: crypto.randomUUID(), ...(replacesSourceKey ? { replacesSourceKey } : {}) }); }}><FileSearch size={16}/>{busy ? 'Working…' : relatedFiles.length && !replacesSourceKey ? 'Interpret related sources' : sourceFile?.kind === 'image' ? 'OCR and interpret source' : 'Interpret source'}</button>
     {state?.websiteRepairAvailable && <button className="button secondary" disabled={busy || blocked || editing} onClick={() => void act({ action: 'repair-website', requestId: crypto.randomUUID() })}>Prepare source-based website repair (no AI)</button>}
     <WebsiteImport entities={state?.catalog?.entities} onSiteChange={onSiteChange} siteId={site.id} revision={site.revision} disabled={blocked || busy || editing} onBusyChange={onBusyChange} onImport={(url, urls) => act({ action: 'analyze-website', url, urls, requestId: crypto.randomUUID() })}/>
     <p className="field-help">Interpretation produces a proposal. Applying it updates your draft; publishing is a separate step. An uploaded file cannot enable bookings, live stock, or checkout.</p>
-    <p className="field-help">{state?.semanticMode === 'connected' ? 'When needed, interpretation shares this source with the configured AI service. Each attempt is bounded and uses your existing daily AI limit.' : 'Offline interpretation supports CSV, XLSX and labeled item blocks in TXT, DOCX, HTML or PDF. Free-form prose and website pages need the connected interpreter; OCR requires local Tesseract or an injected provider.'}</p>
+    <p className="field-help">{state?.semanticMode === 'connected' ? 'When needed, related prose shares one bounded request with the configured AI service, using your existing daily AI limit. Combined prose is limited to 60,000 extracted characters; larger groups need separate reviews. Structured files and unchanged sources need no AI call.' : 'Offline interpretation supports CSV, XLSX and labeled item blocks in TXT, DOCX, HTML or PDF. Free-form prose and website pages need the connected interpreter; OCR requires local Tesseract or an injected provider.'}</p>
     {error && <p role="alert" className="form-error">{error}</p>}
+    {state?.jobs.at(-1)?.files && <ul className="source-file-progress" aria-label="File processing results">{state.jobs.at(-1)!.files!.map(file => <li key={file.fileId}><strong>{file.name}</strong><span>{file.status} · {file.message}</span></li>)}</ul>}
     {state?.jobs.at(-1) && <p role="status" className="field-help">{state.jobs.at(-1)!.message}</p>}
     {state && state.jobs.length > 0 && <details className="knowledge-jobs"><summary>Import activity ({state.jobs.length})</summary>{[...state.jobs].reverse().map(job => <div key={job.id}><strong>{job.sourceName}</strong><p>{job.status.replaceAll('_', ' ')} · {job.message}</p></div>)}</details>}
     {editing && <p className="field-help" role="status">Save your field corrections before changing sources, choosing another proposal or resolving source updates.</p>}
@@ -243,7 +254,7 @@ function CandidateReview({ candidate, content, disabled, act, onDirtyChange, res
   function remove(id: string) { setCatalog(current => ({ ...current, entities: current.entities.filter(item => item.id !== id), facts: current.facts?.filter(fact => fact.entityId !== id), collections: current.collections.map(item => ({ ...item, entityIds: item.entityIds.filter(value => value !== id) })), relationships: current.relationships.filter(item => item.fromEntityId !== id && item.toEntityId !== id), capabilities: (current.capabilities ?? []).filter(item => item.entityIds.length !== 1 || item.entityIds[0] !== id).map(item => ({ ...item, entityIds: item.entityIds.filter(value => value !== id) })) })); }
   async function save() {
     try { const checked = validateCatalog({ ...catalog, entities: catalog.entities.map(entity => aliasText[entity.id] === undefined ? entity : { ...entity, aliases: aliasText[entity.id].split(',').map(value => value.trim()).filter(Boolean) }) }); setError(''); await act({ action: 'revise', candidateId: candidate.id, catalog: checked, ...(design ? { websiteDesign: design } : {}) }); }
-    catch { setError('Check the values below. Keep at least one item and use valid values for each attribute.'); }
+    catch { setError('Check the values below and use valid values for each attribute.'); }
   }
   function correct(event: FormEvent) {
     event.preventDefault(); if (disabled || dirty || !text.trim()) return;
@@ -253,6 +264,8 @@ function CandidateReview({ candidate, content, disabled, act, onDirtyChange, res
     <div className="section-heading"><h3>Review the interpretation</h3><span>{catalog.entities.length} items</span></div>
     <p>{candidate.sourceName}</p>
     <details className="knowledge-review-version"><summary>Review version</summary><p>Proposal: {candidate.id}</p><p>Proposal revision: {candidate.catalog.id}</p><p>Current draft knowledge: {content.knowledgeRevisionId ?? 'None'}</p><p>Current draft media: {content.mediaRevisionId ?? 'None'}</p><p>Current draft logo: {content.logoAssetId ?? 'None'}</p></details>
+    {candidate.impact && <section className="source-impact" aria-label="Impact on your draft"><h4>What will change</h4><dl>{([['New information', candidate.impact.added], ['Updated information', candidate.impact.updated], ['Information removed', candidate.impact.removed], ['Affected collections', candidate.impact.collections], ['Affected reading sections', candidate.impact.sections]] as const).map(([label, names]) => <div key={label}><dt>{label}</dt><dd>{names.length ? names.slice(0, 8).join(', ') + (names.length > 8 ? ' and ' + (names.length - 8) + ' more' : '') : 'None'}</dd></div>)}</dl><p>{candidate.impact.conflicts} possible conflicts or duplicate matches · {candidate.impact.correctionsRetained} retained correction notices</p><p>{candidate.impact.images} image connections and {candidate.impact.opening} opening selections are affected. Removed items lose their connections; approved identity matches keep them with the retained item. Original images and manually written sections are kept.</p><p className="field-help">Review your site name, introduction, contact details and hours separately; these remain your approved site copy. Save field edits to refresh this summary. Applying changes only the draft.</p></section>}
+    {candidate.files?.some(file => file.status === 'failed') && <div className="source-partial"><p role="alert">Some files could not be processed. Their previous contribution is kept. This proposal contains only successful sources.</p><ul>{candidate.files.filter(file => file.status === 'failed').map(file => <li key={file.fileId}>{file.name}: {file.message}</li>)}</ul><label><input type="checkbox" checked={acceptPartial} disabled={disabled || dirty} onChange={event => setAcceptPartial(event.target.checked)}/>I reviewed the incomplete file report and want to apply the successful sources.</label></div>}
     {candidate.website && design && <WebsiteDesignReview proposal={candidate.website} design={design} content={content} catalog={catalog} disabled={disabled} onChange={setDesign} include={includeDesign} onInclude={setIncludeDesign} acceptPartial={acceptPartial} onAcceptPartial={setAcceptPartial}/>}
     {candidate.notes.length > 0 && <ul className="knowledge-notes">{candidate.notes.map((note, index) => <li key={index}>{note}</li>)}</ul>}
     {!!candidate.identityMatches?.length && <IdentityMatches candidate={candidate} disabled={disabled || dirty} resolve={decisions => act({ action: 'identity', candidateId: candidate.id, candidateRevisionId: candidate.catalog.id, decisions })}/>}
@@ -287,6 +300,6 @@ function CandidateReview({ candidate, content, disabled, act, onDirtyChange, res
     </div>
     {error && <p className="form-error" role="alert">{error}</p>}
     {pendingKnowledgeReviews(candidate).length > 0 && <p role="status" className="field-help">Review and approve the pending content above before applying. Nothing has been saved to your draft yet.</p>}
-    <div className="proposal-actions">{dirty ? <><button className="button primary" disabled={disabled} onClick={() => void save()}><Check size={16}/>Save corrections</button><button className="text-button muted" disabled={disabled} onClick={() => { setCatalog(candidate.catalog); setAliasText({}); setDesign(candidate.website?.design); }}>Discard field edits</button></> : <button className="button primary" disabled={disabled || pendingKnowledgeReviews(candidate).length > 0} onClick={() => void act({ action: 'apply', candidateId: candidate.id, candidateRevisionId: candidate.catalog.id, ...(includeDesign && design ? { websiteDesign: design } : {}), acceptPartial })}><Check size={16}/>Apply to draft</button>}<button className="text-button muted" disabled={disabled || dirty} onClick={() => void act({ action: 'discard', candidateId: candidate.id })}>Dismiss proposal</button></div>
+    <div className="proposal-actions">{dirty ? <><button className="button primary" disabled={disabled} onClick={() => void save()}><Check size={16}/>Save corrections</button><button className="text-button muted" disabled={disabled} onClick={() => { setCatalog(candidate.catalog); setAliasText({}); setDesign(candidate.website?.design); }}>Discard field edits</button></> : <button className="button primary" disabled={disabled || pendingKnowledgeReviews(candidate).length > 0 || !!candidate.files?.some(file => file.status === 'failed') && !acceptPartial} onClick={() => void act({ action: 'apply', candidateId: candidate.id, candidateRevisionId: candidate.catalog.id, ...(includeDesign && design ? { websiteDesign: design } : {}), acceptPartial })}><Check size={16}/>Apply to draft</button>}<button className="text-button muted" disabled={disabled || dirty} onClick={() => void act({ action: 'discard', candidateId: candidate.id })}>Dismiss proposal</button></div>
   </section>;
 }

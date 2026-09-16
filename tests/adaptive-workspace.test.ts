@@ -60,6 +60,18 @@ test('reopening identical content reuses its surface; nested return preserves pe
   state = applyWorkspaceBatch(state, workspaceBatch(state, [{ kind: 'close', instanceId: 'second' }]), authority).state;
   assert.equal(state.focusedId, 'first'); assert.equal(state.objects.length, 1);
 });
+test('an explicitly named close reaches a background panel and never falls back to a different panel', () => {
+  let state = add(add(fresh(), 'entity', 'blue', 'first'), 'entity', 'white', 'second');
+  state = applyWorkspaceBatch(state, workspaceBatch(state, [{ kind: 'focus', instanceId: 'first' }]), authority).state;
+  const observed = scene(state); observed.objects[1].visibility = 'obscured';
+  const close = planWorkspaceIntent('Close White Bowl', state, authority, observed, catalog, media);
+  assert.ok(close.batch, close.message);
+  state = applyWorkspaceBatch(state, close.batch, authority, observed.revision).state;
+  assert.deepEqual(state.objects.map(object => object.instanceId), ['first']);
+  assert.equal(state.focusedId, 'first');
+  const repeated = planWorkspaceIntent('Close White Bowl', state, authority, scene(state), catalog, media);
+  assert.equal(repeated.batch, undefined);
+});
 test('batch atomicity, duplicate delivery, conflicts, stale scene/manual revisions and publication identity', () => {
   const initial = fresh(), batch = workspaceBatch(initial, [{ kind: 'add', object: objectInput(record('fact', 'address')) }]);
   const accepted = applyWorkspaceBatch(initial, batch, authority).state;

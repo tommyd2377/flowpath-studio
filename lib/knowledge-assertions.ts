@@ -31,6 +31,7 @@ export function refreshAssertionReviews(artifact: KnowledgeArtifact, origin: Ass
     const retained = prior.find(review => review.targetType === assertion.targetType && review.targetId === assertion.targetId && review.valueHash === valueHash);
     if (retained) return retained;
     const supported = artifact.origins.some(source => {
+      if (source.retired) return false;
       const provenance = source.provenance;
       const [entityId, field] = assertion.targetId.split('/');
       const reference = assertion.targetType === 'field' ? provenance?.fields.find(item => item.entityId === entityId && item.field === field)

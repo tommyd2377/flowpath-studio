@@ -10,6 +10,8 @@ The [website generation contract](website-generation.md) defines the reusable co
 
 Review knowledge and design, save corrections, then **Apply to draft**. **Publish** is separate. The native visitor website renders independently of assistant availability; the shared published-content reader accesses approved native content. Raw source captures and provenance remain private.
 
+If a publisher has selected Editorial, Showcase or Clarity in **Branding**, applying a website interpretation preserves that template, its independent customizations and existing opening selections. The design review points to Branding for template styling. Switching templates does not require another import or model call; [the template guide](templates-and-source-lifecycle.md) documents the controls and compatibility behavior.
+
 ## Original-quality photos
 
 Discovery recognizes explicit original/full-image attributes, lazy images, responsive image candidates, metadata images, inline backgrounds and bounded external stylesheet backgrounds. For each reference, the downloader compares decoded pixel dimensions across up to eight referenced variants and three bounded original candidates for Wix, Squarespace and WordPress/CDN images and retains the largest successfully decoded file's exact original bytes privately. Original and lazy references remain candidates even when responsive descriptors claim a larger size. Unavailable candidates fall back to supported alternatives. This is the best available discovered image within the limits, not a guarantee of recovering an inaccessible original or reversing source compression.
@@ -18,7 +20,7 @@ Supported formats are still JPEG, PNG and WebP. Each image has a 10 MB download 
 
 Selections, successful file IDs and errors are saved between visits. Download up to 20 selected images at a time. Duplicate file hashes reuse stored assets. Review captions, alternative text, actual-subject/example roles, entity association and photo-library/lead/logo placement. **Apply reviewed photos to draft** creates a reversible media revision; originals and already reviewed knowledge remain intact. Import or explicitly exclude unresolved images before applying. Publishing remains separate.
 
-Reviewed general site photos also appear in small groups between content sections. Explicit item associations remain attached to their items. Distributed photo groups keep their album labels and do not add repeated navigation links or imply an association with adjacent content.
+The legacy website places reviewed general site photos in small groups between content sections. The three new templates compose reviewed albums according to their own layout and require an explicit lead/opening selection for a hero image. Explicit item associations remain attached to their items. Photo groups keep their album labels and do not imply an association with adjacent content. OCR source screenshots are not automatically promoted to opening photography.
 
 ## Parsing, repair and limits
 

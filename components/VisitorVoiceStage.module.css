@@ -3,7 +3,7 @@
   --wave-vertical-scale: calc(.6 + .4 * var(--opening-progress));
   --wave-height: calc(clamp(110px, 21svh, 220px) * var(--wave-vertical-scale));
   --wave-top: calc(6px + env(safe-area-inset-top, 0px));
-  --dock-height: calc(var(--wave-height) + var(--wave-top) + 6px);
+  --dock-height: calc(var(--wave-height) + var(--wave-top) + 38px);
   position: relative; top: 0; z-index: 25; width: 100%; flex: none;
   height: calc(var(--dock-height) + var(--opening-progress) * (var(--site-viewport, 100svh) - var(--dock-height)));
   background: #101110;
@@ -13,14 +13,17 @@
 .identity { position: absolute; top: calc(var(--wave-top) + var(--opening-progress) * var(--site-invitation-offset, 20svh) - 32px); left: 0; right: 0; pointer-events: none; }
 .conversation { position: absolute; top: calc(var(--wave-top) + var(--opening-progress) * var(--site-invitation-offset, 20svh)); left: 28px; right: 28px; display: flex; flex-direction: column; align-items: center; pointer-events: none; }
 .conversation :global(.site-wave) { width: min(100%, 1060px); height: var(--wave-height); padding: 0; flex: none; border-radius: 18px; pointer-events: auto; }
-.copy { width: min(100%, 600px); text-align: center; margin-top: 4px; pointer-events: none; }
+.copy { color: #b8b9ae; font: 400 14px/1.7 Arial, Helvetica, sans-serif; width: min(100%, 600px); text-align: center; margin-top: 4px; pointer-events: none; }
 .copy p { color: #b8b9ae; font: 400 14px/1.7 Arial, Helvetica, sans-serif; letter-spacing: .015em; margin: 0; }
 .hint { color: #c5bba6; font: 400 13px/1.7 Arial, Helvetica, sans-serif; letter-spacing: .015em; text-align: center; margin: 12px 0 0; }
 .stage[data-started=true] .hint { pointer-events: none; }
 @media (max-width: 600px) {
   .stage { --wave-height: calc(clamp(88px, 17svh, 125px) * var(--wave-vertical-scale)); }
   .conversation { left: 18px; right: 18px; }
-  .copy p { font-size: 12px; }
+  .copy, .copy p { font-size: 12px; }
 }
 @media (min-width: 601px) and (max-height: 800px) { .stage { --wave-height: calc(clamp(90px, 17svh, 145px) * var(--wave-vertical-scale)); } }
 @media (max-height: 650px) { .stage { --wave-height: calc(100px * var(--wave-vertical-scale)); } }
+
+:global([data-site-template]) .stage { background: var(--platform-bg); }
+:global([data-site-template]) :is(.copy, .copy p, .hint) { color: var(--platform-muted); font-family: var(--platform-body-font); }

@@ -15,3 +15,4 @@ export { ConversationDock } from './ConversationDock.js';
 export { AdaptiveWorkspace, workspaceTravel, type WorkspaceRender } from './AdaptiveWorkspace.js';
 export { ContentCard, PublishedWebsite, type WebsiteEntry, type WebsiteSection } from './PublishedWebsite.js';
 export { FocusStage, FocusSurface, DisclosureStack, ReturnAnchor, VoiceFocusBridge } from './components.js';
+export { MediaVideo, type PlaybackState } from './MediaVideo.js';

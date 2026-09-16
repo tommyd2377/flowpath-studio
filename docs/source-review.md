@@ -12,6 +12,14 @@ Studio keeps source material private while helping publishers correct the knowle
 
 The deterministic parser records references only for supplied fields it can trace to the displayed excerpt. It does not cite generated defaults, missing values or model guesses as source statements. PDF locations refer to extracted text, not an OCR or visual reading of the page. Older saved interpretations without provenance remain editable and show that excerpts are unavailable.
 
+## Review related files together
+
+Upload multiple related files in **Files**, select a source in Knowledge, then expand **Include related files in this review**. Up to six distinct files share one proposal, while retaining separate hashes, origins and source excerpts. Per-file progress distinguishes processing, successful extraction, unchanged sources and failures. Exact-byte duplicates share their result. Two files targeting the same source name are rejected before processing; renamed replacements are reviewed individually.
+
+Structured sources use deterministic extraction. Related prose uses one bounded connected request, preserving the existing quota and cooldown. The combined prose limit is 60,000 extracted characters or 400 KB of source evidence; oversized groups fail before an AI request and require smaller reviews. Each file result is validated against its own anchors. No retry occurs automatically.
+
+The impact summary identifies new/updated/removed information, conflicts, retained corrections and affected collections, reading sections, images and opening selections. Failed files keep their previous contribution. A partially successful proposal requires acknowledgement of its failed-file report before Apply. Extraction success does not establish complete semantic coverage or OCR accuracy.
+
 ## Replace an updated source
 
 Upload the new version and select it in Knowledge. Studio automatically matches the same normalized filename. If the file was renamed, choose **Replace [previous source]** under **How should this file be used?** This explicit choice preserves the original identity namespace. Stable `ID` columns keep items and their photos connected; without IDs, renaming an item in the source can appear as an addition and a missing item.
@@ -33,6 +41,12 @@ Conflicting attribute types or currencies stop the import; conversions are not g
 Fact and relationship changes have saved keep/use-source choices, including missing assertions and overlapping temporal conflicts. **Correction history** retains immutable before/after assertions and historical excerpts. Saved choices can be reversed before Apply without replaying unrelated decisions. Conditional, conflicting or out-of-time facts do not become unconditional current card values; current and explicit as-of retrieval use the same selection rules.
 
 The source baseline tracks the latest imported version. A kept item that disappears from that source may lose its older field links in later reviews; Studio reports unavailable support instead of attaching it to unrelated new text. An identical-byte upload is a no-op, including a renamed copy; choose the previous source again when importing changed content under that new filename.
+
+## Withdraw a source contribution
+
+In **Manage contributing sources**, choose **Review removal**. This prepares a normal interpretation proposal. Information still supported by another source remains; unsupported unchanged fields are cleared, and unchanged items with no remaining support are retired. Publisher corrections remain. Retired source records act as private tombstones, so a later import cannot silently resurrect removed items. Review ambiguous remaining values before applying.
+
+Contribution withdrawal does not delete the uploaded file or its photos. Deleting an original in **Files** does not erase approved knowledge. Reviewed site identity, headline, contact, hours and manually written sections are independent publisher copy and remain; the removal review prompts the publisher to check them. Review → Apply to draft → Publish remains the only route to changing visitors' information. See the [template/source implementation guide](templates-and-source-lifecycle.md) for details and screenshots.
 
 ## Photos, opening selections and publication
 

@@ -56,8 +56,11 @@ test('HTML import offers editable native design, mobile preview, publication and
   await expect(website.locator('h1')).toHaveText('Designed around your everyday.');
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
   await page.screenshot({path:info.outputPath('native-mobile-assistant-unavailable.png'),fullPage:true});
-  await website.getByLabel('Find published information').fill('Final reading detail');
-  await expect(website.getByRole('heading', { name: /Matches for/ })).toBeVisible();
+  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  const chatInput = page.getByRole('textbox', { name: 'What would you like to see?' });
+  await chatInput.fill('Search for Final reading detail'); await chatInput.press('Enter');
+  await expect(website.getByRole('region', { name: 'Website content' })).toHaveAttribute('aria-busy', 'false');
+  await expect(website.getByRole('status')).toHaveText('1 matching item');
   await website.getByRole('button', { name: 'Open Spaces with room to live.', exact: true }).click();
   await expect(page.getByText(/Final reading detail beyond the short summary\./).last()).toBeVisible();
   await page.screenshot({ path: info.outputPath('website-published-reading.png'), fullPage: true });

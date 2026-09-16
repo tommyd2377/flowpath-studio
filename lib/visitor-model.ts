@@ -34,7 +34,7 @@ export type VisitorAvailability = {
   chatRemaining: number; voiceRemaining: number; resetsAt: string;
   searchRemaining?: number;
 };
-export type VisitorReply = { text: string; workspaceBatch?: WorkspaceBatch; presentation?: SitePresentation; catalogPlan?: PresentationPlan; userText?: string; audio?: string; demo?: boolean; availability: VisitorAvailability };
+export type VisitorReply = { text: string; displaySatisfied?: boolean; workspaceBatch?: WorkspaceBatch; presentation?: SitePresentation; catalogPlan?: PresentationPlan; userText?: string; audio?: string; demo?: boolean; availability: VisitorAvailability };
 
 export function visitorSettings(content: Pick<SiteContent, 'visitor'>): VisitorSettings {
   // Legacy published snapshots stay inactive until their owner republishes.
@@ -42,6 +42,8 @@ export function visitorSettings(content: Pick<SiteContent, 'visitor'>): VisitorS
 }
 
 export function visitorDraft(content: SiteContent): SiteContent {
+  // An explicit publisher choice, including disabled, survives every editor load.
+  if (content.visitor) return content;
   const settings = visitorSettings(content);
   return settings.enabled ? content : { ...content, visitor: { ...settings, enabled: true, mode: 'voice' } };
 }

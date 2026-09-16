@@ -204,10 +204,21 @@ test('voice applies search views and image commands through acknowledged navigat
   const focused = page.locator('[data-workspace-focused]:not([inert])');
   await expect(focused).toHaveAttribute('data-workspace-transition', 'settled');
   await navigate('spotlight', 5); await expect(focused).toHaveAttribute('data-workspace-highlighted');
+  // Closing a search panel is a voice action, not a manual interruption of itself.
+  const beforeClose = await page.evaluate(() => window.__searchVoice.controls.at(-1)?.interactionRevision ?? 0);
   await page.evaluate(() => {
     const interactionRevision = window.__searchVoice.controls.at(-1)?.interactionRevision ?? 0;
     window.__searchVoice.emit({ type: 'response_started', revision: 6, interactionRevision });
-    window.__searchVoice.emit({ type: 'navigation', id: 'voice-home', revision: 6, interactionRevision, target: { kind: 'home' } });
+    window.__searchVoice.emit({ type: 'navigation', id: 'close-search', revision: 6, interactionRevision, target: { kind: 'explore', command: { kind: 'back' } } });
+  });
+  await expect.poll(() => page.evaluate(() => window.__searchVoice.controls.find(update => update.navigationAck?.id === 'close-search')?.navigationAck?.status)).toBe('applied');
+  await expect(page.locator('.platform-workspace-card[data-workspace-component="external"]')).toHaveCount(0);
+  expect(await page.evaluate(() => window.__searchVoice.controls.at(-1)?.interactionRevision)).toBe(beforeClose);
+  await expect(focused.getByRole('heading', { name: 'Wedding stories', exact: true })).toBeVisible();
+  await page.evaluate(() => {
+    const interactionRevision = window.__searchVoice.controls.at(-1)?.interactionRevision ?? 0;
+    window.__searchVoice.emit({ type: 'response_started', revision: 7, interactionRevision });
+    window.__searchVoice.emit({ type: 'navigation', id: 'voice-home', revision: 7, interactionRevision, target: { kind: 'home' } });
   });
   await expect.poll(() => page.evaluate(() => window.__searchVoice.controls.find(update => update.navigationAck?.id === 'voice-home')?.navigationAck?.status)).toBe('applied');
   await expect(focused).toHaveCount(0); await expect(page.locator('.platform-workspace-card')).toHaveCount(0);

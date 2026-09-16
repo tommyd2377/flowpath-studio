@@ -1,14 +1,10 @@
 .assistant { width: 100%; margin: 0 auto; padding: 0; }
-.modes { display: inline-flex; position: sticky; top: 12px; z-index: 90; gap: 3px; padding: 4px; margin: 20px auto 14px; border: 1px solid #74806435; background: var(--platform-bg, #121810); border-radius: 30px; }
+.modes { display: inline-flex; position: sticky; top: calc(clamp(110px, 21svh, 220px) * .6 + 22px + env(safe-area-inset-top, 0px)); z-index: 27; gap: 3px; padding: 4px; margin: 20px auto 14px; border: 1px solid #74806435; background: var(--platform-bg, #121810); border-radius: 30px; }
 .modes button { position: relative; background: none; color: #a4ac99; border-radius: 30px; padding: 8px 17px; font-size: 12px; }
 .modes button[aria-pressed='true'] { color: #efeade; }
 .modes button:disabled { opacity: .4; cursor: default; }
 .modeSelection { position: absolute; inset: 0; background: color-mix(in srgb, var(--site-accent) 15%, #20271b); box-shadow: 0 1px 3px #0003; }
 .modeLabel { position: relative; display: flex; align-items: center; gap: 7px; }
-.card { width: min(100%, 760px); margin: 30px auto 0; text-align: left; }
-.intro { margin-bottom: 18px; text-align: center; }
-.eyebrow { display: block; color: var(--site-accent); font-size: 9px; letter-spacing: 2px; margin-bottom: 11px; }
-.intro h2 { font-family: Georgia, 'Times New Roman', serif; color: #e6e4d7; font-size: 26px; letter-spacing: -.6px; line-height: 1.25; font-weight: 400; margin: 0; }
 .composer { display: flex; align-items: flex-end; gap: 12px; padding: 14px 14px 14px 22px; border: 1px solid color-mix(in srgb, var(--site-accent) 25%, #30362b); border-radius: 19px; background: linear-gradient(115deg, #252a20, #1a2018); box-shadow: 0 10px 45px #00000020, inset 0 1px 0 #f2e5c609; transition: border-color .2s, box-shadow .2s; }
 .composer:focus-within { border-color: color-mix(in srgb, var(--site-accent) 65%, #3e4634); box-shadow: 0 0 0 3px color-mix(in srgb, var(--site-accent) 5%, transparent), 0 12px 45px #0002; }
 .composer textarea { flex: 1; min-width: 0; resize: none; border: 0; outline: none; color: #e8e9df; background: none; font: inherit; font-size: 15px; line-height: 24px; min-height: 40px; max-height: 128px; padding: 8px 0; overflow-y: auto; }
@@ -22,43 +18,49 @@
 .suggestions button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .suggestions button svg { flex-shrink: 0; color: var(--site-accent); }
 .suggestions button:disabled { opacity: .4; }
-.composerMeta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 4px 0; color: #8c987f; font-size: 10px; }
-.composerMeta > span { display: inline-flex; align-items: center; gap: 6px; }
-.statusDot { width: 4px; height: 4px; background: var(--site-accent); border-radius: 50%; opacity: .7; }
-.voiceNote, .voiceMeta, .status { text-align: center; font-size: 12px; line-height: 1.65; color: #aab09c; margin: 6px 0; }
-.voiceMeta { color: #8d997e; font-size: 10px; }
-.status { color: #d5c9ac; max-width: 600px; margin: 16px auto 0; overflow: hidden; }
+.voiceNote { text-align: center; font-size: 12px; line-height: 1.65; color: #aab09c; margin: 6px 0; }
 .assistant button:focus-visible { outline: 2px solid var(--site-accent); outline-offset: 4px; }
-.endVoice { position: fixed; z-index: 80; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); display: inline-flex; align-items: center; justify-content: center; gap: 9px; min-width: 112px; min-height: 44px; padding: 11px 16px; border: 1px solid; border-radius: 24px; background: #1a211a; color: #f0ece3; box-shadow: 0 5px 25px #0006; font: 13px/1.4 Arial, Helvetica, sans-serif; cursor: pointer; }
-.endVoice:focus-visible { outline: 2px solid #f0ece3; outline-offset: 4px; }
 @container (max-width: 440px) {
-  .results { padding: 0 18px; }
-  .card { margin-top: 25px; }
-  .intro h2 { font-size: 25px; }
   .composer { padding: 10px 10px 10px 15px; gap: 8px; border-radius: 16px; }
   .composer textarea { font-size: 16px; }
   .suggestions { gap: 6px; }
   .suggestions button { font-size: 10px; padding: 7px 10px; }
-  .composerMeta .keyboardHint { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .composer { transition: none; } }
 
-.fallback { display: block; margin: 12px auto; min-height: 44px; padding: 10px 18px; border: 1px solid currentColor; border-radius: 24px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
-.fallback:focus-visible { outline: 2px solid var(--site-accent, currentColor); outline-offset: 4px; }
-.entryActions { max-width: 540px; margin: 24px auto; text-align: center; color: #aab09c; font-size: 12px; line-height: 1.6; }
-.entryActions p { margin: 0 auto 8px; }
 
-.voiceDock { position: sticky; top: 0; z-index: 25; background: linear-gradient(#121410 88%, #121410ed); border-bottom: 1px solid #ffffff12; padding: 4px 0; }
-@media (max-width: 600px) { .voiceDock :global(.site-wave) { max-height: 64px; } }
 
-.results { width: 100%; padding: 0 28px; }
 .srOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-@container (max-width: 600px) { .results { padding: 0 18px; } }
 
 /* The shared dock owns position and motion; the host owns input behavior. */
+.assistant :global(.platform-conversation-dock) { --conversation-height: calc(var(--conversation-wave-height) + var(--conversation-top) + 38px); }
 .assistant :global(.platform-conversation-dock) .composer { width: 100%; padding: 8px 12px 8px 18px; }
 
-.answer { position: sticky; top: 110px; z-index: 81; max-height: 35svh; overflow: auto; background: #1a2018; border: 1px solid #74806455; border-radius: 14px; max-width: 640px; margin: 20px auto; padding: 16px 20px; font-size: 15px; line-height: 1.7; color: #e3dfd3; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* The dock stays mounted above both surfaces. Only the cards occupy the AI layer. */
+.interaction { position: sticky; top: 0; z-index: 55; width: 100%; background: #101110; }
+.interaction .modes { position: absolute; top: auto; right: 24px; bottom: -34px; margin: 0; padding: 3px; border-radius: 22px; box-shadow: 0 3px 15px #0001; }
+.interaction .modes button { min-height: 32px; padding: 6px 12px; font-size: 11px; }
+.website { padding: 40px 28px 0; transition: filter .3s ease, opacity .3s ease; container-type: inline-size; }
+.assistant[data-ai-layer-open=true] .website { filter: blur(6px); opacity: .38; user-select: none; }
+.backdrop { position: fixed; z-index: 40; inset: 0; background: color-mix(in srgb, var(--platform-bg, #11160e) 35%, transparent); touch-action: none; }
+.interaction :global(.platform-conversation-backdrop) { display: none; }
+@media(max-width:600px) { .website { padding: 40px 18px 0; }.interaction .modes { right: 16px; }.assistant[data-ai-layer-open=true] .website { filter: none; opacity: .22; } }
+@media(prefers-reduced-motion:reduce) { .website { transition: none; }.assistant[data-ai-layer-open=true] .website { filter: none; } }
 
-.answer p { margin: 0; }
-.answer button { min-height: 44px; margin-top: 8px; padding: 8px 12px; background: transparent; color: var(--site-accent); font: inherit; cursor: pointer; }
+.cancelWork { pointer-events: auto; position: absolute; left: 24px; bottom: -31px; border: 1px solid #7776; border-radius: 18px; background: #20221c; color: #deded5; padding: 5px 10px; font-size: 12px; }
+.provisional { max-height: 12rem; overflow: auto; margin: .5rem 0; color: inherit; white-space: pre-wrap; font-size: .9rem; }
+.provisional small { display: block; opacity: .7; }
+
+/* Publisher tokens apply to conversation controls as well as website content. */
+:global([data-site-template]) .interaction { background: var(--platform-bg); }
+:global([data-site-template]) .website { padding: 0; }
+:global([data-site-template]) .composer { background: var(--platform-surface); border-color: var(--platform-border); border-radius: var(--platform-radius); }
+:global([data-site-template]) .composer textarea { color: var(--platform-text); font-size: calc(15px * var(--platform-text-scale)); }
+:global([data-site-template]) .composer textarea::placeholder { color: var(--platform-muted); }
+:global([data-site-template]) .modes button { color: var(--platform-muted); }
+:global([data-site-template]) .modes button[aria-pressed=true] { color: var(--platform-text); }
+:global([data-site-template]) .modeSelection { background: var(--platform-surface); }
+:global([data-site-template]) .suggestions button { color: var(--platform-text); background: var(--platform-surface); border-color: var(--platform-border); }
+:global([data-site-template]) .send { color: var(--platform-on-accent); background: var(--platform-accent); }
+:global([data-site-template]) .voiceNote { color: var(--platform-muted); }
+:global([data-site-template]) .cancelWork { color: var(--platform-text); background: var(--platform-surface); }

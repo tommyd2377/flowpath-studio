@@ -7,6 +7,7 @@ import { assertionDecisionSchema, catalogForPublication } from '@/lib/knowledge-
 import { getSite } from '@/lib/site-store';
 import { readKnowledgeArtifact } from '@/lib/knowledge-store';
 import { websiteDesignSchema } from '@/lib/website-import-model';
+import { analyzeKnowledgeFiles, reviewSourceRemoval } from '@/lib/ingestion';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -14,6 +15,8 @@ type Context = { params: Promise<{ siteId: string }> };
 const uuid = z.string().uuid();
 const revision = z.number().int().positive();
 const command = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('analyze-files'), revision, requestId: uuid, sources: z.array(z.object({ fileId: uuid, replacesSourceKey: z.string().min(1).max(255).optional() }).strict()).min(1).max(6) }).strict(),
+  z.object({ action: z.literal('remove-source'), revision, requestId: uuid, sourceKey: z.string().min(1).max(255) }).strict(),
   z.object({action:z.literal('repair-website'),revision,requestId:uuid}).strict(),
   z.object({ action: z.literal('analyze'), fileId: uuid, revision, requestId: uuid, replacesSourceKey: z.string().min(1).max(255).optional() }).strict(),
   z.object({ action: z.literal('analyze-url'), url: z.string().url().max(2048), revision, requestId: uuid, replacesSourceKey: z.string().min(1).max(255).optional() }).strict(),
@@ -50,6 +53,8 @@ export async function POST(request: Request, { params }: Context) {
     try { input = JSON.parse(new TextDecoder().decode(await readLimitedBody(request, 400_000))); }
     catch (error) { if (error instanceof AppError) throw error; throw new AppError('Invalid JSON.'); }
     const action = command.parse(input);
+    if (action.action === 'analyze-files') return analyzeKnowledgeFiles(user, siteId, action);
+    if (action.action === 'remove-source') return reviewSourceRemoval(user, siteId, action);
     if (action.action === 'repair-website') return repairWebsiteKnowledge(user, siteId, action);
     if (action.action === 'analyze') return analyzeKnowledge(user, siteId, action);
     if (action.action === 'analyze-url') return analyzeKnowledgeUrl(user, siteId, action);

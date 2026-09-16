@@ -8,8 +8,8 @@ import { referenceKey, workspaceRecord, type WorkspaceAuthority, type WorkspaceO
 
 type Rect = { x: number; y: number; width: number; height: number };
 const rectangle = (node: Element): Rect => { const r = node.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; };
-// The same symmetric timing/easing used by ConversationDock. No second motion runtime.
-export const workspaceTravel = { duration: .8, ease: [.22, 1, .36, 1] as const };
+// Symmetric focus/return motion uses the shared workspace duration.
+export const workspaceTravel = { duration: .52, ease: [.22, 1, .36, 1] as const };
 export type WorkspaceRender = (object: WorkspaceObject, focused: boolean) => ReactNode;
 const interactive = 'button, a, input, select, textarea, summary, label, [role="button"], [contenteditable="true"], dialog';
 const selectingText = () => Boolean(window.getSelection()?.toString());
@@ -90,7 +90,7 @@ export function AdaptiveWorkspace({ objects, focusedId, authority, onOperation, 
           const r = parent.getBoundingClientRect(); bounds = { top: Math.max(bounds.top, r.top), bottom: Math.min(bounds.bottom, r.bottom), left: Math.max(bounds.left, r.left), right: Math.min(bounds.right, r.right) };
         }
       }
-      const dock = site.querySelector('.platform-conversation-dock');
+      const dock = site.querySelector('.platform-conversation-dock, [data-voice-dock="true"]');
       // The composer can still be traveling home when a visitor opens a card.
       // Reserve its actual surface too, not only the smaller sticky placeholder.
       for (const control of [dock, dock?.querySelector('.platform-conversation-surface'), site.querySelector('[data-visitor-conversation-controls]')]) {
@@ -123,7 +123,7 @@ export function AdaptiveWorkspace({ objects, focusedId, authority, onOperation, 
     // Layout animations move controls without resizing them. Keep the available
     // focus area current when an immediate result arrives during that movement.
     const movement = new MutationObserver(measure);
-    for (const control of node.closest('[data-visitor-site]')?.querySelectorAll('.platform-conversation-dock, .platform-conversation-surface, [data-visitor-conversation-controls]') ?? []) {
+    for (const control of node.closest('[data-visitor-site]')?.querySelectorAll('.platform-conversation-dock, .platform-conversation-surface, [data-voice-dock="true"], [data-visitor-conversation-controls]') ?? []) {
       resize.observe(control); movement.observe(control, { attributes: true, attributeFilter: ['style'] });
     }
     measure(); window.addEventListener('resize', measure); window.addEventListener('scroll', measure, true); window.visualViewport?.addEventListener('resize', measure); window.visualViewport?.addEventListener('scroll', measure);

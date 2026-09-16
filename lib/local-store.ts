@@ -7,10 +7,11 @@ import { AppError } from './errors';
 import type { VisitorLedger } from './visitor-quota';
 import { DEFAULT_VISITOR_SETTINGS } from './visitor-model';
 import { DEFAULT_OPENING } from './site-opening';
+import { WEBSITE_TEMPLATES } from '@thevoice/platform-ui/site-design';
 
 export { AppError } from './errors';
 export type StoredFile = SiteFile & { data?: string; text?: string; objectPath?: string; thumbnailData?: string; originalData?: string;
-  thumbnailObjectPath?: string; originalObjectPath?: string; originalSize?: number; localImage?: boolean };
+  thumbnailObjectPath?: string; originalObjectPath?: string; originalSize?: number; localImage?: boolean; localVideo?: boolean };
 export type StoredSite = Omit<Site, 'files'> & { files: StoredFile[]; mediaRefs?: Record<string, string[]>; websiteMigration?: WebsiteMigration };
 type Database = { schemaVersion: 1; sites: StoredSite[]; visitorUsage?: VisitorLedger };
 const globalStore = globalThis as typeof globalThis & { voiceStoreQueue?: Promise<unknown> };
@@ -18,7 +19,7 @@ const directory = () => process.env.VOICE_DATA_DIR || join(process.cwd(), 'data'
 
 export function initialSite(kind: 'general' | 'photographer' | 'florist', name?: string, slug?: string, ownerId = 'local-demo'): StoredSite {
   return { id: randomUUID(), slug: slug || (kind === 'photographer' ? 'sophie-chen' : 'stem-and-story'),
-    ownerId, template: 'voice-v1', revision: 1, draft: { ...sampleContent(kind, name), opening: { ...DEFAULT_OPENING }, visitor: { ...DEFAULT_VISITOR_SETTINGS } }, published: null,
+    ownerId, template: 'voice-v1', revision: 1, draft: { ...sampleContent(kind, name), style: { ...WEBSITE_TEMPLATES.clarity.defaults, entry: 'website' }, opening: { ...DEFAULT_OPENING }, visitor: { ...DEFAULT_VISITOR_SETTINGS } }, published: null,
     publishedAt: null, history: [], files: [], messages: [{ id: randomUUID(), role: 'assistant', createdAt: new Date().toISOString(),
       text: 'Your site is ready to make your own. Describe a change, add a file, or use the Branding and Content panels. Review proposed edits before applying them to your draft, then publish when you are ready.' }] };
 }

@@ -48,7 +48,8 @@ test('v1 migration retains registered links and shares authorized photo records 
   const media = { schemaVersion: 1 as const, id: 'media', assets: [{ id: 'photo-a', width: 640, height: 480, caption: 'Reviewed illustration', alt: 'Example photo' }], albums: ['album-a', 'album-b'].map(id => ({ id, title: id, description: '', assetIds: ['photo-a'] })), associations: [{ id: 'example', assetId: 'photo-a', targetType: 'entity' as const, targetId: 'photo-a', role: 'example' as const }] };
   const { space } = adaptV1Catalog(legacy, publication, media);
   assert.deepEqual(space.links, legacy.capabilities); assert.equal(space.records.find(record => record.id === 'photo-a')!.name, 'Actual project');
-  const photos = space.records.filter(record => record.media); assert.equal(photos.length, 1); assert.equal(photos[0].media!.assetId, 'photo-a'); assert.equal(photos[0].media!.role, 'example');
+  assert.deepEqual(space.records.find(record => record.id === 'photo-a')!.media, { assetId: 'photo-a', role: 'example' });
+  const photos = space.records.filter(record => record.type === 'published-photo'); assert.equal(photos.length, 1); assert.equal(photos[0].media!.assetId, 'photo-a'); assert.equal(photos[0].media!.role, 'example');
   assert.equal(space.memberships.filter(member => member.recordId === photos[0].id).length, 3); assert.equal(space.collections.find(collection => collection.id === 'album-a')!.view, 'gallery');
   assert.throws(() => validatePublicationSpace({ ...space, links: [{ ...space.links[0], entityIds: ['private-record'] }] }), /publisher link/);
 });

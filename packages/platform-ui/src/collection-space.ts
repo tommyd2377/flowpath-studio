@@ -32,7 +32,7 @@ export const publicationSpaceSchema = z.object({ version: z.literal(2), publicat
   links: z.array(capabilityDefinitionSchema).max(20).default([]),
   fields: z.array(fieldDescriptorSchema).max(64), relationshipTypes: z.array(relationshipDescriptorSchema).max(64),
   collections: z.array(spaceCollectionSchema).min(1).max(1000), edges: z.array(collectionEdgeSchema).max(4000),
-  records: z.array(canonicalRecordSchema).max(10_000), memberships: z.array(membershipSchema).max(40_000), relationships: z.array(recordRelationshipSchema).max(40_000),
+  records: z.array(canonicalRecordSchema).max(10_160), memberships: z.array(membershipSchema).max(40_000), relationships: z.array(recordRelationshipSchema).max(40_000),
 }).strict();
 export type PublicationSpace = z.infer<typeof publicationSpaceSchema>;
 function unique(values: string[]) { if (new Set(values).size !== values.length) throw new Error('Duplicate publication identity.'); }
@@ -149,16 +149,32 @@ export function adaptV1Catalog(input: KnowledgeCatalog, publication: Publication
 export function addPublishedMedia(input: PublicationSpace, media: MediaLibrary): PublicationSpace {
   const space = structuredClone(input), library = validateMediaLibrary(media), records = new Set(space.records.map(record => record.id)), collections = new Set(space.collections.map(collection => collection.id));
   const fresh = (used: Set<string>, original: string, prefix: string) => { let id = original, n = 0; while (used.has(id)) id = `${prefix}-${original}-${++n}`; used.add(id); return id; };
+  for (const record of space.records) {
+    const association = library.associations.filter(link => link.targetType === 'entity' && link.targetId === record.id).sort((a, b) => Number(b.primary) - Number(a.primary))[0];
+    if (association) record.media = { assetId: association.assetId, role: association.role === 'example' ? 'example' : 'depicts' };
+  }
   const photos = new Map<string, string>(), parentId = fresh(collections, 'published-photos', 'media');
   space.collections.push({ id: parentId, name: 'Published photos', introduction: 'Reviewed photos and albums. Illustrative examples retain their labels.', kind: 'explicit', view: 'gallery' }); space.edges.push({ parentId: space.rootId, childId: parentId });
   for (const asset of library.assets) {
-    const id = fresh(records, asset.id, 'media'), role = library.associations.some(link => link.assetId === asset.id && link.role === 'example') ? 'example' as const : 'depicts' as const; photos.set(asset.id, id);
-    space.records.push({ id, type: 'published-photo', name: (asset.alt || asset.caption || 'Published photo').slice(0, 180), summary: asset.caption.slice(0, 1600), aliases: [], assertions: [], blocks: [], media: { assetId: asset.id, role } });
+    const existing = space.records.find(record => record.type === 'published-photo' && record.media?.assetId === asset.id);
+    const id = existing?.id ?? fresh(records, asset.id, 'media'), role = library.associations.some(link => link.assetId === asset.id && link.role === 'example') ? 'example' as const : 'depicts' as const; photos.set(asset.id, id);
+    if (!existing) space.records.push({ id, type: 'published-photo', name: (asset.alt || asset.caption || 'Published photo').slice(0, 180), summary: asset.caption.slice(0, 1600), aliases: [], assertions: [], blocks: [], media: { assetId: asset.id, role } });
     space.memberships.push({ collectionId: parentId, recordId: id });
   }
   for (const album of library.albums) {
     const id = fresh(collections, album.id, 'album'); space.collections.push({ id, name: album.title, introduction: album.description.slice(0, 1600), kind: 'explicit', view: 'gallery' }); space.edges.push({ parentId, childId: id });
     space.memberships.push(...album.assetIds.map(assetId => ({ collectionId: id, recordId: photos.get(assetId)! })));
+  }
+  if (library.videos?.length) {
+    const videoCollection = fresh(collections, 'published-videos', 'media');
+    space.collections.push({ id: videoCollection, name: 'Videos', introduction: 'Published videos and reviewed descriptions.', kind: 'explicit', view: 'gallery' });
+    space.edges.push({ parentId: space.rootId, childId: videoCollection });
+    for (const video of library.videos) {
+      const existing = space.records.find(record => record.type === 'published-video' && record.media?.assetId === video.id);
+      const id = existing?.id ?? fresh(records, video.id, 'video');
+      if (!existing) space.records.push({ id, type: 'published-video', name: video.title, summary: video.description.slice(0, 1600), aliases: ['video', 'film'], assertions: [], blocks: Array.from({ length: Math.ceil((video.transcript?.length ?? 0) / 4) }, (_, index) => ({ id: `cue-${index * 4}`, kind: 'paragraph' as const, text: video.transcript!.slice(index * 4, index * 4 + 4).map(cue => cue.text).join('\n') })), media: { assetId: video.id, role: 'depicts' } });
+      space.memberships.push({ collectionId: videoCollection, recordId: id });
+    }
   }
   return validatePublicationSpace(space);
 }

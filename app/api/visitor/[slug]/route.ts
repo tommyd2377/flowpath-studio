@@ -1,4 +1,5 @@
 import { visitorChatTask } from '@/lib/visitor-chat-task';
+import { requestTestRecorder } from '@/lib/visitor-test-recording-store';
 import { ZodError } from 'zod';
 import { AppError } from '@/lib/errors';
 import { readLimitedBody } from '@/lib/http';
@@ -53,6 +54,8 @@ export async function POST(request: Request, { params }: Context) {
     let raw: unknown;
     try { raw = JSON.parse(new TextDecoder().decode(bytes)); } catch { throw new AppError('Invalid JSON.'); }
     const input = visitorRequestSchema.parse(raw);
+    const record = requestTestRecorder(request, input.requestId);
+    record?.({ type: 'chat.received', data: input });
     if (input.kind === 'voice') {
       const audio = Buffer.from(input.audio, 'base64');
       if (audio.length < 9600 || audio.length > MAX_PCM_BYTES || audio.length % 2) throw new AppError('Record between 0.2 and 20 seconds of audio.');
@@ -73,6 +76,7 @@ export async function POST(request: Request, { params }: Context) {
       if (!availability.live) {
         await meterDemoUsage(siteId, input.kind === 'chat' ? 'chat' : 'voice', input.requestId);
         if (input.kind === 'greeting') return { text: getWelcomeMessage(content, catalog), demo: true, availability };
+        if (input.kind === 'chat' && input.context.taskSession && /^(?:show|find|search|only|include|sort|remove|under|below|over|above|at least|at most|open|go back|back|clear)\b/i.test(input.text)) return visitorChatTask({ record, preview: true, slug, siteId, content, catalog: catalog ?? undefined, media: media ?? undefined, request: input, availability, signal: request.signal, onUsage: () => {} });
         if (input.context.workspace) {
           const reply = planWorkspaceIntent(input.kind === 'chat' ? input.text : '', input.context.workspace, publishedWorkspace(content, catalog, media, input.context.externalResults), input.context.scene, catalog, media);
           return { text: reply.message, ...(reply.batch ? { workspaceBatch: reply.batch } : {}), demo: true, availability };
@@ -85,7 +89,7 @@ export async function POST(request: Request, { params }: Context) {
         return { text: input.kind === 'chat' ? presentationSummary(presentation, content, media) : demoVisitorReply(content, ''), presentation, demo: true, availability };
       }
       await recordPlatformEvent(siteId, { ...observed, type: 'provider_usage', status: 'reserved', count: 1 }).catch(() => undefined);
-      if (input.kind === 'chat' && input.context.workspace) return visitorChatTask({ slug, siteId, content, catalog: catalog ?? undefined, media: media ?? undefined, request: input, availability, signal: request.signal,
+      if (input.kind === 'chat' && input.context.workspace) return visitorChatTask({ record, slug, siteId, content, catalog: catalog ?? undefined, media: media ?? undefined, request: input, availability, signal: request.signal,
         onUsage: usage => { void recordPlatformEvent(siteId, { ...observed, requestId: `${input.requestId}-${crypto.randomUUID()}`, type: 'provider_usage', status: 'confirmed', count: 1, usage }).catch(() => undefined); },
       });
       const reply = input.kind === 'chat' ? await visitorTextReply(content, input, request.signal, catalog ?? undefined, media ?? undefined) : await visitorVoiceReply(content, input, request.signal, catalog ?? undefined, media ?? undefined);

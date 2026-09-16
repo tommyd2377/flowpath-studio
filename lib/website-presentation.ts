@@ -1,8 +1,10 @@
 import type { WebsiteEntry, WebsiteSection } from '@thevoice/platform-ui';
 import { referenceKey, type WorkspaceAuthority, type WorkspaceRecord } from '@thevoice/platform-ui/workspace';
-import type { KnowledgeCatalog } from '@thevoice/platform-ui/contracts';
+import type { CatalogFact, KnowledgeCatalog } from '@thevoice/platform-ui/contracts';
 import type { MediaLibrary } from '@thevoice/platform-ui/media';
 import type { SiteContent } from './site-model';
+import { knowledgeFacts, selectFactValue, formatKnowledgeValue } from '@thevoice/platform-ui/knowledge';
+import { knowledgeValueText } from './knowledge-display';
 
 const normalized = (value: string) => value.normalize('NFKC').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
 /** Group names for navigation, without asserting that their source records are one identity. */
@@ -25,6 +27,7 @@ export function websiteEntry(record: WorkspaceRecord, media?: MediaLibrary | nul
 
 /** Presentation deduplication never changes identities, facts, provenance, or publisher data. */
 export function websiteSections(authority: WorkspaceAuthority, content: SiteContent, catalog?: KnowledgeCatalog | null, media?: MediaLibrary | null): WebsiteSection[] {
+  if (content.style?.template) return composeWebsiteSections(authority, content, catalog, media);
   const sections: WebsiteSection[] = [], used = new Set<string>();
   const take = (records: WorkspaceRecord[]) => records.flatMap(record => {
     const group = publishedNameGroup(record, authority, catalog), key = referenceKey(group[0].reference);
@@ -89,4 +92,68 @@ export function websiteSections(authority: WorkspaceAuthority, content: SiteCont
     if (entries.length) result.push({ ...section, entries });
   }
   return result;
+}
+
+/** A deliberate site/initial selection is required for decorative opening media. */
+export function websiteHeroId(content: SiteContent, media?: MediaLibrary | null) {
+  const id = media?.associations.find(link => link.targetType === 'site' && link.primary)?.assetId ?? content.opening?.initialAssetIds?.[0];
+  return id && id !== content.logoAssetId && media?.assets.some(asset => asset.id === id) ? id : undefined;
+}
+
+export function detailedWebsiteEntry(record: WorkspaceRecord, catalog?: KnowledgeCatalog | null, media?: MediaLibrary | null, context?: { facts: CatalogFact[]; asOf: string }): WebsiteEntry {
+  const entry = websiteEntry(record, media);
+  const entity = record.reference.kind === 'entity' ? catalog?.entities.find(entity => entity.id === record.reference.id) : undefined;
+  if (!entity || !catalog) return entry;
+  // Full page details are not subject to the assistant's bounded context window.
+  // Both surfaces use the same fact selection and qualification rules.
+  const facts = (context?.facts ?? knowledgeFacts(catalog)).filter(fact => fact.entityId === entity.id).map(fact => ({ ...fact, display: formatKnowledgeValue(fact.value, fact.definition ?? catalog.attributes.find(attribute => `attributes.${attribute.id}` === fact.field)) }));
+  const groups = new Map<string, typeof facts>();
+  for (const fact of facts) groups.set(fact.field, [...(groups.get(fact.field) ?? []), fact]);
+  const asOf = context?.asOf ?? new Date().toISOString();
+  const values = [...groups.values()].map(group => selectFactValue(group, asOf, catalog.attributes.find(attribute => `attributes.${attribute.id}` === group[0].field))).filter(value => !['name', 'summary'].includes(value.field)).map(value => ({
+    label: catalog.facts?.find(fact => value.factIds.includes(fact.id))?.definition?.label ?? catalog.attributes.find(attribute => `attributes.${attribute.id}` === value.field)?.label ?? value.field.replace(/^properties\./, '').replaceAll('-', ' '),
+    text: knowledgeValueText(value, facts),
+  }));
+  return { ...entry, blocks: entity.blocks, values };
+}
+
+/** Presentation groups exact references; names never establish identity or erase variants. */
+export function composeWebsiteSections(authority: WorkspaceAuthority, content: SiteContent, catalog?: KnowledgeCatalog | null, media?: MediaLibrary | null): WebsiteSection[] {
+  const sections: WebsiteSection[] = [], used = new Set<string>();
+  const records = new Map(authority.records.map(record => [referenceKey(record.reference), record]));
+  const entityRecords = new Map(authority.records.filter(record => record.reference.kind === 'entity').map(record => [record.reference.id, record]));
+  const context = { facts: catalog ? knowledgeFacts(catalog) : [], asOf: new Date().toISOString() };
+  const entryFor = (id: string) => {
+    const record = entityRecords.get(id);
+    return record ? detailedWebsiteEntry(record, catalog, media, context) : undefined;
+  };
+  const add = (id: string, title: string, kind: WebsiteSection['kind'], entries: WebsiteEntry[], parentTitle?: string) => {
+    const unique = entries.filter(entry => !used.has(entry.id));
+    unique.forEach(entry => used.add(entry.id));
+    if (unique.length) sections.push({ id, title, kind, entries: unique, ...(parentTitle ? { parentTitle } : {}) });
+  };
+  const practical = /^(?:policy|policies|contact|location|hours|practical|information)$/i;
+  const faq = /^(?:faq|question)$/i;
+  const bookkeeping = /^(?:source_document|document|crawl|source)$/i;
+  const narrative = /^(?:article|page|story|guide|topic|section|organization|person)$/i;
+  const entities = catalog?.entities.filter(entity => !bookkeeping.test(entity.kind)) ?? [];
+  const entries = (list: typeof entities) => list.flatMap(entity => entryFor(entity.id) ?? []);
+  const manual = content.sections.flatMap(section => [...records.values()].find(record => record.reference.kind === 'source' && record.reference.id === `section:${section.id}`) ?? []);
+  add('introduction', content.sections.length === 1 ? content.sections[0].title : 'About', 'stories', manual.filter(record => !/\?$/.test(record.name)).map(record => websiteEntry(record, media)));
+  // Specific child collections lead, while a broad source-generated "All items" group is omitted.
+  for (const collection of [...(catalog?.collections ?? [])].sort((a, b) => Number(Boolean(b.parentIds?.length)) - Number(Boolean(a.parentIds?.length)))) {
+    if (/^all (?:items|records|content)$/i.test(collection.name)) continue;
+    const members = entities.filter(entity => collection.entityIds.includes(entity.id) && !narrative.test(entity.kind) && !practical.test(entity.kind) && !faq.test(entity.kind));
+    const parent = collection.parentIds?.map(id => catalog?.collections.find(item => item.id === id)?.name).filter(Boolean).join(' / ');
+    add(`collection-${collection.id}`, collection.name, 'collection', entries(members), parent);
+  }
+  add('offerings', 'Explore', 'collection', entries(entities.filter(entity => !narrative.test(entity.kind) && !practical.test(entity.kind) && !faq.test(entity.kind))));
+  add('stories', 'Discover more', 'stories', entries(entities.filter(entity => narrative.test(entity.kind))));
+  add('information', 'Useful information', 'information', entries(entities.filter(entity => practical.test(entity.kind))));
+  add('questions', 'Questions & answers', 'faq', [...entries(entities.filter(entity => faq.test(entity.kind))), ...manual.filter(record => /\?$/.test(record.name)).map(record => websiteEntry(record, media))]);
+  // Uploaded OCR originals are evidence. Only reviewed albums/associations create visual sections.
+  for (const album of media?.albums ?? []) {
+    add(`album-${album.id}`, album.title, 'photos', album.assetIds.filter(id => id !== content.logoAssetId).flatMap(id => authority.records.find(record => record.reference.kind === 'photo' && record.reference.id === id) ?? []).map(record => websiteEntry(record, media)));
+  }
+  return sections;
 }

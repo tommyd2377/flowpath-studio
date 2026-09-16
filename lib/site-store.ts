@@ -9,7 +9,7 @@ import { assertUploadAllowed } from './file-validation';
 import { createCloudSite, downloadCloudFile, downloadCloudPublishedImage, getCloudPublished, getCloudSite,
   listCloudSites, modifyCloudSite, reserveCloudAiRequest, uploadCloudFile, type PublishedSite } from './cloud-store';
 import type { KnowledgeClaim } from './cloud-store';
-import { readLocalImage, removeLocalImage, saveLocalImage } from './media-store';
+import { readLocalImage, removeLocalImage, saveLocalImage, saveLocalVideo, readLocalVideo } from './media-store';
 import { processImage } from './image-processing';
 import { assertNoStripeTestPaidAi } from './billing-ai-guard';
 
@@ -64,7 +64,7 @@ export async function uploadFile(user: WorkspaceUser, id: string, revision: numb
   idSchema.parse(id);
   if (isCloud(user)) return uploadCloudFile(user.uid, id, revision, file);
   assertUploadAllowed(await getSite(user, id), revision, file);
-  const stored = file.kind === 'image' && file.thumbnailData && file.originalData ? await saveLocalImage(user.uid, id, file) : file;
+  const stored = file.kind === 'video' ? await saveLocalVideo(user.uid, id, file) : file.kind === 'image' && file.thumbnailData && file.originalData ? await saveLocalImage(user.uid, id, file) : file;
   try { return await modifySite(user, id, revision, site => { assertUploadAllowed(site, revision, stored); site.files.push(stored); }); }
   catch (error) { if (error instanceof AppError) await removeLocalImage(user.uid, id, stored); throw error; }
 }
@@ -75,7 +75,7 @@ export async function downloadFile(user: WorkspaceUser, id: string, fileId: stri
   const file = site.files.find(file => file.id === fileId);
   if (!file) throw new AppError('File not found.', 404);
   const bytes = isCloud(user) ? await downloadCloudFile(user.uid, id, file, size)
-    : file.localImage ? await readLocalImage(user.uid, id, file.id, size) : new Uint8Array(Buffer.from(file.data!, 'base64'));
+    : file.localVideo ? await readLocalVideo(user.uid, id, file.id) : file.localImage ? await readLocalImage(user.uid, id, file.id, size) : new Uint8Array(Buffer.from(file.data!, 'base64'));
   if (file.kind === 'image' && !file.localImage && !file.thumbnailObjectPath) {
     const sanitized = await processImage(bytes);
     return { file: { ...file, mime: 'image/webp', image: sanitized.image }, bytes: new Uint8Array(size === 'thumb' ? sanitized.thumbnail : sanitized.display) };
@@ -90,7 +90,7 @@ export async function getPublished(slug: string): Promise<PublishedSite | null> 
     const site = db.sites.find(site => site.slug === slug && site.ownerId === 'local-demo');
     return site?.published ? { siteId: site.id, slug, content: site.published, publishedAt: site.publishedAt!,
       logo: site.files.find(file => file.id === site.published?.logoAssetId && file.kind === 'image') ?? null,
-      mediaFiles: site.files.filter(file => file.kind === 'image' && site.published?.mediaRevisionId && site.mediaRefs?.[site.published.mediaRevisionId]?.includes(file.id)) } : null;
+      mediaFiles: site.files.filter(file => ['image', 'video'].includes(file.kind) && site.published?.mediaRevisionId && site.mediaRefs?.[site.published.mediaRevisionId]?.includes(file.id)) } : null;
   });
 }
 
@@ -110,6 +110,7 @@ export async function downloadPublishedFile(slug: string, fileId: string, size: 
   if (!isLogo && !(site.content.mediaRevisionId && site.mediaFiles?.some(file => file.id === fileId))) throw new AppError('File not found.', 404);
   if (getBackendMode() === 'firebase') return downloadCloudPublishedImage(site, fileId, size);
   const file = isLogo ? site.logo! : site.mediaFiles?.find(file => file.id === fileId);
+  if (file?.kind === 'video') return { file, bytes: file.localVideo ? await readLocalVideo('local-demo', site.siteId, fileId) : new Uint8Array(Buffer.from(file.data!, 'base64')) };
   if (!file || file.kind !== 'image') throw new AppError('File not found.', 404);
   if (file.localImage) return { file, bytes: await readLocalImage('local-demo', site.siteId, fileId, size) };
   const sanitized = await processImage(new Uint8Array(Buffer.from(file.data!, 'base64')));

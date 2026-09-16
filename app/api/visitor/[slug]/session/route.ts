@@ -1,4 +1,5 @@
 import { visitorDiagnostic, diagnosticError } from '@/lib/visitor-diagnostics';
+import { requestTestRecorder } from '@/lib/visitor-test-recording-store';
 import { createHash, randomUUID } from 'node:crypto';
 import { z, ZodError } from 'zod';
 import { after } from 'next/server';
@@ -95,13 +96,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
     const key = process.env.OPENAI_API_KEY?.trim();
     if (!key) throw new AppError('Voice is temporarily unavailable.', 503);
     return visitorRealtimeSession({
+      record: requestTestRecorder(request, input.requestId),
       offer: input.sdp, apiKey: key, signal: request.signal, traceId: input.requestId,
       content: preview.content, catalog: catalog ?? undefined, media: media ?? undefined, catalogState,
       context, history: input.history,
       idleTimeoutMs: visitorSettings(preview.content).voiceIdleTimeoutSeconds * 1000,
       mailbox: { slug, siteId: preview.siteId, publicationKey: createHash('sha256').update(snapshot).digest('hex') },
       availability, reservationChecksPublication: true, reserveTurn: () => reserve(randomUUID()), assertCurrent,
-      search: async (query, kind, signal, annotationTarget) => (await authorizedExplore(slug, { query, kind, requestId: randomUUID(), ...(annotationTarget ? { annotationTarget } : {}) }, signal, snapshot)).result,
+      search: async (query, kind, signal, annotationTarget) => (await authorizedExplore(slug, { query, kind, requestId: randomUUID(), parentTraceId: input.requestId, ...(annotationTarget ? { annotationTarget } : {}) }, signal, snapshot)).result,
       onTiming: (stage, durationMs) => { void recordPlatformEvent(preview.siteId, { ...observed, type: 'provider_usage', status: 'observed', operationId: `latency_${stage}`, durationMs }).catch(() => undefined); },
       onUsage: (usage, source) => { void recordPlatformEvent(preview.siteId, { ...observed, type: 'provider_usage', status: 'observed', operationId: source === 'live' ? 'gpt_live_duration' : source === 'backend' ? 'luna_backend' : 'input_transcription', requestId: currentRequestId, usage }).catch(() => undefined); },
       onCleanupFailure: () => { gate.blocked = true; }, onClosed: release,

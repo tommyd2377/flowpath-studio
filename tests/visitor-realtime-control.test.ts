@@ -52,8 +52,27 @@ for (const kind of ['source', 'photo', 'collection', 'fact'] as const) test(`wor
   const event = h.events.find(event => event.type === 'navigation'); assert.ok(event);
   assert.deepEqual(event.target, { kind: 'open', id: `${kind}:${record.reference.id}` });
   await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: { workspace }, navigationAck: { id: event.id, status: 'applied' } });
-  await flushLive(); assert.equal(h.requests.length, 2);
+  await flushLive(); assert.equal(h.requests.length, 1, 'A simple confirmed open needs no closing model call');
 });
+test('voice photo proposals use server-owned batch identity and wait for the gallery receipt', async t => {
+  const content = publicationContent({ ...sampleContent('general'), visitorSpeaksFirst: true });
+  const authority = publishedWorkspace(content, semanticFixture, semanticMediaFixture), workspace = emptyWorkspace(authority.publicationId);
+  const album = authority.records.find(record => record.reference.kind === 'album')!, object = objectInput(album);
+  const proposal = { batch: { sceneRevision: null, operations: [{ kind: 'add', object }, { kind: 'focus', instanceId: object.instanceId }] }, clarification: '' };
+  const h = await liveVisitorSetup([liveTool('update_workspace', proposal)], { content, catalog: semanticFixture, media: semanticMediaFixture, context: { workspace } });
+  t.after(() => h.control.close()); h.control.start(); h.socket.user('Show me your photos.'); await flushLive();
+  const event = h.events.find(event => event.type === 'navigation'); assert.ok(event && event.target.kind === 'workspace');
+  assert.equal(event.target.batch.publicationId, authority.publicationId);
+  assert.equal(event.target.batch.baseRevision, workspace.revision);
+  const applied = applyWorkspaceBatch(workspace, event.target.batch, authority).state;
+  assert.equal(applied.focusedId, object.instanceId);
+  assert.equal(h.requests.length, 1, 'No completion is generated before the client applies the photos');
+  const tool = (h.requests[0].tools as { name: string; parameters: unknown }[]).find(tool => tool.name === 'update_workspace')!;
+  assert.equal(JSON.stringify(tool.parameters).includes('"publicationId"'), false);
+  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: { workspace: applied }, navigationAck: { id: event.id, status: 'applied' } });
+  await flushLive(); assert.equal(h.requests.length, 2); assert.deepEqual(h.failures, []);
+});
+
 test('workspace voice receives publisher purpose and web guidance, and forwards an authorized card annotation', async t => {
   const content = publicationContent({ ...sampleContent('general'), visitorSpeaksFirst: true, visitor: { ...DEFAULT_VISITOR_SETTINGS, assistantPurpose: 'Help readers compare published locations.' }, explore: { ...DEFAULT_EXPLORE_SETTINGS, enabled: true, annotations: true } });
   const authority = publishedWorkspace(content, semanticFixture, semanticMediaFixture);
@@ -196,7 +215,16 @@ test('voice can clear all panels through one acknowledged navigation action', as
   const event = h.events.find(event => event.type === 'navigation'); assert.ok(event);
   assert.deepEqual(event.target, { kind: 'clear' }); assert.equal(h.requests.length, 1);
   await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: event.id, status: 'applied' } });
-  await flushLive(); assert.equal(h.requests.length, 2); assert.deepEqual(h.failures, []);
+  await flushLive(); assert.equal(h.requests.length, 1); assert.deepEqual(h.failures, []);
+});
+for (const status of ['failed', 'unavailable', 'cancelled'] as const) test(`simple navigation cannot claim success after browser ${status}`, async t => {
+  const h = await liveVisitorSetup([liveTool('navigate_view', { kind: 'home', id: null, ids: null })]);
+  t.after(() => h.control.close()); h.control.start(); h.socket.user('Take me home.'); await flushLive();
+  const event = h.events.find(event => event.type === 'navigation'); assert.ok(event);
+  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: event.id, status } }); await flushLive();
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.socket.sent.some(value => value.content === 'You’re back at the opening.'), false);
+  assert.ok(h.socket.sent.some(value => value.content === 'The browser could not confirm that change.'));
 });
 test('unknown references fail without a plan or paid repair', async t => {
   const h = await liveVisitorSetup([liveTool('present_site', { layout: 'detail', sources: ['private-source'], status: 'ready' })]); t.after(() => h.control.close()); h.control.start();
@@ -232,6 +260,53 @@ test('backchannels and overlapping fragments preserve work until a substantive c
   h.socket.frame({ type: 'session.input_transcript.delta', delta: ' Actually, show a different item.', start_ms: 2600, end_ms: 3300 });
   assert.equal(signal.aborted, true);
   finish(Response.json({ status: 'completed', output: [liveAnswer()] })); await flushLive();
+});
+for (const speech of ['How is it going?', 'Keep working while we talk.', 'Mm-hmm.', 'I am having a nice day.', 'Stop talking.']) test(`background work survives conversation: ${speech}`, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let finish!: (response: Response) => void, signal!: AbortSignal; let calls = 0;
+  const h = await liveVisitorSetup([], { fetch: async (_url, init) => { calls++; signal = init!.signal!; return new Promise(resolve => { finish = resolve; }); } });
+  t.after(() => h.control.close()); h.control.start(); h.socket.user('Research the first item.'); await flushLive();
+  t.mock.timers.tick(349); assert.equal(h.socket.sent.some(event => event.type === 'session.commentary.append'), false);
+  t.mock.timers.tick(1); assert.ok(h.socket.sent.some(event => event.type === 'session.commentary.append' && event.content === 'I’m working on that.'));
+  h.socket.frame({ type: 'session.input_transcript.delta', delta: speech, start_ms: 2000, end_ms: 3000 });
+  // Live handles small talk itself; even an accidental status/backchannel
+  // delegation cannot kill the original job or reserve a second model turn.
+  if (speech !== 'I am having a nice day.') h.socket.frame({ type: 'session.delegation.created', delegation: { id: 'status', target: 'client' } });
+  await flushLive(); assert.equal(signal.aborted, false); assert.equal(calls, 1); assert.equal(h.reserved(), 0);
+  assert.equal(h.events.filter(event => event.type === 'response_started').length, 1);
+  assert.equal(h.events.some(event => event.type === 'backend_idle' || event.type === 'response_cancelled'), false);
+  t.mock.timers.tick(5000); assert.equal(h.socket.sent.filter(event => event.content === 'I’m working on that.').length, 1);
+  finish(Response.json({ status: 'completed', output: [liveAnswer('The research is complete.')] })); await flushLive();
+  assert.ok(h.socket.sent.some(event => event.content === 'The research is complete.'));
+  assert.equal(h.events.filter(event => event.type === 'backend_idle').length, 1);
+});
+
+test('a request acknowledged by Live does not get a duplicate scripted acknowledgment', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let finish!: (response: Response) => void;
+  const h = await liveVisitorSetup([], { fetch: async () => new Promise(resolve => { finish = resolve; }) });
+  t.after(() => h.control.close()); h.control.start(); h.socket.user('Research this item.'); await flushLive();
+  h.socket.frame({ type: 'session.output_transcript.delta', delta: 'I’ll look into that.', start_ms: 150, end_ms: 300 });
+  t.mock.timers.tick(1000);
+  assert.equal(h.socket.sent.some(event => event.content === 'I’m working on that.'), false);
+  finish(Response.json({ status: 'completed', output: [liveAnswer()] })); await flushLive();
+});
+
+test('the voice owner uses the streamed connection and waits for Home confirmation before replying', async t => {
+  const backend = new FakeLiveSocket(); let connections = 0;
+  const h = await liveVisitorSetup([], { fetch: undefined, responseSocketFactory: () => { connections++; return backend as unknown as VisitorControlSocket; } });
+  t.after(() => h.control.close()); h.control.start(); assert.equal(connections, 0);
+  h.socket.user('Take me home.'); await flushLive(); assert.equal(connections, 1); backend.open();
+  assert.equal(backend.sent[0].model, 'gpt-5.6-luna'); assert.equal(backend.sent[0].type, 'response.create');
+  h.socket.frame({ type: 'session.input_transcript.delta', delta: 'How is it going?', start_ms: 2000, end_ms: 3000 });
+  h.socket.frame({ type: 'session.delegation.created', delegation: { id: 'progress-question', target: 'client' } });
+  assert.equal(backend.readyState, 1); assert.equal(backend.sent.length, 1);
+  backend.frame({ type: 'response.completed', response: { id: 'resp_home', status: 'completed', output: [liveTool('navigate_view', { kind: 'home', id: null, ids: null })] } });
+  await flushLive(); const nav = h.events.find(event => event.type === 'navigation'); assert.ok(nav);
+  assert.equal(h.socket.sent.some(event => event.content === 'You’re back at the opening.'), false);
+  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: nav.id, status: 'applied' } }); await flushLive();
+  assert.equal(backend.sent.length, 1); assert.ok(h.socket.sent.some(event => event.content === 'You’re back at the opening.'));
+  await h.control.close(); assert.equal(backend.readyState, 3);
 });
 test('manual Home cancels immediately before a slow publication check and fences late delegations', async t => {
   let finish!: (response: Response) => void; let signal!: AbortSignal;
@@ -273,7 +348,7 @@ test('an old navigation timer and ACK cannot settle a newer request', async t =>
   await flushLive(); assert.equal(requests.length, 2, 'The new navigation still needs its own ACK');
   await h.control.applyControl({ seq: 2, interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: second.id, status: 'applied' } });
   await flushLive(); assert.equal(requests.length, 3);
-  assert.ok(h.socket.sent.filter(event => event.type === 'session.commentary.append').every(event => event.delegation_id === 'second_view'));
+  assert.ok(h.socket.sent.filter(event => event.type === 'session.commentary.append' && event.content !== 'I’m working on that.').every(event => event.delegation_id === 'second_view'));
 });
 test('a queued manual change cancels work while an earlier context check is still waiting', async t => {
   let finish!: (response: Response) => void, release!: () => void; let checks = 0, signal!: AbortSignal;
@@ -344,6 +419,108 @@ function observedWorkspace(state: WorkspaceState): WorkspaceScene {
     visibility: 'full', position: 'left', rect: { x: 0, y: 0, width: 400, height: 250 }, selected: object.selected, expanded: object.expanded, controls: ['focus', 'close'], scroll: null,
   })) };
 }
+for (const kind of ['open', 'focus', 'expand', 'collapse', 'close'] as const) test(`voice ${kind} addresses an existing panel by instance ID and sees its acknowledged state`, async t => {
+  const record = workspaceAuthority.records.find(record => record.reference.kind === 'source')!;
+  const initial = emptyWorkspace(workspaceAuthority.publicationId), panel = objectInput(record, record.component, 'existing-panel');
+  const workspace = applyWorkspaceBatch(initial, workspaceBatch(initial, [{ kind: 'add', object: panel }, { kind: 'focus', instanceId: panel.instanceId }]), workspaceAuthority).state;
+  const h = await liveVisitorSetup([liveTool('navigate_view', { kind, id: panel.instanceId, ids: null })], {
+    content: workspaceContent, catalog: semanticFixture, media: semanticMediaFixture, context: { workspace, scene: observedWorkspace(workspace) },
+  });
+  t.after(() => h.control.close()); h.control.start(); h.socket.user(`${kind} this panel and describe what is open`); await flushLive();
+  const event = h.events.find(event => event.type === 'navigation');
+  assert.ok(event, 'The open panel must be accepted, not mistaken for an unpublished content ID');
+  assert.deepEqual(event.target, { kind, id: panel.instanceId });
+  assert.equal(h.requests.length, 1, 'Wait for browser confirmation before continuing');
+  const next = applyWorkspaceBatch(workspace, workspaceBatch(workspace, [{ kind: kind === 'open' ? 'focus' : kind, instanceId: panel.instanceId }]), workspaceAuthority).state;
+  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true,
+    context: { workspace: next, scene: observedWorkspace(next) }, navigationAck: { id: event.id, status: 'applied' } });
+  await flushLive();
+  const output = JSON.parse(String((h.requests[1].input as { output?: string }[]).at(-1)?.output));
+  assert.equal(output.currentView.workspace.revision, next.revision);
+  assert.equal(output.currentView.workspace.objects.length, next.objects.length);
+  assert.deepEqual(h.failures, []);
+});
+
+test('voice can return to the workspace without clearing retained panels', async t => {
+  const initial = emptyWorkspace(workspaceAuthority.publicationId);
+  const panel = objectInput(workspaceAuthority.records.find(record => record.reference.kind === 'source')!);
+  const workspace = applyWorkspaceBatch(initial, workspaceBatch(initial, [{ kind: 'add', object: panel }, { kind: 'focus', instanceId: panel.instanceId }]), workspaceAuthority).state;
+  const h = await liveVisitorSetup([liveTool('navigate_view', { kind: 'unfocus', id: null, ids: null })], {
+    content: workspaceContent, catalog: semanticFixture, media: semanticMediaFixture, context: { workspace, scene: observedWorkspace(workspace) },
+  });
+  t.after(() => h.control.close()); h.control.start(); h.socket.user('Go back to the workspace'); await flushLive();
+  const event = h.events.find(event => event.type === 'navigation'); assert.ok(event);
+  assert.deepEqual(event.target, { kind: 'unfocus' });
+  const next = applyWorkspaceBatch(workspace, workspaceBatch(workspace, [{ kind: 'return' }]), workspaceAuthority).state;
+  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true,
+    context: { workspace: next, scene: observedWorkspace(next) }, navigationAck: { id: event.id, status: 'applied' } });
+  await flushLive();
+  assert.equal(h.requests.length, 1, 'Returning to the workspace needs no extra closing model call');
+  assert.ok(h.socket.sent.some(event => event.type === 'session.commentary.append' && event.content === 'You’re back in the workspace.'));
+  assert.ok(h.socket.sent.some(event => event.type === 'session.thinking.append' && String(event.content).includes('"focus":null')));
+});
+
+test('a close followed by opening another panel uses the browser-confirmed context each round', async t => {
+  const records = workspaceAuthority.records.filter(record => ['source', 'fact'].includes(record.reference.kind)).slice(0, 2);
+  assert.equal(records.length, 2);
+  const initial = emptyWorkspace(workspaceAuthority.publicationId);
+  const panels = records.map((record, index) => objectInput(record, record.component, `panel-${index}`));
+  let workspace = applyWorkspaceBatch(initial, workspaceBatch(initial, [
+    ...panels.map(object => ({ kind: 'add' as const, object })), { kind: 'focus', instanceId: panels[0].instanceId },
+  ]), workspaceAuthority).state;
+  const requests: Record<string, unknown>[] = [];
+  const h = await liveVisitorSetup([], { content: workspaceContent, catalog: semanticFixture, media: semanticMediaFixture,
+    context: { workspace, scene: observedWorkspace(workspace) }, fetch: async (_url, init) => {
+      requests.push(JSON.parse(String(init?.body)));
+      const output = requests.length === 1 ? liveTool('navigate_view', { kind: 'close', id: panels[0].instanceId, ids: null })
+        : requests.length === 2 ? liveTool('navigate_view', { kind: 'open', id: panels[1].instanceId, ids: null }) : liveAnswer();
+      return Response.json({ status: 'completed', output: [output] });
+    },
+  });
+  t.after(() => h.control.close()); h.control.start(); h.socket.user('Close this panel and open the other one'); await flushLive();
+  for (const [index, kind] of (['close', 'focus'] as const).entries()) {
+    const event = h.events.filter(event => event.type === 'navigation')[index]; assert.ok(event);
+    workspace = applyWorkspaceBatch(workspace, workspaceBatch(workspace, [{ kind, instanceId: panels[index].instanceId }]), workspaceAuthority).state;
+    await h.control.applyControl({ seq: index + 1, interactionRevision: 0, viewRevision: 0, ready: true,
+      context: { workspace, scene: observedWorkspace(workspace) }, navigationAck: { id: event.id, status: 'applied' } }); await flushLive();
+    const snapshot = String(requests[index + 1].instructions).split('\n').find(line => line.startsWith('{"state":'));
+    assert.ok(snapshot);
+    assert.deepEqual(JSON.parse(snapshot).state, { ...workspace, receipts: [] }, 'Each model round receives the exact acknowledged workspace');
+  }
+  assert.equal(requests.length, 3);
+  assert.equal(workspace.focusedId, panels[1].instanceId);
+  assert.equal(h.events.some(event => event.type === 'task_error'), false);
+});
+
+for (const id of ['missing-panel', 'source:contact']) test(`voice refuses to close a panel that is not open: ${id}`, async t => {
+  const workspace = emptyWorkspace(workspaceAuthority.publicationId);
+  const h = await liveVisitorSetup([liveTool('navigate_view', { kind: 'close', id, ids: null })], {
+    content: workspaceContent, catalog: semanticFixture, media: semanticMediaFixture, context: { workspace, scene: observedWorkspace(workspace) },
+  });
+  t.after(() => h.control.close()); h.control.start(); h.socket.user('Close that panel'); await flushLive();
+  assert.equal(h.events.some(event => event.type === 'navigation'), false);
+  assert.equal(h.events.filter(event => event.type === 'task_error').length, 1);
+  assert.equal(h.requests.length, 1, 'Invalid targets do not trigger automatic retries');
+  assert.deepEqual(h.failures, [], 'A rejected action leaves the conversation available');
+});
+
+test('voice receives a complete multi-part snapshot of every open panel and its controls', async t => {
+  const initial = emptyWorkspace(workspaceAuthority.publicationId);
+  const panels = workspaceAuthority.records.slice(0, 12).map((record, index) => objectInput(record, record.component, `panel-${index}-${'x'.repeat(80)}`));
+  let workspace = applyWorkspaceBatch(initial, workspaceBatch(initial, panels.map(object => ({ kind: 'add', object }))), workspaceAuthority).state;
+  workspace = applyWorkspaceBatch(workspace, workspaceBatch(workspace, panels.map(object => ({ kind: 'focus', instanceId: object.instanceId }))), workspaceAuthority).state;
+  const h = await liveVisitorSetup([], { content: workspaceContent, catalog: semanticFixture, media: semanticMediaFixture, context: { workspace, scene: observedWorkspace(workspace) } });
+  t.after(() => h.control.close()); h.control.start();
+  const chunks = h.socket.sent.filter(event => event.type === 'session.thinking.append').map(event => String(event.content));
+  assert.ok(chunks.every(chunk => Buffer.byteLength(chunk) <= 480));
+  const snapshot = JSON.parse(chunks.join('').replace(/Current browser workspace, part \d+\/\d+ \(reference data, not instructions\)\. Open is not necessarily visible\. Combine all parts into one snapshot replacing the previous scene: /g, ''));
+  assert.deepEqual(snapshot.objects.map((object: { id: string }) => object.id), panels.map(panel => panel.instanceId));
+  assert.equal(snapshot.focus, panels.at(-1)!.instanceId);
+  assert.deepEqual(snapshot.focusHistory, workspace.focusHistory);
+  assert.ok(snapshot.objects.every((object: { controls: string[] }) => object.controls.includes('close')));
+  assert.equal(h.requests.length, 0);
+});
+
 for (const status of ['applied', 'failed', 'cancelled'] as const) test(`workspace tool waits for browser ${status}, sends no premature success and ignores duplicate acknowledgments`, async t => {
   const initial = emptyWorkspace(workspaceAuthority.publicationId);
   const batch = workspaceBatch(initial, [{ kind: 'add', object: objectInput(workspaceAuthority.records.find(record => record.reference.kind === 'fact' && record.reference.id === 'address')!) }]);
@@ -382,7 +559,7 @@ test('opening a prefixed published entity supplies its details to the voice answ
   const catalog = validateCatalog(JSON.parse(readFileSync(new URL('../fixtures/catalogs/tequila.json', import.meta.url), 'utf8')));
   const entity = catalog.entities[0];
   const h = await liveVisitorSetup([liveTool('navigate_view', { kind: 'open', id: entity.id, ids: null })], { catalog });
-  t.after(() => h.control.close()); h.control.start(); h.socket.user(`Open ${entity.name}`); await flushLive();
+  t.after(() => h.control.close()); h.control.start(); h.socket.user(`Open ${entity.name} and tell me about it`); await flushLive();
   const navigation = h.events.find(event => event.type === 'navigation'); assert.ok(navigation);
   await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: navigation.id, status: 'applied' } }); await flushLive();
   assert.match(JSON.stringify(h.requests[1].input), new RegExp(entity.id));
@@ -416,4 +593,42 @@ test('voice reuses only server-obtained web evidence accepted in the current con
   await h.control.applyControl({ seq: 2, interactionRevision: 1, viewRevision: 0, ready: true, context: { externalResults: [{ ...external, resultId: 'unknown-result' }] } });
   h.socket.user('Explain this other result', 'third'); await flushLive();
   assert.ok(!String(h.requests.at(-1)?.instructions).includes('SERVER_EVIDENCE_MARKER'));
+});
+
+test('carousel navigation waits for the exact card receipt and skips a redundant answer card', async t => {
+  const content = publicationContent({ ...sampleContent('general'), visitorSpeaksFirst: true, sections: [{ id: 'one', title: 'First article', body: 'Published first article.' }, { id: 'two', title: 'Second article', body: 'Published second article.' }] });
+  const authority = publishedWorkspace(content), workspace = emptyWorkspace(authority.publicationId);
+  const records = authority.records.filter(record => record.reference.kind === 'source').slice(0, 2);
+  assert.equal(records.length, 2);
+  const cards = records.map(record => ({ id: `card:${record.reference.id}`, title: record.name, kind: 'information' as const, referenceIds: [record.reference.id] }));
+  const carousel = { version: 1 as const, open: true, revision: 1, cards, activeId: cards[0].id, previousId: null, lastNarratedId: null, expanded: false, reading: { scrollTop: 0, blockId: null }, media: null };
+  const h = await liveVisitorSetup([liveAnswer('Reading the confirmed card.')], { content, context: { workspace, carousel } });
+  t.after(() => h.control.close()); h.control.start(); h.socket.user('Next'); await flushLive();
+  const navigation = h.events.find(event => event.type === 'navigation'); assert.ok(navigation && navigation.target.kind === 'carousel');
+  assert.equal(navigation.target.action, 'next'); assert.equal(h.requests.length, 0);
+  assert.equal(h.socket.sent.some(event => event.type === 'session.commentary.append'), false);
+  const committed = { ...carousel, revision: 2, activeId: cards[1].id, previousId: cards[0].id };
+  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 1, ready: true, context: { workspace, carousel: committed }, navigationAck: { id: navigation.id, status: 'applied' } }); await flushLive();
+  assert.equal(h.events.some(event => event.type === 'navigation' && event.target.kind === 'answer'), false);
+  assert.ok(h.socket.sent.some(event => event.type === 'session.commentary.append' && String(event.content).includes(records[1].name)));
+  h.socket.user('What am I looking at?', 'next-question'); await flushLive();
+  assert.ok(String(h.requests[0].instructions).includes(cards[1].id));
+  assert.ok(String(h.requests[0].instructions).includes(records[1].body ?? ''));
+  assert.equal((h.requests[0].tools as { name: string }[]).some(tool => tool.name === 'navigate_view'), false);
+});
+
+test('a cited single lookup delivers facts before display and skips the closing model round', async t => {
+  const content = publicationContent({ ...sampleContent('general'), visitorSpeaksFirst: true, explore: { ...DEFAULT_EXPLORE_SETTINGS, enabled: true } });
+  const query = 'What is the Eiffel Tower?';
+  const result = { ...demoExploreResult(query, 'web'), answer: 'A landmark in Paris.', citations: [{ start: 0, end: 19, url: 'https://example.com/history', title: 'History' }] };
+  let searches = 0;
+  const h = await liveVisitorSetup([liveTool('search_explore', { kind: 'web', query, id: null })], { content, search: async () => { searches++; return result; } });
+  t.after(() => h.control.close()); h.control.start(); h.socket.user(query); await flushLive();
+  const navigation = h.events.find(event => event.type === 'navigation'); assert.ok(navigation);
+  assert.ok(h.socket.sent.some(event => event.type === 'session.commentary.append' && event.content === result.answer));
+  assert.equal(h.events.some(event => event.type === 'backend_idle'), false, 'An early fact is not terminal completion');
+  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: { externalResults: [exploreContextForResult(result)] }, navigationAck: { id: navigation.id, status: 'applied' } }); await flushLive();
+  assert.equal(searches, 1); assert.equal(h.requests.length, 1);
+  assert.equal(h.socket.sent.filter(event => event.type === 'session.commentary.append' && event.content === result.answer).length, 1);
+  assert.ok(h.events.some(event => event.type === 'backend_idle'));
 });

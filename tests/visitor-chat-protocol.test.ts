@@ -13,6 +13,12 @@ test('chat event stream rejects a truncated task and unregistered event', async 
   await assert.rejects(readVisitorChatEvents(stream(''), new AbortController().signal, async () => {}), /before completion/);
   await assert.rejects(readVisitorChatEvents(stream('{"type":"run_arbitrary_code"}\n'), new AbortController().signal, async () => {}));
 });
+test('chat failures transport classified diagnostics without accepting provider payloads', async () => {
+  const received: unknown[] = [], classified = { ...error, diagnostic: { reason: 'schema', schemaPath: 'input.collectionId' } };
+  await readVisitorChatEvents(stream(`${JSON.stringify(classified)}\n`), new AbortController().signal, async event => { received.push(event); });
+  assert.deepEqual(received, [classified]);
+  await assert.rejects(readVisitorChatEvents(stream(`${JSON.stringify({ ...error, diagnostic: { token: 'private' } })}\n`), new AbortController().signal, async () => {}));
+});
 test('chat cancellation prevents accepting any result', async () => {
   const controller = new AbortController(); controller.abort(); let accepted = false;
   await assert.rejects(readVisitorChatEvents(stream(`${JSON.stringify(error)}\n`), controller.signal, async () => { accepted = true; }), { name: 'AbortError' });

@@ -4,6 +4,7 @@ import { catalogFilterSchema, presentationPlanSchema } from '@thevoice/platform-
 import { presentationSchema } from './site-presentation';
 import { exploreContextSchema } from './explore-model';
 import { workspaceStateSchema, workspaceSceneSchema } from '@thevoice/platform-ui/workspace';
+import { carouselContextSchema } from '@thevoice/platform-ui/carousel';
 
 export const visitorHistorySchema = z.array(z.object({ role: z.enum(['user', 'assistant']), text: z.string().trim().min(1).max(2000) }).strict()).max(8).default([]);
 export type VisitorHistory = z.infer<typeof visitorHistorySchema>;
@@ -24,6 +25,7 @@ export const visitorScreenSchema = z.object({
   focusedEntityId: z.string().min(1).max(100).nullable(), focusedSourceId: z.string().min(1).max(100).nullable(),
 }).strict();
 export const visitorContextSchema = z.object({
+  carousel: carouselContextSchema.optional(),
   taskSession: z.object({ sessionId: z.string().uuid(), revision: z.number().int().nonnegative(), generation: z.number().int().nonnegative() }).strict().optional(),
   workspace: workspaceStateSchema.optional(), scene: workspaceSceneSchema.optional(), externalResults: z.array(exploreContextSchema).max(6).optional(),
   explore: exploreContextSchema.optional(),

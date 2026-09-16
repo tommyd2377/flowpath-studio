@@ -40,11 +40,18 @@ export async function saveLocalImage(uid: string, siteId: string, file: StoredFi
   delete stored.data; delete stored.thumbnailData; delete stored.originalData;
   return stored;
 }
+export async function saveLocalVideo(uid: string, siteId: string, file: StoredFile): Promise<StoredFile> {
+  const directory = imageDirectory(uid, siteId, file.id); await mkdir(directory, { recursive: true });
+  await writeFile(join(directory, 'video.mp4'), Buffer.from(file.data!, 'base64'), { flag: 'wx', mode: 0o600 });
+  const stored = { ...file, localVideo: true }; delete stored.data; return stored;
+}
+export async function readLocalVideo(uid: string, siteId: string, fileId: string) { return new Uint8Array(await readFile(join(imageDirectory(uid, siteId, fileId), 'video.mp4'))); }
+
 export async function readLocalImage(uid: string, siteId: string, fileId: string, size: 'display' | 'thumb') {
   return new Uint8Array(await readFile(join(imageDirectory(uid, siteId, fileId), size === 'thumb' ? 'thumb.webp' : 'display.webp')));
 }
 export async function removeLocalImage(uid: string, siteId: string, file: StoredFile) {
-  if (file.localImage) await rm(imageDirectory(uid, siteId, file.id), { recursive: true, force: true });
+  if (file.localImage || file.localVideo) await rm(imageDirectory(uid, siteId, file.id), { recursive: true, force: true });
 }
 
 export async function readMediaLibrary(user: WorkspaceUser, siteId: string, revisionId: string): Promise<MediaLibrary> {
@@ -99,6 +106,7 @@ export async function saveMediaLibrary(user: WorkspaceUser, siteId: string, revi
   if (current.revision !== revision) throw new AppError('Your site changed. Reload before applying these photos.', 409);
   const catalog = current.draft.knowledgeRevisionId ? (await readKnowledgeArtifact(user, siteId, current.draft.knowledgeRevisionId)).catalog : null;
   const proposed = validateMediaLibrary(input, { entityIds: catalog?.entities.map(entity => entity.id) ?? [], sectionIds: current.draft.sections.map(section => section.id) });
+  for (const video of proposed.videos ?? []) { const source = video.source; if (source.kind === 'file' && !current.files.some(file => file.id === source.fileId && file.kind === 'video')) throw new AppError('Choose a video uploaded to this site.'); }
   const metadata = new Map<string, NonNullable<StoredFile['image']>>();
   for (const asset of proposed.assets) {
     const file = current.files.find(file => file.id === asset.id && file.kind === 'image');
@@ -112,7 +120,9 @@ export async function saveMediaLibrary(user: WorkspaceUser, siteId: string, revi
   await writePrivateMedia(user, siteId, library);
   const site = await modifySite(user, siteId, revision, state => {
     for (const asset of library.assets) if (!state.files.some(file => file.id === asset.id && file.kind === 'image')) throw new AppError('A photo was removed before Apply. Reload your draft.', 409);
-    state.mediaRefs = { ...state.mediaRefs, [library.id]: library.assets.map(asset => asset.id) };
+    const videoIds = (library.videos ?? []).flatMap(video => video.source.kind === 'file' ? [video.source.fileId] : []);
+    for (const id of videoIds) if (!state.files.some(file => file.id === id && file.kind === 'video')) throw new AppError('A video was removed before Apply.', 409);
+    state.mediaRefs = { ...state.mediaRefs, [library.id]: [...library.assets.map(asset => asset.id), ...videoIds] };
     for (const file of state.files) if (metadata.has(file.id)) file.image = metadata.get(file.id)!;
     updateDraft(state, { ...state.draft, mediaRevisionId: library.id });
   });

@@ -1,15 +1,14 @@
 'use client';
 import LoadingIndicator from './LoadingIndicator';
 
-import Image from 'next/image';
+import BrandingPanel from './BrandingPanel';
 
 import { useEffect, useId, useRef, useState } from 'react';
-import { ArrowUpRight, Check, CircleHelp, FileText, Globe2, Image as ImageIcon, Link2, Plus, Trash2, Upload, X } from 'lucide-react';
+import { ArrowUpRight, Check, FileText, Globe2, Image as ImageIcon, Link2, Plus, Trash2, Upload, X } from 'lucide-react';
 import type { Site, SiteContent } from '@/lib/site-model';
 import type { WorkspaceUser } from '@/lib/firebase/types';
 import type { EditorStatus } from '@/lib/editor-types';
 import GreetingSettings from './GreetingSettings';
-import { SITE_PALETTES } from '@/lib/site-style';
 import VisitorSettings from './VisitorSettings';
 import ExploreSettings from './ExploreSettings';
 import OpeningSettings from './OpeningSettings';
@@ -32,26 +31,7 @@ export function EditorPanels({ editor, mode, panel, site, content, setContent, b
   const save = () => void command({ action: 'save', content });
   const saveBar = <div className="save-bar"><span>{unsaved ? 'Save to keep these changes in your draft.' : 'Your draft is up to date.'}</span><button className="button primary" disabled={busy || !unsaved} onClick={save}><Check size={16}/>Save draft</button></div>;
 
-  if (panel === 'branding') return <div className="settings-panel">
-    <div className="panel-heading"><span className="eyebrow">Make it yours</span><h2>Branding</h2><p>The details that make your site feel like you.</p></div>
-    <label className="field">Site name<input disabled={busy} value={content.name} maxLength={80} onChange={e => change('name', e.target.value)}/></label>
-    <div className="field"><span>Logo</span><div className="logo-field">
-      {content.logoAssetId ? <Image unoptimized width={54} height={54} alt="Current logo" src={`/api/files/${site.id}/${content.logoAssetId}`}/> : <div className="logo-placeholder"><ImageIcon size={22}/></div>}
-      <div><strong>{content.logoAssetId ? 'Your site logo' : 'A familiar first impression'}</strong><p>PNG, JPEG, or WebP · up to 10 MB</p><div className="inline-actions"><button className="text-button" disabled={busy || unsaved} onClick={() => input.current?.click()}>Upload a logo</button>{content.logoAssetId && <button className="text-button muted" disabled={busy} onClick={() => change('logoAssetId', null)}>Remove</button>}</div></div>
-      <input hidden type="file" ref={input} accept="image/png,image/jpeg,image/webp" onChange={e => { upload(e.target.files); e.target.value = ''; }}/>
-    </div><span className="field-help">After uploading, choose “Use as logo” in Files.</span></div>
-    <div className="field"><span>Brand accent</span><div className="color-row"><input disabled={busy} type="color" aria-label="Brand color" value={content.accent} onChange={e => change('accent', e.target.value)}/><span className="color-code">{content.accent.toUpperCase()}</span></div>
-      <div className="palette">{['#c8ac85', '#a9bf99', '#829de5', '#b2a2e3', '#dfa4b7', '#87c6be'].map(color => <button disabled={busy} aria-label={`Use color ${color}`} aria-pressed={content.accent === color} key={color} style={{ background: color }} onClick={() => change('accent', color)}>{content.accent === color && <Check size={16}/>}</button>)}</div>
-    </div>
-    <div className="info-note"><CircleHelp size={16}/><p>Your accent appears on borders, highlighted content, and small details in the shared FlowPath layout.</p></div>
-    <label className="field">Visitor layout<select disabled={busy} value={content.style?.layout ?? 'balanced'} onChange={event => change('style', { palette: content.style?.palette ?? 'midnight', layout: event.target.value })}>
-      <option value="balanced">Balanced · equal objects</option><option value="editorial">Editorial · generous reading</option><option value="compact">Compact · more at a glance</option>
-    </select></label>
-    <label className="field">Visitor palette<select disabled={busy} value={content.style?.palette ?? 'midnight'} onChange={event => change('style', { layout: content.style?.layout ?? 'balanced', palette: event.target.value })}>
-      {Object.entries(SITE_PALETTES).map(([id, palette]) => <option key={id} value={id}>{palette.label}</option>)}
-    </select><span className="field-help">Three accessible palettes share the same content, controls, and motion. Save and publish to update visitors.</span></label>
-    {saveBar}
-  </div>;
+  if (panel === 'branding') return <BrandingPanel site={site} content={content} setContent={setContent} busy={busy} unsaved={unsaved} upload={upload} save={save}/>;
 
   if (panel === 'content') return <div className="settings-panel">
     <div className="panel-heading"><span className="eyebrow">Your story</span><h2>Content</h2><p>Keep the information on your site clear and current.</p></div>

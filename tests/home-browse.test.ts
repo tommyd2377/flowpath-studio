@@ -16,8 +16,9 @@ test('Home aliases and full website commands are local; ordinary back and conten
   for (const text of ['Home', 'Take me home', 'bring me back to the main page', 'take me to the beginning', 'Go back to the beginning please', 'start over', 'Please return to the home page.']) assert.equal(visitorPageIntent(text), 'home', text);
   for (const text of ['Show me the full website', 'Browse published content', 'Open the regular site']) assert.equal(visitorPageIntent(text), 'browse', text);
   for (const text of ['Clear workspace', 'empty my workspace', 'close all three panels', 'Please close all 12 cards.', 'Dismiss all of the open boxes', 'close everything']) assert.equal(visitorPageIntent(text), 'clear', text);
+  for (const text of ['Go back to the workspace', 'Take me back to the workspace', 'return to my workspace', 'Show me the workspace overview', 'Show all open panels']) assert.equal(visitorPageIntent(text), 'unfocus', text);
   for (const text of ['Do not close all panels', 'close all panels except the map', 'close the third panel', 'clear workspace and show a map', 'How do I close all panels?', 'close the window']) assert.equal(visitorPageIntent(text), null, text);
-  for (const text of ['back', 'show home insurance', 'find images of a home', 'What is the homepage address?']) assert.equal(visitorPageIntent(text), null, text);
+  for (const text of ['back', 'show home insurance', 'find images of a home', 'What is the homepage address?', 'Do not go back to the workspace', 'Show the workspace and close a panel']) assert.equal(visitorPageIntent(text), null, text);
   assert.deepEqual(visitorNavigationSchema.parse({ kind: 'home' }), { kind: 'home' });
   assert.deepEqual(visitorNavigationSchema.parse({ kind: 'browse' }), { kind: 'browse' });
   assert.deepEqual(visitorNavigationSchema.parse({ kind: 'clear' }), { kind: 'clear' });

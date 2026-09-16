@@ -11,6 +11,9 @@ import { visitorTaskContext } from '../lib/visitor-task-context';
 import { acknowledgeTaskDisplay, observeTaskScene } from '../lib/visitor-capabilities';
 import { runVisitorTask } from '../lib/visitor-task-runner';
 import type { VisitorTaskView } from '@thevoice/platform-ui/task-view';
+import { createVisitorRealtimeControl, type VisitorControlSocket } from '../lib/visitor-realtime-control';
+import { FakeLiveSocket, liveAnswer, liveTool } from './helpers/live-fixture';
+import type { VisitorRealtimeEvent } from '../lib/visitor-realtime';
 
 for (const stage of ['beforeModel', 'instructions'] as const) test(`cancelled task does not call the model after asynchronous ${stage}`, async () => {
   const controller = new AbortController(); let calls = 0;
@@ -57,6 +60,7 @@ test('actual owner review/apply/publish routes feed the same bounded mocked chat
       };
       const result = await runVisitorTask({ channel, model: 'offline-test-model', apiKey: 'unused-offline-placeholder', signal: new AbortController().signal, fetch: mock, tools: [bridge.tool], context: { request: 'Look up the two records, filter and compare, then show them.' }, instructions: () => bridge.instructions(), beforeModel: () => bridge.beforeModel(), onUsage: usage => bridge.usage(usage), execute: async (_name, args, signal) => {
         const result = await bridge.execute(args, signal, async view => { displayed = view; await acknowledgeTaskDisplay(context.store, view.sessionId, context.publication, { operationId: view.operationId!, queryId: view.query.queryId, queryRevision: view.query.revision, resultSetId: view.result.resultSetId, sceneRevision: 1, recordIds: view.comparison?.rows.map(record => record.id) ?? view.records.map(record => record.id) }); });
+        assert.ok(result.data.handleId); assert.ok(result.data.outputType);
         handleId = result.data.handleId; outputType = result.data.outputType; return result;
       } });
       assert.equal(round, 5); assert.match(result.text, /compared/); assert.deepEqual(displayed!.comparison!.rows.map(row => row.id), ['record-00001', 'record-00003']);
@@ -66,14 +70,51 @@ test('actual owner review/apply/publish routes feed the same bounded mocked chat
       assert.deepEqual(sceneContext.scene.records.map((record: { id: string }) => record.id), ['record-00001', 'record-00003']);
       await observeTaskScene(context.store, saved.id, context.publication, { ...saved.scene!, operationId: saved.scene!.operationId!, generation: saved.generation, sceneRevision: 2, ready: false, recordIds: [] });
       assert.equal(JSON.parse((await bridge.instructions()).split('\n').at(-1)!).scene, null, `${channel} must not receive stale visible ordinals while the viewport moves`);
+      const blocked = await bridge.execute(JSON.stringify({ capabilityId: 'presentation.show', input: { handleId: 'retrieval', outputType: 'records' } }), new AbortController().signal, async () => { assert.fail('A bounded retrieval must not become a second results section.'); });
+      assert.equal(blocked.data.status, 'unavailable');
+      await bridge.execute(JSON.stringify({ capabilityId: 'query.command', input: { text: 'Only reading minutes at least 6' } }), new AbortController().signal, async view => {
+        assert.equal(view.result.count.value, 2);
+        await acknowledgeTaskDisplay(context.store, view.sessionId, context.publication, { operationId: view.operationId!, queryId: view.query.queryId, queryRevision: view.query.revision, resultSetId: view.result.resultSetId, sceneRevision: 3, recordIds: view.records.map(record => record.id) });
+      });
       const interrupted = await taskRoute(req({ action: 'interrupt', sessionId: saved.id }), { params: Promise.resolve({ slug: site.slug }) }); assert.equal(interrupted.status, 200);
       await assert.rejects(() => bridge.instructions(), /cancelled/);
     }
-    const context = await visitorTaskContext(site.slug), session = await context.store.create(context.publication);
+    const context = await visitorTaskContext(site.slug);
+    for (const compound of [false, true]) {
+      const socket = new FakeLiveSocket(); let calls = 0;
+      let resolveNavigation!: (event: Extract<VisitorRealtimeEvent, { type: 'navigation' }>) => void, resolveDone!: () => void;
+      let rejectNavigation!: (error: Error) => void, rejectDone!: (error: Error) => void;
+      const navigation = new Promise<Extract<VisitorRealtimeEvent, { type: 'navigation' }>>((resolve, reject) => { resolveNavigation = resolve; rejectNavigation = reject; });
+      const done = new Promise<void>((resolve, reject) => { resolveDone = resolve; rejectDone = reject; });
+      void navigation.catch(() => {}); void done.catch(() => {});
+      const fail = (message: string) => { const error = new Error(message); rejectNavigation(error); rejectDone(error); };
+      const timeout = setTimeout(() => fail('The synthetic voice request did not finish.'), 5000);
+      const availability = { enabled: true, mode: 'voice' as const, live: true, voiceRemaining: 4, chatRemaining: 20, resetsAt: '' };
+      const control = createVisitorRealtimeControl({ taskSlug: site.slug, callId: 'voice_task_fixture', apiKey: 'synthetic', content: { ...context.site.content, visitorSpeaksFirst: true },
+        initialAvailability: availability, signal: new AbortController().signal, reserveTurn: async () => availability, assertCurrent: async () => {},
+        socketFactory: () => socket as unknown as VisitorControlSocket, onFatal: fail,
+        emit: event => { if (event.type === 'navigation') resolveNavigation(event); if (event.type === 'backend_idle') resolveDone(); if (event.type === 'task_error') fail(event.message); },
+        fetch: async () => Response.json({ status: 'completed', output: ++calls === 1 ? [liveTool('visitor_task', { capabilityId: 'record.detail', input: { recordId: 'record-00001' } })] : [liveAnswer('Published details.')] }),
+      });
+      try {
+        socket.open(); await control.ready; control.start();
+        socket.user(`Open ${space.records.find(record => record.id === 'record-00001')!.name}${compound ? ' and explain its details' : ''}`);
+        const event = await navigation; assert.equal(calls, 1); assert.equal(event.target.kind, 'task');
+        if (event.target.kind !== 'task') throw new Error('Expected a task view.');
+        const view = event.target.view;
+        assert.equal(socket.sent.some(value => value.content === 'Opened.'), false);
+        await acknowledgeTaskDisplay(context.store, view.sessionId, context.publication, { operationId: view.operationId!, queryId: view.query.queryId, queryRevision: view.query.revision, resultSetId: view.result.resultSetId, sceneRevision: 1, recordIds: [view.detail!.record.id] });
+        await control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: event.id, status: 'applied' } });
+        await done;
+        assert.equal(calls, compound ? 2 : 1, 'Only simple confirmed navigation skips the closing model call');
+        assert.ok(socket.sent.some(value => value.content === (compound ? 'Published details.' : 'Opened.')));
+      } finally { clearTimeout(timeout); await control.close(); }
+    }
+    const session = await context.store.create(context.publication);
     const oldBridge = await createVisitorTaskBridge(site.slug, session.id), newBridge = await createVisitorTaskBridge(site.slug, session.id);
-    await oldBridge.beforeModel(); await newBridge.beforeModel();
+    await assert.rejects(() => oldBridge.beforeModel(), /cancelled/); await newBridge.beforeModel();
     await oldBridge.finish('cancelled');
-    assert.deepEqual((await context.store.read(session.id, context.publication)).tasks.map(task => task.status), ['cancelled', 'interpreting'], 'Cancelling an older request cannot complete the newer task');
+    assert.deepEqual((await context.store.read(session.id, context.publication)).tasks.map(task => task.status), ['interpreting'], 'A superseded request cannot run or complete the newer task');
     await newBridge.finish();
     const changed = await siteRoute(req({ action: 'save', revision: published.site.revision, content: { ...published.site.draft, headline: 'Changed publication' } }), { params: Promise.resolve({ siteId: site.id }) });
     const changedBody = await changed.json(); assert.equal(changed.status, 200, JSON.stringify(changedBody));

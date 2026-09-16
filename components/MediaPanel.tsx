@@ -4,7 +4,7 @@ import LoadingIndicator from './LoadingIndicator';
 import Image from 'next/image';
 import { useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Check, FolderOpen, Images, Plus, Sparkles, Star, Trash2, Upload, X } from 'lucide-react';
-import { validateMediaLibrary, type MediaLibrary } from '@thevoice/platform-ui/media';
+import { validateMediaLibrary, videoSchema, youtubeVideoId, type MediaLibrary } from '@thevoice/platform-ui/media';
 import type { KnowledgeCatalog } from '@thevoice/platform-ui/contracts';
 import type { Site } from '@/lib/site-model';
 
@@ -33,6 +33,8 @@ export default function MediaPanel({ site, blocked, connected, upload, onBusyCha
   const [existing, setExisting] = useState(false);
   const [destination, setDestination] = useState('');
   const input = useRef<HTMLInputElement>(null);
+  const videoInput = useRef<HTMLInputElement>(null);
+  const [videoUrl, setVideoUrl] = useState('');
   const folder = useRef<HTMLInputElement>(null);
   const running = useRef(false);
   const dirty = library !== null && JSON.stringify(library) !== saved;
@@ -106,6 +108,21 @@ export default function MediaPanel({ site, blocked, connected, upload, onBusyCha
     }
     catch (error) { setError(description(error)); }
     finally { running.current = false; setBusy(false); }
+  }
+
+  async function addVideoFiles(files: FileList | null) {
+    if (!files?.length || disabled || !library) return;
+    setBusy(true); setError('');
+    try { const result = await upload(files); if (!result) return;
+      const videos = result.uploaded.flatMap(item => { const file = result.site.files.find(file => file.id === item.fileId); return file?.kind === 'video' ? [{ id: file.id, title: titleFromName(file.name) || file.name, description: '', source: { kind: 'file' as const, fileId: file.id }, autoplay: false }] : []; });
+      update({ ...library, videos: [...library.videos ?? [], ...videos] }); if (result.error) setError(result.error);
+    } catch (error) { setError(description(error)); } finally { setBusy(false); }
+  }
+  function addVideoLink() {
+    if (!library) return;
+    try { const youtube = youtubeVideoId(videoUrl); const video = videoSchema.parse({ id: crypto.randomUUID(), title: 'Video', description: '', source: youtube ? { kind: 'youtube', videoId: youtube } : { kind: 'url', url: videoUrl.trim() }, autoplay: false });
+      update({ ...library, videos: [...library.videos ?? [], video] }); setVideoUrl('');
+    } catch { setError('Use a YouTube video link or a public HTTPS MP4 link.'); }
   }
 
   async function suggest(useVision: boolean) {
@@ -208,6 +225,13 @@ export default function MediaPanel({ site, blocked, connected, upload, onBusyCha
           <details className="media-group-tools"><summary>Organize selected photos</summary><button className="button secondary" disabled={disabled || library.albums.length >= 24} onClick={createAlbum}><Plus size={14}/>Create album from selection</button>{library.albums.length > 0 && <div className="media-add-to-album"><label className="field">Destination album<select disabled={disabled} value={destination || library.albums[0]?.id || ''} onChange={event => setDestination(event.target.value)}>{library.albums.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label><button className="button secondary" disabled={disabled} onClick={addToAlbum}>Add to album</button></div>}{album && context.trim() && <button className="text-button" disabled={disabled} onClick={() => changeAlbum({ description: context.trim().slice(0, 1000) })}>Use note as album description</button>}</details><div className="media-batch-removal">{album && <button className="text-button muted" disabled={disabled} onClick={() => { const ids = album.assetIds.filter(id => !selected.includes(id)); changeAlbum({ assetIds: ids, coverAssetId: album.coverAssetId && ids.includes(album.coverAssetId) ? album.coverAssetId : ids[0] }); setSelected([]); }}><X size={14}/>Remove from this album</button>}<button className="text-button muted" disabled={disabled} onClick={removeFromLibrary}><Trash2 size={14}/>Remove from photo library</button></div><p className="field-help">Removing a photo here changes the reviewed collection. The private upload remains in Files.</p>
         </section>}
       </> : <div className="media-empty"><Images size={28}/><strong>A place for your photos</strong><p>Albums work on their own. You can connect photos to specific items or sections whenever you are ready.</p></div>}
+      <section className="media-video-review" aria-label="Video library"><h3>Videos</h3><p>Upload an MP4 or add a video from your website or YouTube. Review its title and description before applying.</p>
+        <button type="button" className="button secondary" disabled={disabled || (library.videos?.length ?? 0) >= 20} onClick={() => videoInput.current?.click()}>Upload MP4</button>
+        <input ref={videoInput} type="file" hidden accept="video/mp4,.mp4" aria-label="Upload video" onChange={event => { void addVideoFiles(event.target.files); event.target.value = ''; }}/>
+        <p className="field-help">H.264 MP4 · up to 50 MB and 10 minutes. Uses the existing site storage allowance.</p>
+        <label className="field">YouTube or website MP4 link<input type="url" value={videoUrl} disabled={disabled} onChange={event => setVideoUrl(event.target.value)}/></label><button type="button" className="button secondary" disabled={disabled || !videoUrl.trim() || (library.videos?.length ?? 0) >= 20} onClick={addVideoLink}>Add video link</button>
+        {(library.videos ?? []).map(video => <div key={video.id} className="media-video-fields"><label className="field">Video title<input value={video.title} maxLength={160} disabled={disabled} onChange={event => update({ ...library, videos: library.videos!.map(item => item.id === video.id ? { ...item, title: event.target.value } : item) })}/></label><label className="field">Published description<textarea value={video.description} maxLength={3000} disabled={disabled} onChange={event => update({ ...library, videos: library.videos!.map(item => item.id === video.id ? { ...item, description: event.target.value } : item) })}/></label><label><input type="checkbox" checked={video.autoplay} disabled={disabled} onChange={event => update({ ...library, videos: library.videos!.map(item => item.id === video.id ? { ...item, autoplay: event.target.checked } : item) })}/>Play muted when its AI card opens</label><button type="button" className="text-button muted" disabled={disabled} onClick={() => update({ ...library, videos: library.videos!.filter(item => item.id !== video.id) })}>Remove video</button></div>)}
+      </section>
       {notes.length > 0 && <ul className="media-notes" aria-label="Photo review notes">{notes.map((note, index) => <li key={index}>{note}</li>)}</ul>}
       <div className="save-bar media-save"><span>{dirty ? 'Photo changes are ready to review.' : 'Your photo draft is up to date.'}</span><div className="inline-actions">{dirty && <button className="text-button muted" disabled={disabled} onClick={() => { setLibrary(JSON.parse(saved)); setSelected([]); setEditing(''); setError(''); setNotes([]); }}>Discard photo changes</button>}<button className="button primary" disabled={disabled || !dirty} onClick={() => void apply()}><Check size={16}/>Apply to draft</button></div></div>
     </>}

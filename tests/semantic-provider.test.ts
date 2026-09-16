@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { z } from 'zod';
-import { parseSemanticProviderReply, semanticReplyJsonSchema } from '../lib/ingestion';
+import { interpretRelatedSources, parseSemanticProviderReply, semanticReplyJsonSchema } from '../lib/ingestion';
 import type { SourceProvenance } from '../lib/source-provenance';
 import { AppError } from '../lib/errors';
 
@@ -16,6 +16,51 @@ function reply() {
     collections: [], relationships: [], facts: [], evidence: [], jobs: [] };
 }
 const parse = (value: unknown, provenance = source) => parseSemanticProviderReply(JSON.stringify(value), provenance);
+
+test('related prose shares one request while each file keeps its own validated evidence', async () => {
+  const sources = ['one', 'two'].map(sourceId => ({ sourceId, name: sourceId + '.pdf', text: 'Harbor Studio offers classes.', provenance: { anchors: [{ ...source.anchors[0], id: sourceId + '-page' }], fields: [] } }));
+  let calls = 0;
+  const result = await interpretRelatedSources(sources, async (input, schema) => {
+    calls++;
+    assert.deepEqual((input.sources as { sourceId: string }[]).map(item => item.sourceId), ['one', 'two']);
+    const wire = z.fromJSONSchema(schema as Parameters<typeof z.fromJSONSchema>[0]);
+    const output = { sources: sources.map(item => ({ sourceId: item.sourceId, interpretation: { ...reply(), entities: reply().entities.map(entity => ({ ...entity, aliases: null, identifiers: null, blocks: null })), evidence: [{ entityId: 'harbor', field: 'name', anchorIds: [item.sourceId + '-page'] }] } })) };
+    assert.ok(wire.safeParse(output).success);
+    return JSON.stringify(output);
+  });
+  assert.equal(calls, 1);
+  for (const item of sources) {
+    const interpreted = result.get(item.sourceId)!;
+    assert.ok(!(interpreted instanceof AppError));
+    assert.equal(interpreted.provenance?.anchors[0].id, item.sourceId + '-page');
+    assert.deepEqual(interpreted.provenance?.fields[0].anchorIds, [item.sourceId + '-page']);
+    assert.deepEqual(interpreted.catalog.capabilities, []);
+  }
+});
+
+test('related prose rejects oversized inputs before reservation and never retries a failed request', async () => {
+  let calls = 0;
+  const request = async () => { calls++; throw new AppError('Synthetic provider failure', 502); };
+  const item = { sourceId: 'one', name: 'one.pdf', text: 'x'.repeat(30_001), provenance: source };
+  await assert.rejects(() => interpretRelatedSources([item, { ...item, sourceId: 'two' }], request), /combined interpretation limit/);
+  assert.equal(calls, 0);
+  await assert.rejects(() => interpretRelatedSources([item], request), /Synthetic provider failure/);
+  assert.equal(calls, 1);
+});
+
+test('partial related-file replies preserve successful files and reject cross-file or ambiguous evidence', async () => {
+  const sources = ['one', 'two', 'three'].map(sourceId => ({ sourceId, name: sourceId + '.pdf', text: 'Source text', provenance: { anchors: [{ ...source.anchors[0], id: sourceId + '-page' }], fields: [] } }));
+  const output = [{ sourceId: 'one', interpretation: reply() }, { sourceId: 'two', interpretation: { ...reply(), complete: false, issues: ['The document could not be fully represented.'] } }];
+  const partial = await interpretRelatedSources(sources, async () => JSON.stringify({ sources: output }));
+  assert.ok(!(partial.get('one') instanceof AppError));
+  assert.match((partial.get('two') as AppError).message, /incomplete/);
+  assert.match((partial.get('three') as AppError).message, /omitted this file/);
+  const foreign = await interpretRelatedSources(sources.slice(0, 1), async () => JSON.stringify({ sources: [{ sourceId: 'one', interpretation: { ...reply(), evidence: [{ entityId: 'harbor', field: 'summary', anchorIds: ['two-page'] }] } }] }));
+  assert.ok(foreign.get('one') instanceof AppError);
+  for (const invalid of [[output[0], output[0]], [{ ...output[0], sourceId: 'unknown' }]]) {
+    await assert.rejects(() => interpretRelatedSources(sources, async () => JSON.stringify({ sources: invalid })), /duplicate or unknown source/);
+  }
+});
 
 test('provider schema constrains IDs, labels and kinds before generation to the accepted catalog bounds', () => {
   const schema = semanticReplyJsonSchema() as { properties: Record<string, Record<string, unknown>> };

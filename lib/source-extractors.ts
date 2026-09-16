@@ -78,10 +78,13 @@ function catalogFromRows(name: string, rows: string[][]): KnowledgeCatalog {
     const values = rows.slice(1).map(row => row[index]).filter(Boolean);
     const currency = headers[index].match(/\[([A-Z]{3})\]\s*$/)?.[1];
     const numeric = values.length > 0 && values.every(value => /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value));
-    if (currency && values.length && !numeric) throw new AppError(`“${headers[index]}” must contain numeric amounts or blank cells.`);
-    const type = currency ? 'money' : numeric ? 'number' : values.length && values.every(value => /^(true|false)$/i.test(value)) ? 'boolean'
+    // A qualified amount is text, not an exact comparable price. Keep every word.
+    const qualified = currency && values.some(value => /\b(?:from|starting at|per|minimum|seasonal|notice|approximately)\b/i.test(value))
+      && values.every(value => /\d/.test(value));
+    if (currency && values.length && !numeric && !qualified) throw new AppError(`“${headers[index]}” must contain numeric amounts, explicit qualified amounts (for example “from 18 per person”), or blank cells.`);
+    const type = qualified ? 'text' : currency ? 'money' : numeric ? 'number' : values.length && values.every(value => /^(true|false)$/i.test(value)) ? 'boolean'
       : values.length && values.every(value => /^\d{4}-\d{2}-\d{2}$/.test(value)) ? 'date' : 'text';
-    return { id: normalized[index], label: headers[index], type, ...(currency ? { currency } : {}) };
+    return { id: normalized[index], label: headers[index], type, ...(currency && type === 'money' ? { currency } : {}) };
   });
   const entities = rows.slice(1).map((row, index) => ({
     id: slug(idIndex < 0 ? row[nameIndex] : row[idIndex]) || `row-${index + 1}`, kind: kindIndex < 0 ? 'item' : row[kindIndex] || 'item',
@@ -89,6 +92,7 @@ function catalogFromRows(name: string, rows: string[][]): KnowledgeCatalog {
     attributes: Object.fromEntries(indexes.map((column, index) => [definitions[index].id, !row[column] ? null : definitions[index].type === 'number' || definitions[index].type === 'money' ? Number(row[column]) : definitions[index].type === 'boolean' ? row[column].toLowerCase() === 'true' : row[column]])),
   }));
   if (entities.some(entity => !entity.name)) throw new AppError('Every catalog row needs a name.');
+  if (!entities.length) throw new AppError('This table has no item rows. No previous source information was removed.');
   if (new Set(entities.map(entity => entity.id)).size !== entities.length) throw new AppError('Some catalog items have matching names or IDs. Add a unique ID column to keep their identities separate.');
   return validateCatalog({ schemaVersion: 1, id: randomUUID(), name: name.replace(/\.[^.]+$/, '').slice(0, 160), description: '', attributes: definitions, entities,
     collections: [{ id: 'all', name: 'All items', entityIds: entities.map(entity => entity.id) }], relationships: [],

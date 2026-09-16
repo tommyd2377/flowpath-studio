@@ -24,9 +24,16 @@ const combine = (values: Truth[], any: boolean): Truth => any ? values.includes(
   : values.includes(false) ? false : values.every(value => value === true) ? true : unknownResult(values);
 const equal = (left: unknown, right: unknown) => canonicalValue(left) === canonicalValue(right);
 const canonicalValue = (value: unknown) => typeof value === 'string' ? value.normalize('NFKC').toLocaleLowerCase('en') : JSON.stringify(value);
+function cachedProjection(index: CompiledQueryIndex, recordId: string, fieldId: string, asOf: string, cache?: Map<string, FieldProjection>) {
+  const key = JSON.stringify([recordId, fieldId]);
+  let field = cache?.get(key);
+  if (!field) { field = projectField(index, recordId, fieldId, asOf); cache?.set(key, field); }
+  return field;
+}
 export function evaluateExpression(index: CompiledQueryIndex, recordId: string, expression: Expression, asOf: string, projection?: Map<string, FieldProjection>): Truth {
   const evaluate = (node: Expression) => evaluateExpression(index, recordId, node, asOf, projection);
   if (expression.kind === 'all' || expression.kind === 'any') return combine(expression.children.map(evaluate), expression.kind === 'any');
+  if (expression.kind === 'search') return expression.text.normalize('NFKC').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean).every(term => index.tokens.get(term)?.has(recordId));
   if (expression.kind === 'not') { const value = evaluate(expression.child); return typeof value === 'boolean' ? !value : value; }
   if (expression.kind === 'relation') {
     const edges = (expression.direction === 'out' ? index.outgoing : index.incoming).get(recordId)?.filter(relation => relation.predicateId === expression.predicateId) ?? [];
@@ -35,13 +42,12 @@ export function evaluateExpression(index: CompiledQueryIndex, recordId: string, 
       if (!assertionActive(edge, asOf)) return 'stale';
       if (edge.conditions.length) return 'conditional';
       if (edges.some(other => other.fromId === edge.fromId && other.toId === edge.toId && other.polarity !== edge.polarity && !other.conditions.length && assertionActive(other, asOf))) return 'conflicting';
-      const value = evaluateExpression(index, expression.direction === 'out' ? edge.toId : edge.fromId, expression.target, asOf);
+      const value = evaluateExpression(index, expression.direction === 'out' ? edge.toId : edge.fromId, expression.target, asOf, projection);
       return edge.polarity === 'denied' ? value === true ? false : 'unknown' : value;
     }), true);
   }
   if (expression.kind !== 'field' && expression.kind !== 'state') return false;
-  const key = `${recordId}/${expression.fieldId}`;
-  const field = projection?.get(key) ?? projectField(index, recordId, expression.fieldId, asOf); projection?.set(key, field);
+  const field = cachedProjection(index, recordId, expression.fieldId, asOf, projection);
   if (expression.kind === 'state') return field.state === expression.state;
   if (field.state === 'conditional') {
     const facts = index.assertions.get(recordId)?.get(expression.fieldId)?.filter(fact => assertionActive(fact, asOf)) ?? [];
@@ -109,7 +115,7 @@ export function evaluateQuery(index: CompiledQueryIndex, input: unknown, options
   });
   ranked.sort((left, right) => {
     for (const term of query.order) {
-      const a = projectField(index, left.recordId, term.fieldId, query.asOf), b = projectField(index, right.recordId, term.fieldId, query.asOf);
+      const a = cachedProjection(index, left.recordId, term.fieldId, query.asOf, projection), b = cachedProjection(index, right.recordId, term.fieldId, query.asOf, projection);
       if (a.state !== b.state) return a.state === 'known' ? -1 : b.state === 'known' ? 1 : a.state.localeCompare(b.state);
       if (a.state !== 'known') continue;
       const av = a.value!.value, bv = b.value!.value;
@@ -124,16 +130,25 @@ export function evaluateQuery(index: CompiledQueryIndex, input: unknown, options
     const where = withoutField(query.where, fieldId) ?? emptyWhere, counts = new Map<string, { value: string | number | boolean; count: number }>(); let unknown = 0;
     for (const recordId of candidates) {
       if (evaluateExpression(index, recordId, where, query.asOf, projection) !== true) continue;
-      const field = projectField(index, recordId, fieldId, query.asOf);
+      const field = cachedProjection(index, recordId, fieldId, query.asOf, projection);
       if (field.state !== 'known') { unknown++; continue; }
       const values = Array.isArray(field.value!.value) ? field.value!.value : [field.value!.value];
       for (const value of new Set(values)) if (typeof value !== 'object') { const key = canonicalValue(value), prior = counts.get(key); counts.set(key, { value, count: (prior?.count ?? 0) + 1 }); }
     }
     return { fieldId, values: [...counts.values()].sort((a, b) => b.count - a.count || String(a.value).localeCompare(String(b.value))).slice(0, 64), unknown, coverage: counts.size > 64 ? 'partial' as const : 'complete' as const };
   });
-  const alternatives = !ranked.length && options.alternatives !== false ? expressionNodes(query.where).filter(node => node.kind === 'field' || node.kind === 'state' || node.kind === 'relation').slice(0, 24).map(node => ({ removeNodeId: node.id,
+  const alternatives = !ranked.length && options.alternatives !== false ? expressionNodes(query.where).filter(node => node.kind === 'field' || node.kind === 'state' || node.kind === 'relation' || node.kind === 'search').slice(0, 24).map(node => ({ removeNodeId: node.id,
     count: candidates.filter(id => evaluateExpression(index, id, withoutNode(query.where, node.id) ?? emptyWhere, query.asOf, projection) === true).length })).filter(alternative => alternative.count > 0) : [];
   return { ordered: ranked.map(item => item.recordId), exclusions, facets, alternatives };
+}
+// Immutable index identity + the entire query (including as-of and revision).
+// Callers must still perform current-publication authorization before using it.
+const evaluations = new WeakMap<CompiledQueryIndex, Map<string, QueryEvaluation>>();
+export function preparedQuery(index: CompiledQueryIndex, query: QuerySpec): QueryEvaluation {
+  const key = queryHash(query), cache = evaluations.get(index) ?? new Map<string, QueryEvaluation>();
+  let result = cache.get(key);
+  if (!result) { result = evaluateQuery(index, query); if (cache.size >= 32) cache.delete(cache.keys().next().value!); cache.set(key, result); evaluations.set(index, cache); }
+  return result;
 }
 export type QueryAuthority = { publication: PublicationRef; sessionId: string; entitlement: string };
 type SavedResult = { queryHash: string; authority: string; resultSetId: string; ordered: string[]; expiresAt: number; evaluation: QueryEvaluation };

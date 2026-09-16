@@ -22,6 +22,10 @@ export function publicationContent(content: SiteContent): SiteContent {
 
 export function openingCopy(content: SiteContent, catalog?: KnowledgeCatalog | null) {
   if (content.opening?.copyMode === 'personalized') return { headline: content.headline, description: content.description };
+  if (content.style?.template) return {
+    headline: content.headline === 'Find what you’re looking for.' ? content.name : content.headline,
+    description: content.description === 'Explore our information, compare options, and choose what matters to you.' ? '' : content.description || catalog?.description || '',
+  };
   // Compose only from the current snapshot; never generate facts or make a paid call on page load.
   if (catalog) return { headline: catalog.name, description: catalog.description || `Explore ${catalog.entities.length} published items and find what matters to you.` };
   return { headline: `Explore ${content.name}`, description: content.sections.length

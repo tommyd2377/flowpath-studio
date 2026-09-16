@@ -39,12 +39,14 @@ export const relationshipDescriptorSchema = z.object({ id, label: z.string().min
 export type RelationshipDescriptor = z.infer<typeof relationshipDescriptorSchema>;
 export type Expression = { kind: 'all' | 'any'; id: string; children: Expression[] }
   | { kind: 'not'; id: string; child: Expression }
+  | { kind: 'search'; id: string; text: string }
   | { kind: 'field'; id: string; fieldId: string; op: typeof fieldOperators[number]; value: TypedValue }
   | { kind: 'state'; id: string; fieldId: string; state: typeof informationStates[number] }
   | { kind: 'relation'; id: string; predicateId: string; direction: 'out' | 'in'; target: Expression };
 const recursiveExpression: z.ZodType<Expression> = z.lazy(() => z.union([
   z.object({ kind: z.enum(['all', 'any']), id, children: z.array(recursiveExpression).max(24) }).strict(),
   z.object({ kind: z.literal('not'), id, child: recursiveExpression }).strict(),
+  z.object({ kind: z.literal('search'), id, text: z.string().trim().min(1).max(500) }).strict(),
   z.object({ kind: z.literal('field'), id, fieldId: id, op: z.enum(fieldOperators), value: typedValueSchema }).strict(),
   z.object({ kind: z.literal('state'), id, fieldId: id, state: z.enum(informationStates) }).strict(),
   z.object({ kind: z.literal('relation'), id, predicateId: id, direction: z.enum(['out', 'in']), target: recursiveExpression }).strict(),
@@ -93,7 +95,10 @@ export type QueryPatch = z.infer<typeof queryPatchSchema>;
 export type QueryHistory = { current: QuerySpec; past: QuerySpec[] };
 function rewrite(node: Expression, target: string, replace: (node: Expression) => Expression | null): Expression | null {
   if (node.id === target) return replace(node);
-  if ('children' in node) return { ...node, children: node.children.map(child => rewrite(child, target, replace)).filter((child): child is Expression => child !== null) };
+  if ('children' in node) {
+    const children = node.children.map(child => rewrite(child, target, replace)).filter((child): child is Expression => child !== null);
+    return node.children.length && !children.length ? null : { ...node, children };
+  }
   if ('child' in node) { const child = rewrite(node.child, target, replace); return child ? { ...node, child } : null; }
   if ('target' in node) { const child = rewrite(node.target, target, replace); return child ? { ...node, target: child } : null; }
   return node;

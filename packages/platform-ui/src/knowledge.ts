@@ -14,7 +14,7 @@ export const knowledgeQuerySchema = z.object({
 export type KnowledgeQuery = z.infer<typeof knowledgeQuerySchema>;
 export const KNOWLEDGE_LIMITS = Object.freeze({ entities: 12, facts: 40, relationships: 20, assets: 12, bytes: 32_000, expansion: 2 });
 export type FactSelection = { entityId: string; field: string; status: 'known' | 'unknown' | 'conflict' | 'qualified' | 'out-of-time'; value: CatalogValue; factIds: string[]; display: string };
-function format(value: CatalogValue, definition?: AttributeDefinition) {
+export function formatKnowledgeValue(value: CatalogValue, definition?: AttributeDefinition) {
   if (value === null) return 'Unknown';
   if (definition?.type === 'money' && typeof value === 'number') return `${definition.currency} ${value}${definition.unit ? ` / ${definition.unit}` : ''}`;
   return `${String(value)}${definition?.unit ? ` ${definition.unit}` : ''}`;
@@ -38,7 +38,7 @@ export function selectFactValue(facts: CatalogFact[], asOf: string, definition?:
   const selected = status === 'known' ? plain.find(fact => fact.value !== null)! : undefined;
   const value = selected?.value ?? null;
   return { entityId: facts[0].entityId, field: facts[0].field, status, value, factIds: active.map(fact => fact.id),
-    display: status === 'known' ? format(value, selected?.definition ?? definition) : status === 'conflict' ? 'Conflicting approved assertions' : status === 'qualified' ? 'See conditions and exceptions' : status === 'out-of-time' ? 'Unknown at this time' : 'Unknown' };
+    display: status === 'known' ? formatKnowledgeValue(value, selected?.definition ?? definition) : status === 'conflict' ? 'Conflicting approved assertions' : status === 'qualified' ? 'See conditions and exceptions' : status === 'out-of-time' ? 'Unknown at this time' : 'Unknown' };
 }
 export function projectKnowledgeCatalog(input: KnowledgeCatalog, asOf = new Date().toISOString()): KnowledgeCatalog {
   const catalog = validateCatalog(input);
@@ -118,7 +118,7 @@ export function retrieveKnowledge(input: KnowledgeCatalog, request: KnowledgeQue
   const requestedFields = query.factIds?.length ? new Set(allFacts.filter(fact => query.factIds!.includes(fact.id)).map(fact => `${fact.entityId}/${fact.field}`)) : null;
   const relevantFacts = allFacts.filter(fact => selected.has(fact.entityId) && (!requestedFields || requestedFields.has(`${fact.entityId}/${fact.field}`)))
     .sort((a, b) => Number(query.factIds?.includes(b.id) ?? false) - Number(query.factIds?.includes(a.id) ?? false) || factScore(b) - factScore(a) || a.id.localeCompare(b.id));
-  const facts = relevantFacts.slice(0, KNOWLEDGE_LIMITS.facts).map(fact => ({ ...fact, active: assertionActive(fact, asOf), display: format(fact.value, fact.definition ?? fields.get(fact.field.slice(11))) }));
+  const facts = relevantFacts.slice(0, KNOWLEDGE_LIMITS.facts).map(fact => ({ ...fact, active: assertionActive(fact, asOf), display: formatKnowledgeValue(fact.value, fact.definition ?? fields.get(fact.field.slice(11))) }));
   const groups = new Map<string, CatalogFact[]>();
   // Evaluate ALL assertions in a returned group before bounding the evidence
   // list; truncation must never conceal a conflicting value.

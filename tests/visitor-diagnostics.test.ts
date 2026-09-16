@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { sanitizeVisitorDiagnostic, visitorDiagnostic, visitorDiagnostics, subscribeVisitorDiagnostics, clearVisitorDiagnostics } from '../lib/visitor-diagnostics';
+import { z } from 'zod';
+import { diagnosticError, sanitizeVisitorDiagnostic, visitorDiagnostic, visitorDiagnostics, subscribeVisitorDiagnostics, clearVisitorDiagnostics } from '../lib/visitor-diagnostics';
 import { parseWorkspaceReply, publishedWorkspace, workspaceJsonSchema } from '../lib/visitor-workspace';
 import { emptyWorkspace } from '@thevoice/platform-ui/workspace';
 import { sampleContent } from '../lib/site-model';
@@ -13,6 +14,16 @@ test('diagnostics retain only allowlisted metadata, reject unsafe IDs and bound 
   for (let revision = 0; revision < 405; revision++) visitorDiagnostic({ ...event, revision });
   assert.equal(visitorDiagnostics().length, 400); assert.equal(visitorDiagnostics()[0].revision, 5); assert.equal(notified, 405);
   unsubscribe(); clearVisitorDiagnostics(); assert.equal(notified, 405);
+});
+test('request failures expose safe classifications and schema fields, never values or arbitrary keys', () => {
+  const parsed = z.object({ input: z.object({ collectionId: z.string() }) }).safeParse({ input: { collectionId: { token: 'private-value' } } });
+  assert.equal(parsed.success, false);
+  if (parsed.success) return;
+  assert.deepEqual(diagnosticError(parsed.error), { reason: 'schema', schemaPath: 'input.collectionId' });
+  const dynamic = z.record(z.string(), z.string()).safeParse({ 'private-key': false });
+  if (!dynamic.success) assert.deepEqual(diagnosticError(dynamic.error), { reason: 'schema', schemaPath: '*' });
+  assert.deepEqual(diagnosticError(Object.assign(new Error('The conversation backend rejected the request.'), { status: 400 })), { httpStatus: 400, reason: 'provider' });
+  assert.deepEqual(sanitizeVisitorDiagnostic({ ...event, schemaPath: 'input.private-key.0.collectionId' }, 123), { ...event, at: 123, schemaPath: 'input.*.0.collectionId' });
 });
 test('chat can explain without changing state, while voice tools reject answer fields', () => {
   const authority = publishedWorkspace(sampleContent('general')), state = emptyWorkspace(authority.publicationId);

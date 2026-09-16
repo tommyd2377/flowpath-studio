@@ -8,7 +8,7 @@ import { DEFAULT_OPENING } from '../../lib/site-opening';
 import { DEFAULT_EXPLORE_SETTINGS, demoExploreResult } from '../../lib/explore-model';
 
 const origin = 'http://127.0.0.1:3225';
-async function fixture(page: Page, generalPhotos = false) {
+async function fixture(page: Page, generalPhotos = false, websiteFirst = false) {
   await page.route(/^https?:\/\//, route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort('blockedbyclient'));
   const post = async (path: string, data: unknown) => {
     const response = await page.request.post(path, { headers: { Origin: origin }, data });
@@ -41,7 +41,7 @@ async function fixture(page: Page, generalPhotos = false) {
     associations: ids.map((assetId, index) => ({ id: `association-${index}`, assetId, ...(generalPhotos ? { targetType: 'site' } : { targetType: 'entity', targetId: index === 1 ? 'white' : 'blue' }), role: 'example', primary: index === 0 })),
   } })).site;
   site = (await post(`/api/sites/${site.id}`, { action: 'save', revision: site.revision, content: { ...site.draft,
-    contact: 'hello@harbor.example', hours: 'Tuesday–Sunday, 10am–5pm', style: { layout: 'editorial', palette: 'parchment' },
+    contact: 'hello@harbor.example', hours: 'Tuesday–Sunday, 10am–5pm', style: { layout: 'editorial', palette: 'parchment', ...(websiteFirst ? { entry: 'website' } : {}) },
     opening: { ...DEFAULT_OPENING, initialAssetIds: [ids[0]], visibility: 'intro-only' },
     sections: [{ id: 'story', title: 'Made with time and intention.', body: 'A small studio with a generous spirit. Explore a practice grounded in material, place, and the people who make it their own.' }],
     visitorSpeaksFirst: true, visitor: { ...site.draft.visitor, enabled: true, mode: 'voice' }, explore: { ...DEFAULT_EXPLORE_SETTINGS, enabled: true, annotations: true },
@@ -55,12 +55,42 @@ async function ask(page: Page, value: string) {
   await input.fill(value); await input.press('Enter');
 }
 
+test('website-first pages keep the voice control visible while browsing on desktop and mobile', async ({ page }, info) => {
+  const providerRequests: string[] = [];
+  page.on('request', request => {
+    if (request.method() === 'POST' && /\/api\/visitor\//.test(request.url()) && !/\/tasks(?:\/|$)/.test(request.url())) providerRequests.push(request.url());
+  });
+  await fixture(page, false, true);
+  const wave = page.getByRole('button', { name: 'Preview voice', exact: true });
+  const website = page.locator('[data-published-website]');
+  for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.emulateMedia({ reducedMotion: viewport.width === 390 ? 'reduce' : 'no-preference' });
+    await expect(wave).toBeVisible();
+    await expect(wave).toBeEnabled();
+    await expect(wave).toBeInViewport();
+    await expect(page.locator('[data-voice-dock] canvas')).toBeVisible();
+    await website.getByText('hello@harbor.example', { exact: true }).scrollIntoViewIfNeeded();
+    await expect(wave).toBeInViewport();
+    await wave.focus();
+    await expect(wave).toBeFocused();
+    await page.getByRole('button', { name: 'Chat', exact: true }).click();
+    await expect(page.getByRole('textbox', { name: 'What would you like to see?', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Voice', exact: true }).click();
+    await expect(wave).toBeVisible();
+    await expect(wave).toBeInViewport();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: info.outputPath(`website-voice-${viewport.width}.png`) });
+  }
+  expect(providerRequests).toEqual([]);
+});
+
 test('site photos appear between content sections on desktop and mobile without adding repeated navigation', async ({ page }, info) => {
   await fixture(page, true);
   await page.getByRole('button', { name: 'Browse published content', exact: true }).click();
   const website = page.locator('[data-published-website]');
   await expect(website).toBeVisible();
-  const sections = website.locator(':scope > .platform-website-section');
+  const sections = website.locator('.platform-website-section');
   await expect(sections.nth(1)).toHaveAttribute('data-section-kind', 'photos');
   await expect(sections.nth(2)).not.toHaveAttribute('data-section-kind', 'photos');
   await expect(sections.nth(1).locator('img')).toHaveCount(4);
@@ -77,7 +107,7 @@ test('site photos appear between content sections on desktop and mobile without 
   await page.screenshot({ path: info.outputPath('distributed-photos-mobile.png') });
 });
 
-test('full website, grouped records, published footer, photos and Home work on desktop and mobile', async ({ page }, info) => {
+test('full website, distinct same-name records, published footer, photos and Home work on desktop and mobile', async ({ page }, info) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await fixture(page); await page.setViewportSize({ width: 1440, height: 1000 });
   let paid = 0; page.on('request', request => { if (request.method() === 'POST' && /\/api\/visitor\/[^/]+(?:\/explore)?$/.test(request.url())) paid++; });
@@ -89,12 +119,14 @@ test('full website, grouped records, published footer, photos and Home work on d
   await website.scrollIntoViewIfNeeded();
   await page.screenshot({ path: info.outputPath('website-desktop.png') });
   await website.getByRole('button', { name: 'Open Blue Bowl', exact: true }).click();
-  await expect(focus(page)).toHaveAttribute('data-workspace-transition', 'settled');
-  await expect(focus(page)).toContainText('2 published entries use this name');
-  await expect(focus(page)).toContainText('USD 35');
-  await focus(page).getByText('Entry 2 · Blue Bowl', { exact: true }).click();
-  await expect(focus(page)).toContainText('USD 40');
-  await focus(page).getByRole('button', { name: 'Home', exact: true }).click();
+  const results = website.getByRole('region', { name: 'Website content', exact: true });
+  await expect(results.getByRole('status')).toHaveText('2 matching items');
+  await results.getByRole('button', { name: 'Open Blue Bowl', exact: true }).first().click();
+  await expect(results.getByRole('region', { name: 'Record detail' })).toContainText('35');
+  await results.getByRole('button', { name: 'Back to results' }).click();
+  await results.getByRole('button', { name: 'Open Blue Bowl', exact: true }).nth(1).click();
+  await expect(results.getByRole('region', { name: 'Record detail' })).toContainText('40');
+  await page.getByRole('button', { name: 'Home', exact: true }).first().click();
   await expect(focus(page)).toHaveCount(0); await expect(website).toHaveCount(0); await expect(page.locator('.platform-workspace-card')).toHaveCount(0);
   await page.getByRole('button', { name: 'Browse published content', exact: true }).click();
   await page.setViewportSize({ width: 390, height: 844 });
@@ -122,7 +154,7 @@ test('voice-preferred sites expose typing; Home, searches and local navigation s
     await route.fulfill({ json: { result: { ...demoExploreResult(input.query, input.kind), id: `result-${searches}` } } });
   });
   await page.reload(); await page.getByRole('button', { name: 'Chat', exact: true }).click();
-  await ask(page, 'Open Harbor Studio'); await expect(focus(page)).toContainText('12 Example Lane');
+  await ask(page, 'Open Harbor Studio'); await expect(page.getByRole('region', { name: 'Record detail' })).toContainText('12 Example Lane');
   await ask(page, 'Expand an image search online about ceramics');
   await expect(focus(page).getByRole('button', { name: /Open image 2:/ })).toBeVisible();
   await ask(page, 'Expand image A2'); await expect(page.getByRole('dialog', { name: 'Web image viewer' })).toBeVisible();
@@ -138,9 +170,11 @@ test('voice-preferred sites expose typing; Home, searches and local navigation s
   await ask(page, 'Take me back to the main page');
   await expect(page.locator('.platform-workspace-card')).toHaveCount(0);
   await ask(page, 'Show me the full website'); await expect(page.locator('[data-published-website]')).toBeVisible();
-  await page.getByRole('textbox', { name: 'Find published information', exact: true }).fill('White Bowl');
+  await ask(page, 'Search for White Bowl');
+  await expect(page.getByRole('region', { name: 'Website content', exact: true })).toHaveAttribute('aria-busy', 'false');
+  await expect(page.getByRole('region', { name: 'Website content', exact: true }).getByRole('status')).toHaveText('1 matching item');
   await page.getByRole('button', { name: 'Open White Bowl', exact: true }).scrollIntoViewIfNeeded();
-  await ask(page, 'Open the first one'); await expect(focus(page)).toContainText('White Bowl');
+  await ask(page, 'Open the first one'); await expect(page.getByRole('region', { name: 'Record detail' })).toContainText('White Bowl');
   await ask(page, 'Start over'); await expect(page.locator('[data-published-website]')).toHaveCount(0);
   expect(searches).toBe(8); expect(chats).toBe(0);
 });

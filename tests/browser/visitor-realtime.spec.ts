@@ -7,7 +7,7 @@ import { taskFixture } from '../../fixtures/visitor-tasks';
 import type { VisitorTaskView } from '@thevoice/platform-ui/task-view';
 
 const origin = 'http://127.0.0.1:3225';
-type Harness = { controls: VisitorControlUpdate[]; requests: { context: VisitorContext; history: VisitorHistory }[]; chats: { context: VisitorContext; history: VisitorHistory; text: string }[]; outputActive: boolean; outgoing: { stopped: boolean; enabled: boolean }[]; audioMuted: boolean; ack: boolean; failControl: boolean; deferConnection: boolean; deferTrack: boolean; neverResolvePlay: boolean; connect: () => void; attach: () => void; revision: number; calls: number; closed: number; aborted: number; tracks: { stopped: boolean; enabled: boolean }[]; deferPermission: boolean; releasePermission: () => void; emit: (event: unknown) => void; disconnect: () => void; offers: string[] };
+type Harness = { controls: VisitorControlUpdate[]; requests: { context: VisitorContext; history: VisitorHistory }[]; chats: { context: VisitorContext; history: VisitorHistory; text: string }[]; inputActive: boolean; outputActive: boolean; outgoing: { stopped: boolean; enabled: boolean }[]; audioMuted: boolean; ack: boolean; failControl: boolean; deferConnection: boolean; deferTrack: boolean; neverResolvePlay: boolean; connect: () => void; attach: () => void; revision: number; calls: number; closed: number; aborted: number; tracks: { stopped: boolean; enabled: boolean }[]; deferPermission: boolean; releasePermission: () => void; emit: (event: unknown) => void; disconnect: () => void; offers: string[] };
 declare global { interface Window { __visitorVoice: Harness } }
 let publishedSite: Site | undefined;
 let greetingSite: Site | undefined;
@@ -37,13 +37,13 @@ async function prepare(page: Page, welcome = false) {
   await page.addInitScript(() => {
     const availability = { enabled: true, mode: 'both', live: true, chatRemaining: 25, voiceRemaining: 5, resetsAt: '' };
     let sink: ReadableStreamDefaultController<Uint8Array> | undefined;
-    const state: Harness = { controls: [], requests: [], chats: [], outputActive: false, outgoing: [], audioMuted: false, ack: true, failControl: false, deferConnection: false, deferTrack: false, neverResolvePlay: false, connect() {}, attach() {}, revision: 0, calls: 0, closed: 0, aborted: 0, tracks: [], deferPermission: false, releasePermission() {}, offers: [],
+    const state: Harness = { controls: [], requests: [], chats: [], inputActive: false, outputActive: false, outgoing: [], audioMuted: false, ack: true, failControl: false, deferConnection: false, deferTrack: false, neverResolvePlay: false, connect() {}, attach() {}, revision: 0, calls: 0, closed: 0, aborted: 0, tracks: [], deferPermission: false, releasePermission() {}, offers: [],
       emit(event) { const frame = event as { type: string; revision?: number; interactionRevision?: number }; if (frame.revision !== undefined) state.revision = Math.max(state.revision, frame.revision); sink?.enqueue(new TextEncoder().encode(`${JSON.stringify(['response_started', 'plan', 'playback_started', 'transcript', 'navigation'].includes(frame.type) ? { interactionRevision: 0, ...frame } : frame)}\n`)); },
       disconnect() { sink?.close(); sink = undefined; } };
     window.__visitorVoice = state;
     class Track { clone() { const clone = new Track(); state.outgoing.push(clone); return clone; } enabled = true; stopped = false; onended: (() => void) | null = null; stop() { this.stopped = true; } }
     class Stream { track = new Track(); getTracks() { return [this.track]; } getAudioTracks() { return [this.track]; } }
-    class Node { output = false; getByteTimeDomainData(array: Uint8Array) { array.fill(this.output && state.outputActive ? 144 : 128); } fftSize = 2048; gain = { value: 1 }; connect() { return this; } getFloatTimeDomainData(array: Float32Array) { array.fill(0); } }
+    class Node { output = false; getByteTimeDomainData(array: Uint8Array) { array.fill((this.output ? state.outputActive : state.inputActive) ? 144 : 128); } fftSize = 2048; gain = { value: 1 }; connect() { return this; } getFloatTimeDomainData(array: Float32Array) { array.fill(0); } }
     let analyserIndex = 0;
     class Context { state = 'running'; destination = new Node(); resume() { return Promise.resolve(); } close() { this.state = 'closed'; return Promise.resolve(); } createAnalyser() { const node = new Node(); node.output = analyserIndex++ % 2 === 1; return node; } createGain() { return new Node(); } createMediaStreamSource() { return new Node(); } }
     class Audio { autoplay = false; srcObject: unknown; get muted() { return state.audioMuted; } set muted(value: boolean) { state.audioMuted = value; } setAttribute() {} play() { return state.neverResolvePlay ? new Promise<void>(() => {}) : Promise.resolve(); } pause() {} }
@@ -95,6 +95,66 @@ async function browse(page: Page) {
   const button = page.getByRole('button', { name: 'Browse published content', exact: true });
   if (await button.count()) await button.click();
 }
+
+for (const mobile of [false, true]) test(`voice closes, switches and exits workspace panels across successive requests${mobile ? ' on mobile with reduced motion' : ''}`, async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  if (mobile) { await page.setViewportSize({ width: 390, height: 844 }); await page.emulateMedia({ reducedMotion: 'reduce' }); }
+  await prepare(page);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
+  let revision = 0;
+  const focused = page.locator('[data-workspace-focused]:not([inert])');
+  async function navigate(kind: string, targetId?: string, expected = 'applied') {
+    const id = `panel-navigation-${++revision}`;
+    await page.evaluate(({ kind, targetId, id, revision }) => {
+      window.__visitorVoice.emit({ type: 'response_started', revision });
+      window.__visitorVoice.emit({ type: 'navigation', id, revision, target: { kind, ...(targetId ? { id: targetId } : {}) } });
+    }, { kind, targetId, id, revision });
+    await expect.poll(() => page.evaluate(id => window.__visitorVoice.controls.find(update => update.navigationAck?.id === id)?.navigationAck?.status, id)).toBe(expected);
+    const update = await page.evaluate(id => window.__visitorVoice.controls.find(update => update.navigationAck?.id === id)!, id);
+    expect(update.interactionRevision).toBe(0);
+    expect(update.context.scene?.workspaceRevision).toBe(update.context.workspace?.revision);
+    expect(update.context.scene?.focusedId).toBe(update.context.workspace?.focusedId);
+    return update.context.workspace!;
+  }
+  const first = await navigate('open', 'source:section:weddings');
+  const wedding = first.focusedId!;
+  const second = await navigate('open', 'source:section:portraits');
+  const portrait = second.focusedId!;
+  expect(second.objects).toHaveLength(2);
+  expect((await navigate('open', wedding)).focusedId).toBe(wedding);
+  const expanded = await navigate('expand', portrait);
+  expect(expanded.focusedId).toBe(portrait);
+  expect(expanded.objects.find(object => object.instanceId === portrait)?.expanded).toBe(true);
+  const collapsed = await navigate('collapse', portrait);
+  expect(collapsed.focusedId).toBe(null);
+  expect(collapsed.objects).toHaveLength(2);
+  expect(collapsed.objects.find(object => object.instanceId === portrait)?.expanded).toBe(false);
+  await expect(page.locator('[data-workspace-focused]')).toHaveCount(0);
+  await navigate('focus', wedding);
+  const partial = await navigate('close', portrait);
+  expect(partial.objects.map(object => object.instanceId)).toEqual([wedding]);
+  expect(partial.focusedId).toBe(wedding);
+  const stale = await navigate('focus', portrait, 'failed');
+  expect(stale).toEqual(partial);
+  await navigate('open', 'source:section:portraits');
+  const back = await navigate('back');
+  expect(back.focusedId).toBe(wedding); expect(back.objects).toHaveLength(2);
+  await navigate('focus', portrait);
+  const closed = await navigate('close');
+  expect(closed.focusedId).toBe(wedding); expect(closed.objects).toHaveLength(1);
+  const overview = await navigate('unfocus');
+  expect(overview.focusedId).toBe(null); expect(overview.objects).toHaveLength(1);
+  await expect(focused).toHaveCount(0);
+  const cleared = await navigate('clear');
+  expect(cleared.objects).toEqual([]); expect(cleared.focusHistory).toEqual([]);
+  const reopened = await navigate('open', 'source:section:portraits');
+  expect(reopened.objects).toHaveLength(1);
+  await expect(focused.getByRole('heading', { name: 'Portrait sessions', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => window.__visitorVoice.calls)).toBe(1);
+  expect(errors).toEqual([]);
+});
 
 for (const mobile of [false, true]) test(`opening narration follows three carousel cards${mobile ? ' on mobile with reduced motion' : ''}`, async ({ page }, info) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
@@ -336,7 +396,9 @@ test('bounded voice history and accepted views survive typing and restarting voi
   expect(typed.history).toEqual([{ role: 'user', text: 'Tell me about weddings.' }, { role: 'assistant', text: 'Wedding information from the site.' }]);
   expect(typed.context.scene?.objects.flatMap(object => object.references.map(ref => ref.id))).toEqual(['section:weddings']);
   expect(typed.context.workspace?.focusedId).toBeTruthy();
-  await expect(input).not.toHaveAttribute('readonly');
+  // Typing stays editable during work. Wait for the confirmed view and reply
+  // before changing mode, which intentionally cancels an unfinished request.
+  await expect(page.getByRole('button', { name: 'Show me', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Voice', exact: true }).click();
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
@@ -482,6 +544,38 @@ test('spoken cancellation clears stale activity and waits for quiet output plus 
   await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.navigationAck?.id === 'current-home' && update.navigationAck.status === 'applied'))).toBe(true);
   expect(await page.evaluate(() => window.__visitorVoice.controls.some(update => update.navigationAck?.id === 'obsolete-navigation'))).toBe(false);
   expect(await page.evaluate(() => window.__visitorVoice.calls)).toBe(1);
+});
+
+for (const mobile of [false, true]) test(`background work stays visible while both sides converse${mobile ? ' on mobile' : ''}`, async ({ page }, info) => {
+  if (mobile) await page.setViewportSize({ width: 390, height: 844 });
+  await prepare(page);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
+  const indicator = page.getByRole('status').filter({ has: page.locator('span'), hasText: 'Working on your request…' });
+  await page.evaluate(() => window.__visitorVoice.emit({ type: 'response_started', revision: 1 }));
+  await expect(indicator).toBeVisible();
+  await page.evaluate(() => { window.__visitorVoice.outputActive = true; });
+  await expect(page.getByText('Speaking · you can interrupt · tap to end', { exact: true })).toBeAttached();
+  await expect(indicator).toBeVisible();
+  await page.evaluate(() => { window.__visitorVoice.inputActive = true; });
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
+  await expect(indicator).toBeVisible();
+  expect(await page.evaluate(() => window.__visitorVoice.audioMuted)).toBe(false);
+  const progressBounds = await indicator.boundingBox(), endBounds = await page.getByRole('button', { name: 'End voice conversation', exact: true }).boundingBox();
+  expect(progressBounds!.x + progressBounds!.width).toBeLessThan(endBounds!.x);
+  expect(progressBounds!.y + progressBounds!.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+  await page.screenshot({ path: info.outputPath('working-during-conversation.png') });
+  // Neither speech nor a stale completion may clear a newer request's indicator.
+  await page.evaluate(() => {
+    const state = window.__visitorVoice;
+    state.emit({ type: 'response_started', revision: 2 });
+    state.emit({ type: 'backend_idle', revision: 1, interactionRevision: 0 });
+    state.emit({ type: 'task_error', revision: 1, interactionRevision: 0, message: 'Obsolete failure' });
+  });
+  await expect(indicator).toBeVisible(); await expect(page.getByText('Obsolete failure')).toHaveCount(0);
+  await page.evaluate(() => window.__visitorVoice.emit({ type: 'backend_idle', revision: 2, interactionRevision: 0 }));
+  await expect(indicator).toHaveCount(0);
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
 });
 
 test('a quiet minute ends voice despite repeated idle events, then restart keeps the view and accepts a new request', async ({ page }) => {
@@ -700,8 +794,8 @@ test('mocked chat and voice share real visitor query state and reject a late dis
   await page.goto(`/s/${site.slug}`);
   let lastView: VisitorTaskView | undefined;
   page.on('response', async response => { if (response.url().endsWith('/tasks') && response.ok()) { const value = await response.json().catch(() => ({})); if (value.view) lastView = value.view; } });
-  await page.getByRole('button', { name: 'Browse and filter collections' }).click();
-  const results = page.getByRole('region', { name: 'Collection results', exact: true }); await expect(results.getByRole('status')).toHaveText('8 matching records');
+  await page.getByRole('button', { name: 'Browse published content' }).click();
+  const results = page.getByRole('region', { name: 'Website content', exact: true }); await expect(results.getByRole('status')).toHaveText('8 matching items');
   await page.evaluate(() => {
     const previousFetch = window.fetch.bind(window);
     window.fetch = async (url, init) => {
@@ -719,17 +813,18 @@ test('mocked chat and voice share real visitor query state and reject a late dis
   });
   await page.getByRole('button', { name: 'Chat', exact: true }).click();
   const input = page.getByRole('textbox', { name: 'What would you like to see?', exact: true }); await input.fill('Find records with a reading measure of at least five'); await input.press('Enter');
-  await expect(results.getByRole('status')).toHaveText('3 matching records'); await expect(page.getByText('Three published records match.', { exact: true })).toBeVisible();
+  await expect(results.getByRole('status')).toHaveText('3 matching items'); await expect(page.getByText('Three published records match.', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Voice', exact: true }).click(); await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
   const path = `/api/visitor/${site.slug}/tasks`, current = (await post(path, { action: 'refresh', sessionId: lastView!.sessionId })).view as VisitorTaskView;
   const voice = await post(path, { action: 'execute', sessionId: current.sessionId, call: { operationId: randomUUID(), capabilityId: 'query.patch', expectedRevision: current.revision, input: { queryId: current.query.queryId, baseRevision: current.query.revision, operations: [{ op: 'replaceConstraint', nodeId: 'minimum', expression: { kind: 'field', id: 'minimum', fieldId: 'reading-minutes', op: 'gte', value: { type: 'number', value: 6, unit: 'units' } } }] } } });
   await page.evaluate(view => { window.__visitorVoice.emit({ type: 'response_started', revision: 1 }); window.__visitorVoice.emit({ type: 'navigation', id: 'task-voice', revision: 1, target: { kind: 'task', view } }); }, voice.view);
-  await expect(results.getByRole('status')).toHaveText('2 matching records');
+  await expect(results.getByRole('status')).toHaveText('2 matching items');
   await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.find(update => update.navigationAck?.id === 'task-voice')?.navigationAck?.status)).toBe('applied');
-  await results.getByRole('button', { name: 'Remove criterion reading-minutes' }).click(); await expect(results.getByRole('status')).toHaveText('8 matching records');
+  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  await input.fill('Remove reading minutes'); await input.press('Enter'); await expect(results.getByRole('status')).toHaveText('8 matching items');
   await page.evaluate(view => window.__visitorVoice.emit({ type: 'navigation', id: 'late-task-voice', revision: 2, target: { kind: 'task', view } }), voice.view);
-  await expect(results.getByRole('status')).toHaveText('8 matching records'); expect(await page.evaluate(() => window.__visitorVoice.controls.some(update => update.navigationAck?.id === 'late-task-voice' && update.navigationAck.status === 'applied'))).toBe(false);
+  await expect(results.getByRole('status')).toHaveText('8 matching items'); expect(await page.evaluate(() => window.__visitorVoice.controls.some(update => update.navigationAck?.id === 'late-task-voice' && update.navigationAck.status === 'applied'))).toBe(false);
 });
 
 for (const mobile of [false, true]) test(`foreground cards yield to voice task views and Home${mobile ? ' on mobile with reduced motion' : ''}`, async ({ page }) => {
@@ -766,8 +861,8 @@ for (const mobile of [false, true]) test(`foreground cards yield to voice task v
   const query = await task('query.activate', view => ({ queryId: view.query.queryId }));
   await navigate('show-query', { kind: 'task', view: query });
   await expect(focused).toHaveCount(0);
-  const results = page.getByRole('region', { name: 'Collection results', exact: true });
-  await expect(results.getByRole('status')).toHaveText('2 matching records');
+  const results = page.getByRole('region', { name: 'Website content', exact: true });
+  await expect(results.getByRole('status')).toHaveText('2 matching items');
   const detail = await task('record.detail', view => ({ recordId: view.records[0].id }));
   await navigate('show-detail', { kind: 'task', view: detail });
   await expect(results.getByRole('region', { name: 'Record detail' })).toBeVisible();
@@ -776,10 +871,11 @@ for (const mobile of [false, true]) test(`foreground cards yield to voice task v
   await expect(results.getByRole('region', { name: 'Record detail' })).toHaveCount(0);
   await navigate('contact-again', { kind: 'open', id: 'source:contact' });
   await navigate('open-harbor', { kind: 'open', id: `entity:${query.records[0].id}` });
-  await expect(focused).toContainText(query.records[0].name);
-  expect(await page.evaluate(() => window.__visitorVoice.controls.at(-1)?.context.screen?.focusedEntityId)).toBe(query.records[0].id);
-  await navigate('back-to-contact', { kind: 'back' });
-  await expect(focused).toContainText('Get in touch');
+  await expect(focused).toHaveCount(0);
+  await expect(results.getByRole('region', { name: 'Record detail' })).toContainText(query.records[0].name);
+  await navigate('back-to-results', { kind: 'back' });
+  await expect(results.getByRole('region', { name: 'Record detail' })).toHaveCount(0);
+  await expect(results.getByRole('status')).toHaveText('2 matching items');
   const home = await task('home', () => ({}));
   await navigate('task-home', { kind: 'task', view: home });
   await expect(focused).toHaveCount(0); await expect(results).toHaveCount(0);
@@ -810,9 +906,9 @@ for (const mobile of [false, true]) test(`foreground cards yield to voice task v
   });
   await page.getByRole('button', { name: 'Chat', exact: true }).click();
   const input = page.getByRole('textbox', { name: 'What would you like to see?', exact: true });
-  await input.fill('Show the published places'); await input.press('Enter');
+  await input.fill('Could you show the published places?'); await input.press('Enter');
   await expect(page.getByText('Here are the published places.', { exact: true })).toBeVisible();
-  await expect(focused).toHaveCount(0); await expect(results.getByRole('status')).toHaveText('2 matching records');
+  await expect(focused).toHaveCount(0); await expect(results.getByRole('status')).toHaveText('2 matching items');
   // Clearing the visible workspace must not depend on a healthy task service.
   const tasksUrl = `**/api/visitor/${site.slug}/tasks`;
   await page.route(tasksUrl, route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Synthetic task outage' }) }));
@@ -820,7 +916,7 @@ for (const mobile of [false, true]) test(`foreground cards yield to voice task v
   await expect(results).toHaveCount(0); await expect(focused).toHaveCount(0);
   await expect(page.locator('.platform-workspace-card')).toHaveCount(0);
   await page.unroute(tasksUrl);
-  await page.getByRole('button', { name: 'Browse and filter collections', exact: true }).click();
+  await page.getByRole('button', { name: 'Browse published content', exact: true }).click();
   await expect(results).toBeVisible();
   await input.fill('Take me home'); await input.press('Enter');
   await expect(results).toHaveCount(0); await expect(focused).toHaveCount(0);
@@ -852,7 +948,7 @@ test('voice startup handles legacy descriptive kinds and reports a failed task p
   });
   await page.goto(`/s/${site.slug}`);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
-  await expect(page.getByText('Could not prepare the website: Synthetic catalog unavailable.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: 'Could not prepare the website: Synthetic catalog unavailable.' })).toBeVisible();
   expect(await page.evaluate(() => window.__visitorVoice.calls)).toBe(0);
   expect(attempts).toBe(1);
   expect(diagnostics.some(value => value.includes('"stage":"context"') && value.includes('"status":"failed"') && value.includes('"httpStatus":400'))).toBe(true);
@@ -862,4 +958,51 @@ test('voice startup handles legacy descriptive kinds and reports a failed task p
   expect(attempts).toBe(2);
   expect(await page.evaluate(() => window.__visitorVoice.calls)).toBe(1);
   expect(diagnostics.some(value => value.includes('"stage":"context"') && value.includes('"status":"succeeded"'))).toBe(true);
+});
+
+test('speed: cold preparation is visible and cancellation prevents a paid session', async ({ page }) => {
+  await prepare(page);
+  let release!: () => void, initializations = 0;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/visitor/*/tasks', async route => {
+    if (route.request().postDataJSON().action === 'init') { initializations++; await gate; }
+    await route.continue();
+  });
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Cancel connection', exact: true })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Preparing voice…' })).toBeVisible();
+  expect(await page.evaluate(() => window.__visitorVoice.calls)).toBe(0);
+  await page.getByRole('button', { name: 'Cancel connection', exact: true }).click();
+  release();
+  await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.tracks.every(track => track.stopped))).toBe(true);
+  expect(initializations).toBe(1);
+  expect(await page.evaluate(() => window.__visitorVoice.calls)).toBe(0);
+});
+
+for (const reduced of [false, true]) test(`speed: truthful progress ignores stale events and cancels without disconnecting${reduced ? ' with reduced motion' : ''}`, async ({ page }, info) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  if (reduced) await page.emulateMedia({ reducedMotion: 'reduce' });
+  await prepare(page);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
+  await page.evaluate(() => {
+    window.__visitorVoice.emit({ type: 'response_started', revision: 1 });
+    window.__visitorVoice.emit({ type: 'progress', revision: 1, interactionRevision: 0, stage: 'retrieving' });
+  });
+  const progress = page.getByRole('status').filter({ hasText: 'Checking this site’s information…' });
+  await expect(progress).toBeVisible();
+  await page.evaluate(() => {
+    window.__visitorVoice.outputActive = true;
+    window.__visitorVoice.emit({ type: 'progress', revision: 0, interactionRevision: 0, stage: 'searching' });
+  });
+  await expect(progress).toBeVisible(); await expect(page.getByText('Searching the web…', { exact: true })).toHaveCount(0);
+  if (reduced) expect(await progress.locator('[aria-hidden="true"]').evaluate(node => getComputedStyle(node).animationName)).toBe('none');
+  const progressBox = await progress.boundingBox(), modesBox = await page.getByRole('group', { name: 'Conversation mode' }).boundingBox();
+  expect(progressBox!.y + progressBox!.height).toBeLessThanOrEqual(modesBox!.y);
+  await page.screenshot({ path: info.outputPath('voice-progress.png') });
+  await page.getByRole('button', { name: 'Cancel request', exact: true }).click();
+  await expect(progress).toHaveCount(0);
+  expect(await page.evaluate(() => window.__visitorVoice.calls)).toBe(1);
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
 });

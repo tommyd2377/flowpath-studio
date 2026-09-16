@@ -1,3 +1,4 @@
+import { visitorWorkStageSchema } from './visitor-progress';
 import { z } from 'zod';
 import { visitorControlCapabilitySchema, visitorNavigationSchema } from './visitor-realtime-context';
 
@@ -22,6 +23,8 @@ export const visitorRealtimeEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('speech_started'), revision }).strict(),
   z.object({ type: z.literal('speech_stopped') }).strict(),
   z.object({ type: z.literal('activity'), revision, interactionRevision: revision, activity: z.enum(['web', 'images', 'map']) }).strict(),
+  z.object({ type: z.literal('progress'), revision, interactionRevision: revision, stage: visitorWorkStageSchema }).strict(),
+  z.object({ type: z.literal('result_ready'), revision, interactionRevision: revision }).strict(),
   z.object({ type: z.literal('backend_idle'), revision, interactionRevision: revision }).strict(),
   z.object({ type: z.literal('task_error'), revision, interactionRevision: revision, message: z.string().min(1).max(500) }).strict(),
   z.object({ type: z.literal('response_started'), revision, interactionRevision: revision }).strict(),

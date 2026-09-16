@@ -1,3 +1,5 @@
+import { removeSourceContribution, sourceImpact } from './source-lifecycle';
+import { readMediaLibrary } from './media-store';
 import { addWebsiteOfferings } from './website-structure';
 import { retireWebsiteSourceCopies, unchangedWebsiteSourceCopies, websiteVisitorCatalog, WEBSITE_CONTENT_BRIEF } from './website-content';
 import { withDocumentReading } from './document-reading';
@@ -12,11 +14,11 @@ import type { WorkspaceUser } from './firebase/types';
 import { getEditorStatus } from './editor-config';
 import { getSite, downloadFile, modifySite, reserveAiRequest } from './site-store';
 import { updateDraft } from './local-store';
-import { extractSource, interpretSourceWithProvenance, unlinkedSourceProvenance } from './source-extractors';
+import { extractSource, interpretSourceWithProvenance, unlinkedSourceProvenance, MAX_EXTRACTED_CHARACTERS, type ExtractedSource } from './source-extractors';
 import { assertPublicWebsiteUrl, fetchWebsiteText } from './source-adapters';
 import { catalogForPublication, refreshAssertionReviews, resolveAssertionReviews, type AssertionDecision } from './knowledge-assertions';
-import { validateSourceProvenance, type SourceProvenance } from './source-provenance';
-import { claimKnowledgeJob, changeKnowledgeJob, hashValue, mergeKnowledge, remappedEntityId, resolveSourceOrigin, resolveKnowledgeIdentity, resolveKnowledgeUpdates, type IdentityMatchDecision, type SourceUpdateDecision, type KnowledgeArtifact, type KnowledgeCandidate, type GraphCorrection } from './knowledge-model';
+import { validateSourceProvenance, MAX_SOURCE_PROVENANCE_BYTES, type SourceProvenance } from './source-provenance';
+import { sourceKey, claimKnowledgeJob, changeKnowledgeJob, hashValue, mergeKnowledge, remappedEntityId, resolveSourceOrigin, resolveKnowledgeIdentity, resolveKnowledgeUpdates, type IdentityMatchDecision, type SourceUpdateDecision, type KnowledgeArtifact, type KnowledgeCandidate, type GraphCorrection, type SourceFileReport } from './knowledge-model';
 import { readKnowledgeArtifact, writeKnowledgeArtifact, readKnowledgeLedger, changeKnowledgeLedger, stagePublicKnowledge, applyLocalKnowledgeClaim } from './knowledge-store';
 import { recordPlatformEvent } from './platform-events';
 import { measuredUsage } from './provider-usage';
@@ -218,10 +220,43 @@ export function parseSemanticProviderReply(output: string, source?: SourceProven
   catch (error) { throw semanticValidationError(error, 'source evidence'); }
 }
 
-async function interpretWithProvider(name: string, text: string, context: { siteId: string; requestId: string; operation: 'interpret' | 'correct'; website?: boolean }, correction?: string, sourceProvenance?: SourceProvenance): Promise<{ catalog: KnowledgeCatalog; provenance?: SourceProvenance }> {
+type SemanticResult = { catalog: KnowledgeCatalog; provenance?: SourceProvenance };
+type SemanticSource = { sourceId: string; name: string; text: string; provenance: SourceProvenance };
+type SemanticContext = { siteId: string; requestId: string; operation: 'interpret' | 'correct'; website?: boolean; related?: boolean };
+const semanticBatchSchema = z.object({ sources: z.array(z.object({ sourceId: id, interpretation: semanticReplySchema }).strict()).min(1).max(6) }).strict();
+
+/** One bounded request for related prose, with separate, validated evidence per file.
+ * The request callback reserves the existing allowance only after input preflight.
+ * A partial result never replaces the failed file's previous contribution. */
+export async function interpretRelatedSources(sources: SemanticSource[], request: (input: Record<string, unknown>, schema: unknown) => Promise<string>): Promise<Map<string, SemanticResult | AppError>> {
+  if (!sources.length || sources.length > 6 || new Set(sources.map(source => source.sourceId)).size !== sources.length) throw new AppError('Choose one to six distinct source files.');
+  if (sources.reduce((total, source) => total + source.text.length, 0) > MAX_EXTRACTED_CHARACTERS
+    || Buffer.byteLength(JSON.stringify(sources.map(source => source.provenance))) > MAX_SOURCE_PROVENANCE_BYTES) {
+    throw new AppError('These related documents exceed the combined interpretation limit (60,000 extracted characters or 400 KB of source evidence). Review smaller groups. No AI request was made; nothing was truncated.', 413);
+  }
+  const output = await request({ sources: sources.map(source => ({ sourceId: source.sourceId, filename: source.name, source: source.text, sourceAnchors: source.provenance.anchors })) }, strictJsonSchema(z.toJSONSchema(semanticBatchSchema)));
+  if (output.length > 300_000) throw new AppError('The interpreted catalog exceeds the pilot limit.', 413);
+  let replies: { sourceId: string; interpretation?: unknown }[];
+  try { replies = z.object({ sources: z.array(z.object({ sourceId: id, interpretation: z.unknown() }).strict()).max(6) }).strict().parse(JSON.parse(output)).sources; }
+  catch { throw new AppError('The interpreter returned an unreadable related-file result. Your draft is unchanged.', 502); }
+  const expected = new Set(sources.map(source => source.sourceId));
+  if (new Set(replies.map(reply => reply.sourceId)).size !== replies.length || replies.some(reply => !expected.has(reply.sourceId))) throw new AppError('The interpreter returned duplicate or unknown source references. No file result was accepted.', 502);
+  return new Map<string, SemanticResult | AppError>(sources.map((source): [string, SemanticResult | AppError] => {
+    const reply = replies.find(reply => reply.sourceId === source.sourceId);
+    if (!reply) return [source.sourceId, new AppError('The interpreter omitted this file. Its previous contribution is retained.', 502)];
+    try { return [source.sourceId, parseSemanticProviderReply(JSON.stringify(reply.interpretation), source.provenance)]; }
+    catch (error) { return [source.sourceId, error instanceof AppError ? error : new AppError('This file interpretation could not be validated. Its previous contribution is retained.', 502)]; }
+  }));
+}
+
+async function interpretWithProvider(name: string, text: string, context: SemanticContext, correction?: string, sourceProvenance?: SourceProvenance): Promise<SemanticResult> {
+  const output = await semanticProviderOutput({ filename: name, source: text, ...(sourceProvenance ? { sourceAnchors: sourceProvenance.anchors } : {}) }, semanticReplyJsonSchema(), context, correction);
+  return parseSemanticProviderReply(output, sourceProvenance);
+}
+
+async function semanticProviderOutput(input: Record<string, unknown>, schema: unknown, context: SemanticContext, correction?: string): Promise<string> {
   const key = process.env.OPENAI_API_KEY?.trim();
   if (!key) throw new AppError('Semantic interpretation is not configured.', 503);
-  const schema = semanticReplyJsonSchema();
   const usageEvent = { type: 'provider_usage' as const, surface: 'preview' as const, operationId: context.requestId, requestId: context.requestId, operation: context.operation };
   await recordPlatformEvent(context.siteId, { ...usageEvent, status: 'reserved' }).catch(() => undefined);
   let response: Response;
@@ -243,9 +278,10 @@ async function interpretWithProvider(name: string, text: string, context: { site
           'Never invent contact details, coordinates, inventory, reservations, checkout, payments, executable actions or capability URLs. No tools are available. Identifiers require explicit scoped source IDs, never guessed from names or image similarity. Aliases must be distinct alternate labels excluding the canonical name. IDs contain ASCII letters, digits, underscores or hyphens and must be unique within each array. Collection, relationship, fact and job references must identify returned records.',
           'For each supported field, fact and relationship return evidence with exact supplied anchor IDs; do not cite truncated excerpts. Each citation uses exactly one object shape: {entityId,field,anchorIds}, {factId,anchorIds}, or {relationshipId,anchorIds}. Include no other target keys, even as null. Cite entity names, types and summaries individually when supported; citations for facts or relationships do not cover those separate fields. Do not use extraction-process descriptions as visitor-facing catalog descriptions. Cite a typed assertion using its factId. Combine supporting anchors into one entry per target, with at most eight distinct anchors. A known anchor is not proof of entailment: unsupported assertions remain pending publisher review.',
           'Do not bury unique facts in summaries. Jobs are non-executable suggestions. Use null for optional schema properties. If any part exceeds the shared schema or output limits, set complete:false with issues. Never label a partial interpretation complete.',
+          ...(context.related ? ['Interpret these related documents together in one response. Return exactly one sources entry per supplied sourceId, with its own interpretation envelope. Each interpretation may cite only that file’s anchor IDs and claims; another file is context, never evidence for a field absent from this source. Keep common field definitions consistent when their type, unit and currency really match. Preserve explicit scoped identity identifiers so the application can reconcile corroborated records; similar names do not prove identity. Do not silently omit a file. Mark its interpretation complete:false with issues if it cannot be represented. The combined response still has the existing output budget.'] : []),
           ...(context.website ? [WEBSITE_CONTENT_BRIEF] : []),
         ].join(' '),
-        input: [{ role: 'user', content: JSON.stringify({ filename: name, source: text, ...(sourceProvenance ? { sourceAnchors: sourceProvenance.anchors } : {}) }) }, ...(correction ? [{ role: 'user', content: `Correct this existing catalog using the following current publisher request. Preserve all existing IDs and unrelated records, attributes, relationships and jobs. Do not invent new capabilities or destinations. Current request: ${correction}` }] : [])],
+        input: [{ role: 'user', content: JSON.stringify(input) }, ...(correction ? [{ role: 'user', content: `Correct this existing catalog using the following current publisher request. Preserve all existing IDs and unrelated records, attributes, relationships and jobs. Do not invent new capabilities or destinations. Current request: ${correction}` }] : [])],
         text: { format: { type: 'json_schema', name: 'publisher_catalog', strict: true, schema } },
       }),
     });
@@ -276,8 +312,7 @@ async function interpretWithProvider(name: string, text: string, context: { site
       chunks.push(part.text);
     }
   }
-  const output = chunks.join('');
-  return parseSemanticProviderReply(output, sourceProvenance);
+  return chunks.join('');
 }
 
 export async function getKnowledgeState(user: WorkspaceUser, siteId: string) {
@@ -300,74 +335,142 @@ export async function getKnowledgeState(user: WorkspaceUser, siteId: string) {
       return ledger;
     });
   }
+  const draft = site.draft.knowledgeRevisionId ? await readKnowledgeArtifact(user, siteId, site.draft.knowledgeRevisionId) : null;
+  const draftMedia = site.draft.mediaRevisionId ? await readMediaLibrary(user, siteId, site.draft.mediaRevisionId) : null;
   const candidates: KnowledgeCandidate[] = [];
   for (const job of state.jobs.filter(job => job.status === 'needs_review' && job.candidateRevisionId)) {
     const artifact = await readKnowledgeArtifact(user, siteId, job.candidateRevisionId!);
-    candidates.push({ id: job.id, catalog: artifact.catalog, notes: artifact.notes, sourceName: job.sourceName, baseRevision: job.baseRevision, ...(artifact.website ? { website: artifact.website } : {}),
+    candidates.push({ files: artifact.files, impact: sourceImpact(draft?.catalog ?? null, artifact, site.draft, draftMedia), id: job.id, catalog: artifact.catalog, notes: artifact.notes, sourceName: job.sourceName, baseRevision: job.baseRevision, ...(artifact.website ? { website: artifact.website } : {}),
       origins: artifact.origins.map(({ key, name, provenance }) => ({ key, name, ...(provenance ? { provenance } : {}) })), updates: artifact.updates ?? [], updateAnchors: artifact.updateAnchors ?? [], identityMatches: artifact.identityMatches ?? [], graphUpdates: artifact.graphUpdates ?? [], correctionHistory: artifact.correctionHistory ?? [], assertionReviews: artifact.assertionReviews ?? [] });
   }
-  const draft = site.draft.knowledgeRevisionId ? await readKnowledgeArtifact(user, siteId, site.draft.knowledgeRevisionId) : null;
   const catalog = draft ? catalogForPublication(draft) : null;
   const jobs = state.jobs.map(job => job.status === 'running' && job.stage !== 'review' && Date.now() - job.updatedAt > 120_000
     ? { ...job, status: 'interrupted' as const, message: 'The processing request ended without a saved result. Start an explicit new attempt; paid work is never silently replayed.' } : job)
-    .map(job => ({ id: job.id, fileId: job.fileId, sourceUrl: job.sourceUrl, operation: job.operation, sourceName: job.sourceName, baseRevision: job.baseRevision, status: job.status, stage: job.stage,
+    .map(job => ({ id: job.id, files: job.files, fileId: job.fileId, sourceUrl: job.sourceUrl, operation: job.operation, sourceName: job.sourceName, baseRevision: job.baseRevision, status: job.status, stage: job.stage,
       startedAt: job.startedAt, updatedAt: job.updatedAt, message: job.message, candidateRevisionId: job.candidateRevisionId, appliedRevisionId: job.appliedRevisionId, paidAttempt: job.paidAttempt }));
-  return { websiteRepairAvailable: Boolean(draft?.website), catalog, candidates, jobs, sources: draft?.origins.map(({ key, name }) => ({ key, name })) ?? [], semanticMode: getEditorStatus().mode === 'openai' ? 'connected' as const : 'structured' as const };
+  return { websiteRepairAvailable: Boolean(draft?.website), catalog, candidates, jobs, sources: draft?.origins.filter(origin => !origin.retired).map(({ key, name }) => ({ key, name })) ?? [], semanticMode: getEditorStatus().mode === 'openai' ? 'connected' as const : 'structured' as const };
 }
 
 export async function analyzeKnowledge(user: WorkspaceUser, siteId: string, input: { fileId: string; revision: number; requestId: string; replacesSourceKey?: string }) {
+  return analyzeKnowledgeFiles(user, siteId, { revision: input.revision, requestId: input.requestId, sources: [{ fileId: input.fileId, replacesSourceKey: input.replacesSourceKey }] });
+}
+
+/** One reviewable snapshot, sequential bounded extraction, no implicit Apply or retry. */
+export async function analyzeKnowledgeFiles(user: WorkspaceUser, siteId: string, input: { revision: number; requestId: string; sources: { fileId: string; replacesSourceKey?: string }[] }) {
   const site = await getSite(user, siteId);
   if (site.revision !== input.revision) throw new AppError('Your site changed. Reload before interpreting a source.', 409);
-  const current = site.draft.knowledgeRevisionId ? await readKnowledgeArtifact(user, siteId, site.draft.knowledgeRevisionId) : null;
-  if (input.replacesSourceKey && !current?.origins.some(origin => origin.key === input.replacesSourceKey)) throw new AppError('The source to replace is no longer in this draft. Reload before interpreting.', 409);
-  const { file, bytes } = await downloadFile(user, siteId, input.fileId);
-  resolveSourceOrigin(current, { name: file.name, ...(input.replacesSourceKey ? { replacesSourceKey: input.replacesSourceKey } : {}) });
-  const sourceHash = createHash('sha256').update(bytes).digest('hex');
-  const job = await changeKnowledgeLedger(user, siteId, state => claimKnowledgeJob(state, {
-    id: input.requestId, fileId: file.id, sourceName: file.name, sourceHash, baseDraftHash: hashValue(site.draft), baseRevision: site.revision,
-  }));
-  const startedAt = Date.now();
-  let extracted = false;
+  if (!input.sources.length || input.sources.length > 6 || new Set(input.sources.map(source => source.fileId)).size !== input.sources.length) throw new AppError('Choose one to six distinct files for a combined review.');
+  let current = site.draft.knowledgeRevisionId ? await readKnowledgeArtifact(user, siteId, site.draft.knowledgeRevisionId) : null;
+  const files: SourceFileReport[] = input.sources.map(source => {
+    const file = site.files.find(file => file.id === source.fileId);
+    if (!file) throw new AppError('A selected source is no longer available.', 409);
+    if (source.replacesSourceKey && !current?.origins.some(origin => origin.key === source.replacesSourceKey)) throw new AppError('The source to replace is no longer in this draft.', 409);
+    resolveSourceOrigin(current, { name: file.name, replacesSourceKey: source.replacesSourceKey });
+    return { fileId: file.id, name: file.name, hash: '', status: 'waiting', message: 'Waiting for extraction.' };
+  });
+  const targets = files.map((file, index) => resolveSourceOrigin(current, { name: file.name, replacesSourceKey: input.sources[index].replacesSourceKey })?.key ?? sourceKey(file.name));
+  if (new Set(targets).size !== targets.length) throw new AppError('Multiple selected files update the same source. Review each replacement separately, or rename unrelated files before importing. No processing was started.');
+  const job = await changeKnowledgeLedger(user, siteId, state => claimKnowledgeJob(state, { id: input.requestId, operation: 'batch', files, sourceName: files.length === 1 ? files[0].name : files.length + ' related files', sourceHash: '', baseDraftHash: hashValue(site.draft), baseRevision: site.revision }));
+  let added = 0;
+  const connected = getEditorStatus().mode === 'openai';
+  const prepared: { index: number; startedAt: number; source: ExtractedSource; provenance: SourceProvenance; catalog?: KnowledgeCatalog; structured: boolean; htmlPage?: ReturnType<typeof extractWebsitePage> }[] = [];
+  const hashes = new Map<string, number>(), duplicates = new Map<number, number>();
   try {
-    if (current?.origins.some(origin => origin.hash === sourceHash)) {
-      await changeKnowledgeLedger(user, siteId, state => changeKnowledgeJob(state, job.id, job.claim, { status: 'discarded', stage: 'review', message: 'This exact source is already in your draft catalog. No interpretation call or duplicate records were created.' }));
-      return getKnowledgeState(user, siteId);
+    // Extract all selected files before interpreting prose, so a related batch
+    // uses one real provider request and one existing quota reservation.
+    for (const [index, selected] of input.sources.entries()) {
+      const report = files[index], startedAt = Date.now();
+      report.status = 'processing'; report.message = 'Extracting this source.';
+      await changeKnowledgeLedger(user, siteId, state => changeKnowledgeJob(state, job.id, job.claim, { files, stage: 'extracting', message: 'Processing file ' + (index + 1) + ' of ' + files.length + ': ' + report.name }));
+      try {
+        const { file, bytes } = await downloadFile(user, siteId, selected.fileId);
+        const sourceHash = createHash('sha256').update(bytes).digest('hex'); report.hash = sourceHash;
+        if (current?.origins.some(origin => origin.hash === sourceHash)) { report.status = 'unchanged'; report.message = 'Exact source already reviewed; no interpretation call or duplicate records.'; continue; }
+        const duplicate = hashes.get(sourceHash);
+        if (duplicate !== undefined) { duplicates.set(index, duplicate); report.message = 'Identical to ' + files[duplicate].name + '; sharing its result.'; continue; }
+        hashes.set(sourceHash, index);
+        await recordPlatformEvent(siteId, { type: 'extraction', surface: 'preview', operation: 'extract', requestId: job.id, operationId: job.id, status: 'started' }).catch(() => undefined);
+        const source = await extractSource(file.name, file.mime, bytes);
+        await recordPlatformEvent(siteId, { type: 'extraction', surface: 'preview', operation: 'extract', requestId: job.id, operationId: job.id, status: 'succeeded', kind: source.format === 'csv' ? 'csv' : source.format === 'pdf' ? 'pdf' : source.format === 'text' ? 'txt' : 'text', durationMs: Date.now() - startedAt, count: source.pages ?? 1 }).catch(() => undefined);
+        const sourceProvenance = unlinkedSourceProvenance(source);
+        const htmlPage = source.format === 'html' ? extractWebsitePage(new TextDecoder().decode(bytes), 'https://uploaded.example/') : undefined;
+        const structured = interpretSourceWithProvenance(file.name, source);
+        const catalog = structured?.catalog ?? (htmlPage && !connected ? websitePageCatalog([htmlPage]) : undefined);
+        prepared.push({ index, startedAt, source, catalog, provenance: structured?.provenance ?? sourceProvenance, structured: Boolean(structured), htmlPage });
+        report.message = catalog ? 'Extracted. Preparing the combined review.' : 'Extracted. Waiting for the combined semantic interpretation.';
+      } catch (error) {
+        report.status = 'failed'; report.message = error instanceof AppError ? error.message : 'This file could not be extracted. Its previous contribution is retained.';
+        await recordPlatformEvent(siteId, { type: 'extraction', surface: 'preview', operation: 'extract', requestId: job.id, operationId: job.id, status: 'failed', durationMs: Date.now() - startedAt }).catch(() => undefined);
+        if (error instanceof AppError && error.status === 409) throw error;
+      }
     }
-    await recordPlatformEvent(siteId, { type: 'extraction', surface: 'preview', operation: 'extract', requestId: job.id, operationId: job.id, status: 'started' }).catch(() => undefined);
-    const source = await extractSource(file.name, file.mime, bytes);
-    extracted = true;
-    await recordPlatformEvent(siteId, { type: 'extraction', surface: 'preview', operation: 'extract', requestId: job.id, operationId: job.id, status: 'succeeded', kind: source.format === 'csv' ? 'csv' : source.format === 'pdf' ? 'pdf' : source.format === 'text' ? 'txt' : 'text', durationMs: Date.now() - startedAt, count: source.pages ?? 1 }).catch(() => undefined);
-    const sourceProvenance = unlinkedSourceProvenance(source);
-    const htmlPage = source.format === 'html' ? extractWebsitePage(new TextDecoder().decode(bytes), 'https://uploaded.example/') : undefined;
-    const structured = interpretSourceWithProvenance(file.name, source);
-    let catalog = structured?.catalog ?? (htmlPage && getEditorStatus().mode !== 'openai' ? websitePageCatalog([htmlPage]) : undefined);
-    let interpretedProvenance = structured?.provenance ?? sourceProvenance;
-    if (!catalog) {
-      if (getEditorStatus().mode !== 'openai') throw new AppError('This document contains prose that needs the connected semantic interpreter. In this offline demo, use CSV or TXT item blocks with Name:, Kind:, Summary: and attribute lines separated by blank lines. The source was stored but not interpreted.');
-      await reserveAiRequest(user, siteId, site.revision, input.requestId);
-      await changeKnowledgeLedger(user, siteId, state => changeKnowledgeJob(state, job.id, job.claim, { stage: 'interpreting', paidAttempt: true, message: 'Interpreting source meaning. One bounded AI attempt was reserved.' }));
-      const interpreted = await interpretWithProvider(file.name, source.text, { siteId, requestId: input.requestId, operation: 'interpret', website: Boolean(htmlPage) }, undefined, sourceProvenance);
-      const visitor = htmlPage ? websiteVisitorCatalog(interpreted.catalog, interpreted.provenance ?? sourceProvenance) : interpreted;
-      catalog = withDocumentReading(visitor.catalog, source);
-      interpretedProvenance = visitor.provenance ?? sourceProvenance;
+    const pending = prepared.filter(item => !item.catalog);
+    let interpretations = new Map<string, SemanticResult | AppError>();
+    if (pending.length) {
+      try {
+        if (!connected) throw new AppError('This document contains prose that needs the connected semantic interpreter. In this offline demo, use CSV or TXT item blocks with Name:, Kind:, Summary: and attribute lines separated by blank lines. The source was stored but not interpreted.');
+        interpretations = await interpretRelatedSources(pending.map(item => ({ sourceId: files[item.index].fileId, name: files[item.index].name, text: item.source.text, provenance: item.provenance })), async (input, schema) => {
+          await reserveAiRequest(user, siteId, site.revision, job.id);
+          await changeKnowledgeLedger(user, siteId, state => changeKnowledgeJob(state, job.id, job.claim, { files, stage: 'interpreting', paidAttempt: true, message: 'Interpreting related source meaning together. One bounded AI request; no automatic retries.' }));
+          return semanticProviderOutput(input, schema, { siteId, requestId: job.id, operation: 'interpret', related: true, website: pending.some(item => Boolean(item.htmlPage)) });
+        });
+      } catch (error) {
+        if (error instanceof AppError && error.status === 409) throw error;
+        for (const item of pending) interpretations.set(files[item.index].fileId, error instanceof AppError ? error : new AppError('The combined interpretation could not finish. Previous source contributions are retained.', 502));
+      }
     }
-    let artifact = mergeKnowledge(current, catalog, { fileId: file.id, name: file.name, hash: sourceHash,
-      provenance: interpretedProvenance, modelInterpreted: !structured, ...(input.replacesSourceKey ? { replacesSourceKey: input.replacesSourceKey } : {}) });
-    if (htmlPage && !structured && getEditorStatus().mode === 'openai') artifact = retireWebsiteSourceCopies(artifact, current, input.replacesSourceKey ?? file.name);
-    artifact.assertionReviews = refreshAssertionReviews(artifact, structured ? 'source' : 'model', current?.assertionReviews);
-    if (htmlPage) artifact.website = { capturedAt: new Date().toISOString(), design: designWebsite(htmlPage, 1), pages: [{ url: file.name, title: htmlPage.title, status: 'imported', message: 'Uploaded HTML file; linked pages and images were not fetched.', characters: source.text.length }], notes: ['Native FlowPath design proposed from this HTML document. Review branding and add approved photos separately.'] };
-    artifact.notes.unshift(`${source.format.toUpperCase()}: ${source.text.length} extracted characters, ${interpretedProvenance.anchors.length} source locations, ${interpretedProvenance.anchors.filter(anchor => anchor.truncated).length} shortened excerpts (not usable as evidence). ${source.format === 'pdf' ? `Text from all ${source.pages} PDF pages; embedded images were not interpreted.` : source.format === 'docx' ? 'Paragraphs, tables, headers and footers only; embedded images and drawing layout were not interpreted.' : source.format === 'ocr' ? 'OCR used the sanitized display image; recognition accuracy and omitted visual information remain unverified.' : source.format === 'xlsx' ? 'Represented cells from every declared sheet were read; formulas remain unevaluated.' : source.format === 'html' ? 'HTML text only, not a rendered page or a crawl.' : 'Text extraction completed within the shared import limit.'} Review all claims; extraction completeness does not prove semantic coverage.`);
-    const latest = await getSite(user, siteId);
-    if (!latest.files.some(item => item.id === file.id) || hashValue(latest.draft) !== job.baseDraftHash) throw new AppError('The source or draft changed during interpretation. No draft changes were applied. Start a new review against the current draft.', 409);
-    await writeKnowledgeArtifact(user, siteId, artifact);
-    await changeKnowledgeLedger(user, siteId, state => changeKnowledgeJob(state, job.id, job.claim, { status: 'needs_review', stage: 'review', candidateRevisionId: artifact.id, message: 'Interpretation ready for review. Apply updates the draft; Publish is separate.' }));
-    await recordPlatformEvent(siteId, { type: 'interpretation', surface: 'preview', operation: 'interpret', requestId: job.id, operationId: job.id, status: 'ready', snapshotId: artifact.id, count: artifact.catalog.entities.length, durationMs: Date.now() - startedAt }).catch(() => undefined);
+    for (const item of prepared) {
+      const { index, startedAt, source, htmlPage, structured } = item, report = files[index], selected = input.sources[index];
+      try {
+        let catalog = item.catalog, interpretedProvenance = item.provenance;
+        if (!catalog) {
+          const interpreted = interpretations.get(report.fileId);
+          if (!interpreted || interpreted instanceof AppError) throw interpreted ?? new AppError('No interpretation was returned for this source.', 502);
+          const visitor = htmlPage ? websiteVisitorCatalog(interpreted.catalog, interpreted.provenance ?? item.provenance) : interpreted;
+          catalog = withDocumentReading(visitor.catalog, source);
+          interpretedProvenance = visitor.provenance ?? item.provenance;
+        }
+        if (!current) catalog = { ...catalog, name: site.draft.name };
+        let artifact = mergeKnowledge(current, catalog, { fileId: report.fileId, name: report.name, hash: report.hash,
+          provenance: interpretedProvenance, modelInterpreted: !structured, ...(selected.replacesSourceKey ? { replacesSourceKey: selected.replacesSourceKey } : {}) });
+        if (htmlPage && !structured && connected) artifact = retireWebsiteSourceCopies(artifact, current, selected.replacesSourceKey ?? report.name);
+        artifact.assertionReviews = refreshAssertionReviews(artifact, structured ? 'source' : 'model', current?.assertionReviews);
+        if (htmlPage) artifact.website = { capturedAt: new Date().toISOString(), design: designWebsite(htmlPage, 1), pages: [{ url: report.name, title: htmlPage.title, status: 'imported', message: 'Uploaded HTML file; linked pages and images were not fetched.', characters: source.text.length }], notes: ['Native FlowPath design proposed from this HTML document. Review branding and add approved photos separately.'] };
+        artifact.notes.unshift(`${source.format.toUpperCase()}: ${source.text.length} extracted characters, ${interpretedProvenance.anchors.length} source locations, ${interpretedProvenance.anchors.filter(anchor => anchor.truncated).length} shortened excerpts (not usable as evidence). ${source.format === 'pdf' ? `Text from all ${source.pages} PDF pages; embedded images were not interpreted.` : source.format === 'docx' ? 'Paragraphs, tables, headers and footers only; embedded images and drawing layout were not interpreted.' : source.format === 'ocr' ? 'OCR used the sanitized display image; recognition accuracy and omitted visual information remain unverified.' : source.format === 'xlsx' ? 'Represented cells from every declared sheet were read; formulas remain unevaluated.' : source.format === 'html' ? 'HTML text only, not a rendered page or a crawl.' : 'Text extraction completed within the shared import limit.'} Review all claims; extraction completeness does not prove semantic coverage.`);
+
+        // Earlier files' review choices remain available in the combined proposal.
+        if (added && current) {
+          artifact.notes = [...current.notes, ...artifact.notes];
+          artifact.updates = [...(current.updates ?? []), ...(artifact.updates ?? [])];
+          artifact.graphUpdates = [...(current.graphUpdates ?? []), ...(artifact.graphUpdates ?? [])];
+          artifact.updateAnchors = [...new Map([...(current.updateAnchors ?? []), ...(artifact.updateAnchors ?? [])].map(anchor => [anchor.id, anchor])).values()];
+          const combine = <T extends { id: string }>(a: T[] = [], b: T[] = []) => [...new Map([...a, ...b].map(item => [item.id, item])).values()];
+          artifact.updateContext = { collections: combine(current.updateContext?.collections, artifact.updateContext?.collections), relationships: combine(current.updateContext?.relationships, artifact.updateContext?.relationships), facts: combine(current.updateContext?.facts, artifact.updateContext?.facts), capabilities: combine(current.updateContext?.capabilities, artifact.updateContext?.capabilities) };
+        }
+        // Persist a checkpoint after each source so failed later files cannot erase progress.
+        report.status = 'ready'; report.message = 'Extracted within format limits. Review interpretation and source coverage.';
+        artifact.files = structuredClone(files);
+        await writeKnowledgeArtifact(user, siteId, artifact);
+        current = artifact; added++;
+        await changeKnowledgeLedger(user, siteId, state => changeKnowledgeJob(state, job.id, job.claim, { files, message: 'Preparing the combined review: ' + report.name }));
+        await recordPlatformEvent(siteId, { type: 'interpretation', surface: 'preview', operation: 'interpret', requestId: job.id, operationId: job.id, status: 'ready', snapshotId: artifact.id, count: artifact.catalog.entities.length, durationMs: Date.now() - startedAt }).catch(() => undefined);
+      } catch (error) {
+        report.status = 'failed'; report.message = error instanceof AppError ? error.message : 'This file could not be processed. Its previous contribution is retained.';
+        await recordPlatformEvent(siteId, { type: 'interpretation', surface: 'preview', operation: 'interpret', requestId: job.id, operationId: job.id, status: 'failed', durationMs: Date.now() - startedAt }).catch(() => undefined);
+        if (error instanceof AppError && error.status === 409) throw error;
+      }
+    }
+    for (const [index, original] of duplicates) {
+      files[index].status = files[original].status === 'ready' ? 'unchanged' : 'failed';
+      files[index].message = files[original].status === 'ready' ? 'Identical source represented by ' + files[original].name + '; no duplicate records or interpretation request.' : 'Identical to ' + files[original].name + ', which could not be processed. Previous information is retained.';
+    }
+    if (hashValue((await getSite(user, siteId)).draft) !== job.baseDraftHash) throw new AppError('The draft changed during interpretation. Nothing was applied. Start a fresh review.', 409);
+    if (added && current) { const id = randomUUID(); current = { ...current, id, catalog: { ...current.catalog, id }, files: structuredClone(files) }; await writeKnowledgeArtifact(user, siteId, current); }
+    const failed = files.filter(file => file.status === 'failed').length;
+    await changeKnowledgeLedger(user, siteId, state => changeKnowledgeJob(state, job.id, job.claim, { files, stage: 'review', status: added ? 'needs_review' : failed ? 'failed' : 'discarded', ...(added && current ? { candidateRevisionId: current.id } : {}),
+      message: added ? (failed ? 'Partial success: ' + failed + ' file(s) could not be processed. Review the report before Apply.' : 'Interpretation ready for review. Apply updates the draft; Publish is separate.') : failed ? files.filter(file => file.status === 'failed').map(file => file.name + ': ' + file.message).join(' ') : 'All selected sources are unchanged. No interpretation call or duplicate records were created.' }));
   } catch (error) {
-    await recordPlatformEvent(siteId, { type: extracted ? 'interpretation' : 'extraction', surface: 'preview', operation: extracted ? 'interpret' : 'extract', requestId: job.id, operationId: job.id, status: 'failed', durationMs: Date.now() - startedAt }).catch(() => undefined);
-    await changeKnowledgeLedger(user, siteId, state => {
-      const current = state.jobs.find(item => item.id === job.id);
-      if (current?.status === 'running' && current.claim === job.claim) changeKnowledgeJob(state, job.id, job.claim, { status: 'failed', message: error instanceof AppError ? error.message : 'This source could not be interpreted. The draft is unchanged.' });
-    });
+    await changeKnowledgeLedger(user, siteId, state => changeKnowledgeJob(state, job.id, job.claim, { files, status: 'failed', message: error instanceof AppError ? error.message : 'Import could not finish. The draft is unchanged.' }));
   }
   return getKnowledgeState(user, siteId);
 }
@@ -490,6 +593,7 @@ export async function reviewDraftKnowledge(user: WorkspaceUser, siteId: string, 
     const id = randomUUID();
     const artifact: KnowledgeArtifact = { ...current, id, catalog: { ...catalogForPublication(current), id }, updates: [], graphUpdates: [], updateContext: { collections: [], relationships: [], capabilities: [] }, notes: ['Review of your saved draft knowledge. Corrections can be applied without the original upload; publication remains separate.'] };
     delete artifact.website;
+    delete artifact.files;
     if (current.assertionReviews) artifact.assertionReviews = refreshAssertionReviews(artifact, 'publisher').map(review => review.status === 'pending' ? { ...review, status: 'approved' } : review);
     await writeKnowledgeArtifact(user, siteId, artifact);
     await changeKnowledgeLedger(user, siteId, state => changeKnowledgeJob(state, job.id, job.claim, { status: 'needs_review', stage: 'review', candidateRevisionId: id, message: 'Draft knowledge is ready for correction. No interpretation call was made.' }));
@@ -704,7 +808,12 @@ export async function applyKnowledge(user: WorkspaceUser, siteId: string, input:
   });
   try {
     if (hashValue(initial.draft) !== job.baseDraftHash) throw new AppError('Your draft changed since this interpretation. Start a fresh interpretation to preserve your latest edits.', 409);
-    if (job.operation !== 'review' && job.operation !== 'website') {
+    if (job.operation === 'batch') {
+      for (const file of job.files?.filter(file => file.status === 'ready') ?? []) {
+        const { bytes } = await downloadFile(user, siteId, file.fileId);
+        if (createHash('sha256').update(bytes).digest('hex') !== file.hash) throw new AppError('A reviewed source changed. Interpret it again before Apply.', 409);
+      }
+    } else if (job.operation !== 'review' && job.operation !== 'website') {
       if (job.sourceUrl) {
         const fetched = await fetchWebsiteText(job.sourceUrl, website);
         if (hashValue({ url: fetched.url, text: fetched.text }) !== job.sourceHash) throw new AppError('The webpage changed. Interpret the updated page before applying.', 409);
@@ -716,6 +825,7 @@ export async function applyKnowledge(user: WorkspaceUser, siteId: string, input:
     }
     const artifact = await readKnowledgeArtifact(user, siteId, job.candidateRevisionId!);
     if (job.operation === 'website' && !input.candidateRevisionId) throw new AppError('Reload the website proposal before applying.', 409);
+    if (artifact.files?.some(file => file.status === 'failed') && !input.acceptPartial) throw new AppError('Acknowledge the incomplete file report before applying successful sources.');
     if (input.websiteDesign && !artifact.website) throw new AppError('This proposal has no website design.');
     if (artifact.website?.pages.some(page => page.status === 'failed' || page.status === 'skipped') && !input.acceptPartial) throw new AppError('Review and acknowledge the pages that were not imported before applying.');
     const design = input.websiteDesign ? websiteDesignSchema.parse(input.websiteDesign) : undefined;
@@ -804,4 +914,21 @@ export async function repairWebsiteKnowledge(user: WorkspaceUser, siteId: string
     await changeKnowledgeLedger(user,siteId,ledger=>changeKnowledgeJob(ledger,job.id,job.claim,{status:'needs_review',stage:'review',candidateRevisionId:artifact.id,message:'Deterministic migration repair ready. Review, then Apply; publishing stays separate.'}));
   }catch(error){await changeKnowledgeLedger(user,siteId,ledger=>changeKnowledgeJob(ledger,job.id,job.claim,{status:'failed',message:error instanceof AppError?error.message:'Repair could not be prepared.'}));throw error;}
   return getKnowledgeState(user,siteId);
+}
+
+/** Removing one source is a saved review proposal through the existing Apply boundary. */
+export async function reviewSourceRemoval(user: WorkspaceUser, siteId: string, input: { revision: number; requestId: string; sourceKey: string }) {
+  const site = await getSite(user, siteId);
+  if (site.revision !== input.revision || !site.draft.knowledgeRevisionId) throw new AppError('Reload the current draft before removing a source.', 409);
+  const current = await readKnowledgeArtifact(user, siteId, site.draft.knowledgeRevisionId);
+  const artifact = removeSourceContribution(current, input.sourceKey);
+  const job = await changeKnowledgeLedger(user, siteId, state => claimKnowledgeJob(state, { id: input.requestId, operation: 'review', sourceName: 'Remove source: ' + input.sourceKey, sourceHash: '', baseDraftHash: hashValue(site.draft), baseRevision: site.revision }));
+  try {
+    await writeKnowledgeArtifact(user, siteId, artifact);
+    await changeKnowledgeLedger(user, siteId, state => changeKnowledgeJob(state, job.id, job.claim, { status: 'needs_review', stage: 'review', candidateRevisionId: artifact.id, message: 'Source removal ready to review. Apply changes the draft; originals and the live site remain.' }));
+  } catch (error) {
+    await changeKnowledgeLedger(user, siteId, state => changeKnowledgeJob(state, job.id, job.claim, { status: 'failed', message: 'Source removal could not be prepared. Nothing was removed.' }));
+    throw error;
+  }
+  return getKnowledgeState(user, siteId);
 }

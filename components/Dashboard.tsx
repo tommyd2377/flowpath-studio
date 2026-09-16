@@ -137,18 +137,19 @@ export default function Dashboard({ initialSites, initialSite, user, editor, ini
     let latest = site;
     let revision = site.revision;
     try {
-      for (const file of Array.from(files)) {
+      for (const [index, file] of Array.from(files).entries()) {
+        setNotice(`Uploading ${index + 1} of ${files.length}: ${file.name}`);
         const image = /^image\/(png|jpeg|webp)$/.test(file.type) || /\.(png|jpe?g|webp)$/i.test(file.name);
-        const maximum = image ? 10 : 2;
+        const maximum = file.type === 'video/mp4' || /\.mp4$/i.test(file.name) ? 50 : image || file.type === 'application/pdf' || /\.pdf$/i.test(file.name) ? 10 : /\.(csv|txt)$/i.test(file.name) ? .25 : 2;
         if (file.size > maximum * 1024 * 1024) throw new Error(`${file.name} is larger than ${maximum} MB.`);
-        const contentType = file.type || (/\.csv$/i.test(file.name) ? 'text/csv' : /\.txt$/i.test(file.name) ? 'text/plain' : /\.docx$/i.test(file.name) ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : /\.xlsx$/i.test(file.name) ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : /\.html?$/i.test(file.name) ? 'text/html' : /\.png$/i.test(file.name) ? 'image/png' : /\.jpe?g$/i.test(file.name) ? 'image/jpeg' : /\.webp$/i.test(file.name) ? 'image/webp' : 'application/octet-stream');
+        const contentType = file.type || (/\.pdf$/i.test(file.name) ? 'application/pdf' : /\.mp4$/i.test(file.name) ? 'video/mp4' : /\.csv$/i.test(file.name) ? 'text/csv' : /\.txt$/i.test(file.name) ? 'text/plain' : /\.docx$/i.test(file.name) ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : /\.xlsx$/i.test(file.name) ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : /\.html?$/i.test(file.name) ? 'text/html' : /\.png$/i.test(file.name) ? 'image/png' : /\.jpe?g$/i.test(file.name) ? 'image/jpeg' : /\.webp$/i.test(file.name) ? 'image/webp' : 'application/octet-stream');
         const result = await request<{ site: Site; fileId: string }>(`/api/sites/${site.id}/files`, { method: 'POST', headers: { 'Content-Type': contentType, 'X-File-Name': encodeURIComponent(file.name), 'X-Site-Revision': String(revision) }, body: file });
         revision = result.site.revision;
         const fileId = result.fileId || result.site.files.find(item => !latest.files.some(previous => previous.id === item.id))?.id;
         latest = result.site; acceptSite(result.site);
         if (fileId) uploaded.push({ fileId, name: file.name, relativePath: file.webkitRelativePath || '' });
       }
-      setNotice(`${uploaded.length} ${uploaded.length === 1 ? 'file' : 'files'} saved ${cloud ? 'with Firebase' : 'locally'}. Review photos or choose a logo in Files.`);
+      setNotice(`${uploaded.length} ${uploaded.length === 1 ? 'file' : 'files'} saved ${cloud ? 'with Firebase' : 'locally'}. Review photos in Files, or combine related documents in Knowledge.`);
       if (panel === 'branding') setPanel('files');
       return { site: latest, uploaded };
     } catch (error) { const message = `${uploaded.length ? `${uploaded.length} file(s) saved. ` : ''}${(error as Error).message}`; setError(message); return { site: latest, uploaded, error: message }; }
@@ -219,7 +220,7 @@ export default function Dashboard({ initialSites, initialSite, user, editor, ini
         <section className="preview-workspace" aria-label="FlowPath Studio website preview"><div className="preview-toolbar"><div className="preview-title"><span className="status-light"/>Site preview</div><div className="segmented" aria-label="Preview size"><button aria-label="Desktop preview" aria-pressed={device === 'desktop'} className={device === 'desktop' ? 'active' : ''} onClick={() => setDevice('desktop')}><Monitor size={16}/></button><button aria-label="Mobile preview" aria-pressed={device === 'mobile'} className={device === 'mobile' ? 'active' : ''} onClick={() => setDevice('mobile')}><Smartphone size={16}/></button></div></div>
           <div className="preview-options"><span>{previewMode === 'published' ? 'Published version' : unsaved ? 'Unsaved preview' : 'Saved draft'}</span><div className="preview-mode"><button aria-pressed={previewMode === 'draft'} className={previewMode === 'draft' ? 'active' : ''} onClick={() => setPreviewMode('draft')}>Draft</button><button aria-pressed={previewMode === 'published'} disabled={!site.published} className={previewMode === 'published' ? 'active' : ''} onClick={() => setPreviewMode('published')}>Published</button></div></div>
           <div className="preview-canvas"><div className={`browser-frame ${device}`}><div className="browser-chrome"><div className="traffic-lights"><i/><i/><i/></div><span><Globe2 size={11}/>{site.slug} · {cloud ? 'preview' : 'local preview'}</span><ArrowUpRight size={13}/></div><div className="preview-scroll"><KnowledgePreview key={site.id} siteId={site.id} content={previewMode === 'published' && site.published ? site.published : content}/></div></div></div>
-          <div className="preview-footer"><span><Layers3 size={13}/>FlowPath template · v1</span><span>{previewMode === 'published' ? 'Showing the last published version' : 'Changes appear here as you edit'}</span></div>
+          <div className="preview-footer"><span><Layers3 size={13}/>{content.style?.template ? `${content.style.template[0].toUpperCase()}${content.style.template.slice(1)} template` : 'Original template'}</span><span>{previewMode === 'published' ? 'Showing the last published version' : 'Changes appear here as you edit'}</span></div>
         </section>
       </div>
     </div>

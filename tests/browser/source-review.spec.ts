@@ -25,7 +25,7 @@ test('source excerpts and explicit replacement preserve corrections, resolve upd
   await context.route(/^https?:\/\//, route => {
     const url = new URL(route.request().url());
     if (url.origin !== origin) { external.push(url.origin); return route.abort('blockedbyclient'); }
-    if (route.request().method() === 'POST' && /^\/api\/visitor\/[^/]+$/.test(url.pathname)) { visitorCalls.push(url.pathname); return route.abort('blockedbyclient'); }
+    if (route.request().method() === 'POST' && /^\/api\/visitor\/[^/]+$/.test(url.pathname)) visitorCalls.push(url.pathname);
     return route.continue();
   });
   await context.addInitScript(() => {
@@ -137,26 +137,37 @@ test('source excerpts and explicit replacement preserve corrections, resolve upd
   await page.getByRole('button', { name: 'Publish', exact: true }).click();
   const published = page.waitForResponse(response => new URL(response.url()).pathname === `/api/sites/${site.id}` && response.request().method() === 'POST');
   await page.getByRole('button', { name: 'Publish locally', exact: true }).click(); expect((await published).ok()).toBeTruthy();
-  await page.goto(`/s/${site.slug}`); const explorer = page.locator('.visitor-workspace');
-  await page.getByRole('button', { name: 'Browse published content', exact: true }).click();
+  await page.goto(`/s/${site.slug}`); const explorer = page.locator('[data-ai-carousel]');
   const directory = page.getByRole('region', { name: 'Browse approved information' });
   const card = directory.getByRole('button', { name: 'Open Alpha Workshop', exact: true });
   await expect(card.locator('img')).toHaveAttribute('src', new RegExp(photoId));
-  await card.locator('img').evaluate(async (image: HTMLImageElement) => { await image.decode(); });
-  for (const name of ['Alpha Workshop', 'Beta Workshop']) {
+  await card.scrollIntoViewIfNeeded();
+  await expect.poll(() => card.locator('img').evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
+  for (const [name, price] of [['Alpha Workshop', 'USD 15'], ['Beta Workshop', 'USD 22']]) {
     await directory.getByRole('button', { name: `Open ${name}`, exact: true }).click();
-    await page.locator('[data-workspace-focused]:not([inert])').getByRole('button', { name: 'Back to workspace', exact: true }).click();
-    await expect(page.locator('[data-workspace-focused]')).toHaveCount(0);
-    await page.getByRole('button', { name: 'Hide browser', exact: true }).click();
-    await explorer.locator('.platform-workspace-card').filter({ has: page.getByRole('heading', { name, exact: true }) }).getByRole('button', { name: 'Select', exact: true }).click();
-    if (name === 'Alpha Workshop') await page.getByRole('button', { name: 'Browse published content', exact: true }).click();
+    const detail = page.getByRole('dialog', { name, exact: true });
+    await expect(detail).toContainText(price);
+    await detail.getByRole('button', { name: 'Close detail', exact: true }).click();
+    await expect(detail).not.toBeVisible();
   }
-  await explorer.getByRole('button', { name: 'Compare selected', exact: true }).click();
+  // The current checkout uses a shared assistant layer; the synthetic demo
+  // provider selects comparison components from this same approved revision.
+  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  const input = page.getByRole('textbox', { name: 'What would you like to see?', exact: true });
+  await input.fill('Compare Alpha Workshop and Beta Workshop'); await input.press('Enter');
   await expect(explorer.getByRole('region', { name: 'Compare published attributes' })).toBeVisible();
   await expect(explorer.getByRole('row', { name: /Price/ })).toContainText('$15.00');
   await expect(explorer.getByRole('row', { name: /Price/ })).toContainText('$22.00');
   await expect(explorer.getByRole('table').locator('img')).toHaveAttribute('src', new RegExp(photoId));
+  const comparisonItem = explorer.getByRole('table').getByRole('button', { name: 'Alpha Workshop', exact: true });
+  const headingFont = await page.locator('[data-published-website] h1').evaluate(element => getComputedStyle(element).fontFamily);
+  await expect(comparisonItem).toHaveCSS('font-family', headingFont);
+  await comparisonItem.click();
+  await expect(explorer.locator('[data-carousel-card]')).toHaveAttribute('aria-label', 'Alpha Workshop');
+  await expect(explorer.locator('[data-carousel-card]')).toContainText('USD 15');
+  await explorer.getByRole('button', { name: 'Previous card', exact: true }).click();
+  await expect(explorer.getByRole('region', { name: 'Compare published attributes' })).toBeVisible();
   await page.screenshot({ path: info.outputPath('visitor-updated-comparison.png'), fullPage: true });
-  expect(external).toEqual([]); expect(visitorCalls).toEqual([]); expect(errors).toEqual([]);
+  expect(external).toEqual([]); expect(visitorCalls).toEqual([`/api/visitor/${site.slug}`]); expect(errors).toEqual([]);
   expect(await page.evaluate(() => (window as typeof window & { __sourceMicrophones: number }).__sourceMicrophones)).toBe(0);
 });

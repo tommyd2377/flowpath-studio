@@ -10,13 +10,19 @@ export const clarificationSchema = z.object({ question: z.string().min(1).max(50
 const taskSceneSchema = z.object({ operationId: z.string().uuid().optional(), queryId: z.string(), queryRevision: z.number().int(), resultSetId: z.string(), sceneRevision: z.number().int().nonnegative(), recordIds: z.array(z.string()).max(48) }).strict();
 type TaskScene = z.infer<typeof taskSceneSchema>;
 const viewportSchema = taskSceneSchema.extend({ revision: z.number().int().nonnegative(), generation: z.number().int().nonnegative(), ready: z.boolean() }).strict();
+const pageSchema = z.object({ queryId: z.string(), revision: z.number().int(), cursor: z.string() }).strict().nullable();
+const presentationSchema = z.object({ type: z.enum(['records', 'comparison', 'detail', 'map', 'research', 'links']), data: z.unknown() }).strict().nullable();
+const queryHistorySchema = z.object({ current: querySpecSchema, past: z.array(querySpecSchema).max(20) }).strict();
+const navigationSchema = z.object({ queryId: z.string().nullable(), page: pageSchema, presentation: presentationSchema }).strict();
+const confirmedSchema = z.object({ scene: taskSceneSchema.nullable().default(null), activeQueryId: z.string().nullable(), queries: z.array(queryHistorySchema).max(8), page: pageSchema, presentation: presentationSchema, navigation: z.array(navigationSchema).max(8) }).strict();
 const sessionSchema = z.object({ version: z.literal(2), id: z.string().uuid(), revision: z.number().int().nonnegative(), generation: z.number().int().nonnegative(), publication: publicationRefSchema,
   browse: z.object({ children: z.number().int().min(0).max(1000), fields: z.number().int().min(0).max(64) }).strict().default({ children: 0, fields: 0 }),
-  page: z.object({ queryId: z.string(), revision: z.number().int(), cursor: z.string() }).strict().nullable().default(null),
-  presentation: z.object({ type: z.enum(['records', 'comparison', 'detail', 'map', 'research', 'links']), data: z.unknown() }).strict().nullable().default(null),
+  page: pageSchema.default(null),
+  presentation: presentationSchema.default(null),
+  navigation: z.array(navigationSchema).max(8).default([]), confirmed: confirmedSchema.nullable().default(null),
   clarification: clarificationSchema.nullable().default(null),
   createdAt: z.number(), touchedAt: z.number(), activeQueryId: z.string().nullable(),
-  queries: z.array(z.object({ current: querySpecSchema, past: z.array(querySpecSchema).max(20) }).strict()).max(8), selection: selectionStateSchema,
+  queries: z.array(queryHistorySchema).max(8), selection: selectionStateSchema,
   tasks: z.array(visitorTaskStateSchema).max(8), receipts: z.array(taskReceiptSchema).max(100),
   evidence: z.array(z.object({ handle: resultHandleSchema, data: z.unknown() }).strict()).max(32),
   operations: z.array(z.object({ id: z.string().uuid(), hash: z.string(), status: z.enum(['running', 'completed', 'failed', 'reconciling']), result: z.unknown().optional() }).strict()).max(100),
@@ -24,11 +30,19 @@ const sessionSchema = z.object({ version: z.literal(2), id: z.string().uuid(), r
   activeArtifactId: z.string().nullable().default(null), artifacts: z.array(z.unknown()).max(12), business: z.record(z.string(), z.unknown()),
 }).strict();
 export type VisitorTaskSession = z.infer<typeof sessionSchema> & { viewport?: TaskScene | null };
+/** A newer interaction resumes the last acknowledged composition, never a pending proposal. */
+export function restoreConfirmedView(session: VisitorTaskSession) {
+  if (session.confirmed) Object.assign(session, structuredClone(session.confirmed));
+  session.clarification = null;
+}
+export function confirmVisitorView(session: VisitorTaskSession) {
+  session.confirmed = structuredClone({ scene: session.scene, activeQueryId: session.activeQueryId, queries: session.queries, page: session.page, presentation: session.presentation, navigation: session.navigation });
+}
 export class VisitorTaskStore {
   constructor(private readonly documents: TaskDocuments = taskDocuments('visitorTaskSessions'), private readonly now = Date.now) {}
   async create(publication: PublicationRef): Promise<VisitorTaskSession> {
     const id = randomUUID(), session: VisitorTaskSession = { version: 2, id, revision: 0, generation: 0, publication, createdAt: this.now(), touchedAt: this.now(), activeQueryId: null,
-      clarification: null, browse: { children: 0, fields: 0 }, page: null, presentation: null, queries: [], selection: { version: 2, selectionId: randomUUID(), revision: 0, publication, members: [] }, tasks: [], receipts: [], evidence: [], operations: [], scene: null, activeArtifactId: null, artifacts: [], business: {} };
+      clarification: null, browse: { children: 0, fields: 0 }, page: null, presentation: null, navigation: [], confirmed: null, queries: [], selection: { version: 2, selectionId: randomUUID(), revision: 0, publication, members: [] }, tasks: [], receipts: [], evidence: [], operations: [], scene: null, activeArtifactId: null, artifacts: [], business: {} };
     await this.documents.create(id, session); return session;
   }
   async read(id: string, publication: PublicationRef): Promise<VisitorTaskSession> {

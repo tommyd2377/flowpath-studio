@@ -12,6 +12,7 @@ import type { FocusReference, ReturnAnchor as ReturnAnchorState } from './intera
 type Viewer = { assetIds: string[]; index: number; examples: string[] };
 type MediaContextValue = { library: MediaLibrary; resolveAssetUrl: AssetUrlResolver; open: (ids: string[], initialId: string, examples?: string[]) => void; onInteraction?: () => void; onPhotoView?: (assetId: string) => void };
 const MediaContext = createContext<MediaContextValue | null>(null);
+export function usePublishedMedia() { return useContext(MediaContext); }
 
 function safeSource(value: string): string | undefined {
   if (value.startsWith('/') && !value.startsWith('//') && !value.includes('\\')) return value;

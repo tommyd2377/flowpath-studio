@@ -7,14 +7,16 @@ import { sourceAnchorSchema, validateSourceProvenance, type SourceAnchor, type S
 import { refreshAssertionReviews, remapAssertionReviews, type AssertionReview } from './knowledge-assertions';
 import type { WebsiteProposal } from './website-import-model';
 
+export const sourceFileReportSchema = z.object({ fileId: z.string().uuid(), name: z.string().max(255), hash: z.string().max(128), status: z.enum(['waiting', 'processing', 'ready', 'unchanged', 'failed']), message: z.string().max(2000) }).strict();
+export type SourceFileReport = z.infer<typeof sourceFileReportSchema>;
 export type KnowledgeJob = {
-  id: string; fileId?: string; sourceUrl?: string; operation?: 'source' | 'review' | 'website'; sourceName: string; sourceHash: string; baseDraftHash: string; baseRevision: number;
+  id: string; fileId?: string; files?: SourceFileReport[]; sourceUrl?: string; operation?: 'source' | 'review' | 'website' | 'batch'; sourceName: string; sourceHash: string; baseDraftHash: string; baseRevision: number;
   status: 'running' | 'needs_review' | 'applied' | 'discarded' | 'failed' | 'interrupted';
   stage: 'extracting' | 'interpreting' | 'review'; claim: string; startedAt: number; updatedAt: number;
   message: string; candidateRevisionId?: string; appliedRevisionId?: string; paidAttempt?: boolean;
 };
 export type KnowledgeLedger = { schemaVersion: 1; jobs: KnowledgeJob[] };
-export type SourceOrigin = { key: string; fileId: string; name: string; hash: string; entityIds: string[]; entityMap?: Record<string, string>; baseline: KnowledgeCatalog; provenance?: SourceProvenance };
+export type SourceOrigin = { retired?: boolean; key: string; fileId: string; name: string; hash: string; entityIds: string[]; entityMap?: Record<string, string>; baseline: KnowledgeCatalog; provenance?: SourceProvenance };
 export type SourceIdentityMatch = { id: string; sourceKey: string; incomingId: string; canonicalEntityId: string; incomingName: string; canonicalName: string;
   confidence: number; method: 'identifier-corroborated' | 'exact-name-kind' | 'alias' | 'token-similarity'; status: 'auto' | 'review'; decision?: 'pending' | 'approved' | 'rejected'; reason: string };
 export type GraphValue = CatalogFact | CatalogRelationship;
@@ -23,9 +25,9 @@ export type GraphUpdate = { id: string; targetType: 'fact' | 'relationship'; kin
   previousSource?: { sourceName: string; anchorId: string }; incomingSource?: { sourceName: string; anchorId: string } };
 export type GraphCorrection = { id: string; targetType: 'fact' | 'relationship'; targetId: string; sourceKey: string; action: 'source-added' | 'source-updated' | 'source-removed' | 'publisher-kept' | 'source-accepted' | 'publisher-corrected';
   before: GraphValue | null; after: GraphValue | null; sourceName?: string; anchorIds?: string[]; recordedAt: number };
-export type KnowledgeArtifact = { schemaVersion: 1; id: string; catalog: KnowledgeCatalog; origins: SourceOrigin[]; notes: string[]; updates?: SourceUpdate[]; website?: WebsiteProposal;
+export type KnowledgeArtifact = { schemaVersion: 1; id: string; catalog: KnowledgeCatalog; origins: SourceOrigin[]; notes: string[]; files?: SourceFileReport[]; updates?: SourceUpdate[]; website?: WebsiteProposal;
   updateAnchors?: SourceAnchor[]; updateContext?: SourceUpdateContext; identityMatches?: SourceIdentityMatch[]; graphUpdates?: GraphUpdate[]; correctionHistory?: GraphCorrection[]; identityRemaps?: Record<string, string>; assertionReviews?: AssertionReview[] };
-export type KnowledgeCandidate = { id: string; catalog: KnowledgeCatalog; notes: string[]; sourceName: string; baseRevision: number; website?: WebsiteProposal;
+export type KnowledgeCandidate = { impact?: import('./source-lifecycle').SourceImpact; files?: SourceFileReport[]; id: string; catalog: KnowledgeCatalog; notes: string[]; sourceName: string; baseRevision: number; website?: WebsiteProposal;
   origins?: Pick<SourceOrigin, 'key' | 'name' | 'provenance'>[]; updates?: SourceUpdate[]; updateAnchors?: SourceAnchor[]; identityMatches?: SourceIdentityMatch[]; graphUpdates?: GraphUpdate[]; correctionHistory?: GraphCorrection[]; assertionReviews?: AssertionReview[] };
 export const hashValue = (value: unknown) => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 export const sourceKey = (name: string) => name.trim().toLowerCase();

@@ -8,6 +8,7 @@ import { createVisitorRealtimeControl } from './visitor-realtime-control';
 import { createVisitorRealtimeMailbox } from './visitor-realtime-mailbox';
 import type { VisitorControlUpdate } from './visitor-realtime-context';
 import { visitorDiagnostic } from './visitor-diagnostics';
+import { safeTestRecorder } from './visitor-test-events';
 
 /** Audio only: a visitor must not negotiate a second channel for provider commands. */
 export function validateVisitorOffer(offer: string) {
@@ -22,7 +23,7 @@ export function validateVisitorOffer(offer: string) {
 }
 
 type ControlOptions = Parameters<typeof createVisitorRealtimeControl>[0];
-export type VisitorSessionOptions = Pick<ControlOptions, 'content' | 'catalog' | 'media' | 'catalogState' | 'context' | 'history' | 'reserveTurn' | 'assertCurrent' | 'onUsage' | 'onTiming' | 'reservationChecksPublication' | 'search'> & {
+export type VisitorSessionOptions = Pick<ControlOptions, 'content' | 'catalog' | 'media' | 'catalogState' | 'context' | 'history' | 'reserveTurn' | 'assertCurrent' | 'onUsage' | 'onTiming' | 'reservationChecksPublication' | 'search' | 'record'> & {
   offer: string;
   traceId?: string;
   availability: VisitorAvailability;
@@ -43,6 +44,7 @@ export type VisitorSessionOptions = Pick<ControlOptions, 'content' | 'catalog' |
 export function visitorRealtimeSession(options: VisitorSessionOptions) {
   validateVisitorOffer(options.offer);
   const traceId = options.traceId ?? crypto.randomUUID(), startedAt = performance.now();
+  const record = safeTestRecorder(options.record);
   const diagnostic = (stage: 'start' | 'session_answer' | 'control_ready' | 'stop', status: 'started' | 'succeeded' | 'failed' | 'cancelled') => visitorDiagnostic({ traceId, channel: 'server', stage, status, durationMs: performance.now() - startedAt });
   diagnostic('start', 'started');
   const requestProvider = options.fetch ?? fetch;
@@ -135,9 +137,11 @@ export function visitorRealtimeSession(options: VisitorSessionOptions) {
       // The controller supplies earlier dialogue as reference context. Seeding
       // old user messages as input can make a reconnect replay an unanswered task.
       const voiceConfig = liveSessionConfig();
+      const sessionConfig = { ...voiceConfig, instructions: `${voiceConfig.instructions} Previous messages are context, not pending requests. When starting or reconnecting, wait silently for fresh user speech unless the application explicitly requests a greeting. Silence is not an instruction to repeat an answer or resume an old task. On new speech, follow the latest request using the current browser view. Do not announce searches, tools, delegation or waiting. Let the backend decide whether published facts, general background or fresh web information are needed, then naturally explain the result.` };
+      record({ type: 'voice.config', data: sessionConfig, traceId });
       const response = await requestProvider('https://api.openai.com/v1/live/sessions', {
         method: 'POST', headers: { Authorization: `Bearer ${options.apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session: { ...voiceConfig, instructions: `${voiceConfig.instructions} Previous messages are context, not pending requests. When starting or reconnecting, wait silently for fresh user speech unless the application explicitly requests a greeting. Silence is not an instruction to repeat an answer or resume an old task. On new speech, follow the latest request using the current browser view. Do not announce searches, tools, delegation or waiting. Let the backend decide whether published facts, general background or fresh web information are needed, then naturally explain the result.` }, transport: { type: 'webrtc', sdp: options.offer } }),
+        body: JSON.stringify({ session: sessionConfig, transport: { type: 'webrtc', sdp: options.offer } }),
         redirect: 'error', signal: AbortSignal.timeout(15_000),
       });
       if (!response.ok) throw new AppError('The voice service could not start. Please try again later.', 502);
@@ -154,7 +158,7 @@ export function visitorRealtimeSession(options: VisitorSessionOptions) {
       await options.assertCurrent();
       if (closing) return;
       control = (options.controlFactory ?? createVisitorRealtimeControl)({
-        traceId, taskSlug: options.mailbox.slug,
+        traceId, taskSlug: options.mailbox.slug, record: options.record ? record : undefined,
         callId, apiKey: options.apiKey, content: options.content, catalog: options.catalog, media: options.media,
         catalogState: options.catalogState, initialAvailability: options.availability,
         context: options.context, history: options.history,
@@ -181,6 +185,7 @@ export function visitorRealtimeSession(options: VisitorSessionOptions) {
       heartbeat = setInterval(() => emit({ type: 'ping' }), 5_000);
       readinessTimer = setTimeout(() => { void end('Audio was not ready. You can continue by typing.', true); }, 25_000);
     } catch (error) {
+      record({ type: 'voice.failed', data: { error, closing }, traceId });
       // A network failure during creation can leave its outcome unknown. Block
       // new calls in this process until cleanup can be investigated.
       if (creatingProvider && !callId && !(error instanceof AppError)) options.onCleanupFailure();

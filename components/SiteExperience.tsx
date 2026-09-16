@@ -8,7 +8,8 @@ import type { KnowledgeCatalog } from '@thevoice/platform-ui/contracts';
 import VisitorAssistant from './VisitorAssistant';
 import VisitorDiagnostics from './VisitorDiagnostics';
 import { VisitorTasksProvider } from './VisitorTasks';
-import VisitorWorkspace, { type VisitorWorkspaceHandle } from './VisitorWorkspace';
+import { type VisitorWorkspaceHandle } from './VisitorWorkspace';
+import WebsiteSurface from './WebsiteSurface';
 import { visitorSettings } from '@/lib/visitor-model';
 import type { SiteContent } from '@/lib/site-model';
 import { openingCopy, openingInitialPresentation, openingInitialSourceIds, openingVisibility } from '@/lib/site-opening';
@@ -27,18 +28,19 @@ export default function SiteExperience({ content, siteId, publishedSlug, catalog
   const initialCatalogPlan = useMemo(() => catalog ? openingInitialPresentation(content, catalog, media) : undefined, [content, catalog, media]);
   const initialSourceIds = useMemo(() => openingInitialSourceIds(content, media), [content, media]);
   const initialContentInvoked = openingVisibility(content) === 'legacy' || !!initialCatalogPlan || initialSourceIds.length > 0;
-  const [controlsActive, setControlsActive] = useState(content.style?.entry === 'website');
+  const [layerOpen, setLayerOpen] = useState(false);
+  const [controlsActive, setControlsActive] = useState(true);
   const [contentInvoked, setContentInvoked] = useState(initialContentInvoked);
   const previousExperience = useRef(experienceKey);
   useEffect(() => {
     if (previousExperience.current === experienceKey) return;
     previousExperience.current = experienceKey;
-    setControlsActive(content.style?.entry === 'website'); setContentInvoked(initialContentInvoked);
+    setControlsActive(true); setContentInvoked(initialContentInvoked);
   }, [experienceKey, initialContentInvoked, content.style?.entry]);
   const activateControls = () => setControlsActive(true);
-  const invokeContent = () => { setControlsActive(true); setContentInvoked(true); };
+  const invokeContent = () => { setControlsActive(true); setContentInvoked(true); setLayerOpen(true); };
   const dismissMedia = () => setMediaDismissal(value => value + 1);
-  const resetContent = () => { setControlsActive(false); setContentInvoked(initialContentInvoked); setMediaDismissal(value => value + 1); };
+  const resetContent = () => { setControlsActive(true); setContentInvoked(initialContentInvoked); setMediaDismissal(value => value + 1); };
   const goHome = () => { if (homeVisitor.current) homeVisitor.current(); else { homeTasks.current?.(); resetContent(); void staticWorkspace.current?.home(); } };
   const reduce = useReducedMotion();
   const settings = visitorSettings(content);
@@ -56,17 +58,16 @@ export default function SiteExperience({ content, siteId, publishedSlug, catalog
     {!!content.opening?.highlights.length && <ul className="site-opening-highlights">{content.opening.highlights.map((highlight, index) => <li key={index}>{highlight}</li>)}</ul>}
   </motion.div>}</AnimatePresence>;
   const identity = <div className="site-wordmark"><span className="site-wordmark-line" aria-hidden="true"/><span>{content.name}</span><span className="site-wordmark-line" aria-hidden="true"/></div>;
-  return <MediaProvider dismissalKey={mediaDismissal} onHome={goHome} library={media ?? null} resolveAssetUrl={resolveAssetUrl} onInteraction={() => { cancelVisitor.current?.(); invokeContent(); }} onPhotoView={photoEvent}><div className="voice-template" data-visitor-site="true" data-website-entry={content.style?.entry} data-workspace-palette={content.style?.palette ?? 'midnight'} data-entered={controlsActive} data-content-invoked={contentInvoked} style={siteStyle(content)}>
+  return <MediaProvider dismissalKey={mediaDismissal} onHome={goHome} library={media ?? null} resolveAssetUrl={resolveAssetUrl} onInteraction={() => { cancelVisitor.current?.(); invokeContent(); }} onPhotoView={photoEvent}><div className="voice-template" data-visitor-site="true" data-site-template={content.style?.template} data-ai-open={layerOpen} data-website-entry={content.style?.entry} data-workspace-palette={content.style?.palette ?? 'midnight'} data-entered={controlsActive} data-content-invoked={contentInvoked} style={siteStyle(content)}>
     {!publishedSlug && <div className="site-sample-note">Interactive site preview</div>}
-    <VisitorTasksProvider homeRef={homeTasks} slug={catalog || content.catalogPublicationId ? publishedSlug : undefined} onInteraction={() => { cancelVisitor.current?.(); invokeContent(); }} beforeShow={async (view, signal) => {
+    <VisitorTasksProvider active={layerOpen} homeRef={homeTasks} slug={publishedSlug} onInteraction={() => { cancelVisitor.current?.(); invokeContent(); }} beforeShow={async (_view, signal) => {
       if (signal?.aborted) return 'cancelled';
-      if (view.navigation === 'home') { resetContent(); return await staticWorkspace.current?.home(signal) ?? 'applied'; }
-      if (!view.active) return 'applied';
-      setMediaDismissal(value => value + 1); invokeContent();
-      return await staticWorkspace.current?.releaseFocus(signal) ?? 'applied';
+      invokeContent();
+      return 'applied';
     }}>
-    {settings.enabled ? <VisitorAssistant key={experienceKey} onDismissMedia={dismissMedia} workspaceRef={staticWorkspace} content={content} slug={publishedSlug} catalog={catalog} media={media} resolveAssetUrl={resolveAssetUrl} interactionRef={cancelVisitor} homeRef={homeVisitor} onPhotoView={photoEvent} entered={controlsActive} contentInvoked={contentInvoked} initialCatalogPlan={initialCatalogPlan} initialSourceIds={initialSourceIds} onControlActivate={activateControls} onContentInvoke={invokeContent} onContentReset={resetContent} onViewChange={() => {}} onCatalogEvent={catalogEvent} identity={identity} opening={opening}/>
-      : <div className="site-content">{identity}{opening}<VisitorWorkspace onDismissMedia={dismissMedia} handleRef={staticWorkspace} onHome={goHome} key={experienceKey} content={content} catalog={catalog} media={media} onInteraction={() => cancelVisitor.current?.()} onInvoke={invokeContent} onPhotoView={photoEvent}/></div>}
+    {settings.enabled ? <VisitorAssistant layerOpen={layerOpen} onLayerClose={() => setLayerOpen(false)} website={<WebsiteSurface slug={publishedSlug} content={content} catalog={catalog} media={media} onAsk={invokeContent} onInteraction={() => cancelVisitor.current?.()}/>} key={experienceKey} onDismissMedia={dismissMedia} workspaceRef={staticWorkspace} content={content} slug={publishedSlug} catalog={catalog} media={media} resolveAssetUrl={resolveAssetUrl} interactionRef={cancelVisitor} homeRef={homeVisitor} onPhotoView={photoEvent} entered={controlsActive} contentInvoked={contentInvoked} initialCatalogPlan={initialCatalogPlan} initialSourceIds={initialSourceIds} onControlActivate={activateControls} onContentInvoke={invokeContent} onContentReset={resetContent} onViewChange={() => {}} onCatalogEvent={catalogEvent} identity={identity} opening={opening}/>
+      : <WebsiteSurface key={experienceKey} slug={publishedSlug} content={content} catalog={catalog} media={media} onAsk={() => {}}/>}
+
     </VisitorTasksProvider>
     {process.env.NODE_ENV === 'development' && <VisitorDiagnostics/>}
   </div></MediaProvider>;

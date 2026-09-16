@@ -18,5 +18,7 @@ export type WebsiteDiscovery = { url: string; pages: WebsitePageReport[]; images
 /** Reviewed design changes only identity/presentation, never capabilities or publication IDs. */
 export function applyWebsiteDesign(content: SiteContent, design: WebsiteDesign): SiteContent {
   return contentSchema.parse({ ...nativeWebsiteContent(content), ...websiteDesignSchema.parse(design),
-    opening: { ...content.opening, copyMode: 'personalized', visibility: 'intro-only', highlights: [], featuredEntityIds: [], capabilityIds: [], tone: content.opening?.tone ?? 'warm' } });
+    accent: content.style?.template ? content.accent : design.accent,
+    style: content.style?.template ? content.style : design.style ? { ...content.style, ...design.style, ...(content.style?.entry ? { entry: content.style.entry } : {}) } : content.style,
+    opening: { visibility: 'intro-only', highlights: [], featuredEntityIds: [], capabilityIds: [], tone: 'warm', ...content.opening, copyMode: 'personalized' } });
 }

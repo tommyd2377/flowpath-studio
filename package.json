@@ -13,6 +13,7 @@
     "test": "node --conditions=react-server --import tsx --test tests/*.test.ts && node --import tsx --test tests/presentation/*.test.ts",
     "test:package": "npm run build:platform && node scripts/verify-platform-package.mjs",
     "test:browser": "node scripts/test-browser.mjs",
+    "test:recorder": "node scripts/test-recorder.mjs",
     "start": "next start --hostname 127.0.0.1 --port 3220",
     "lint": "eslint .",
     "typecheck": "next typegen && tsc --noEmit",

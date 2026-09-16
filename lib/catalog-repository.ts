@@ -2,23 +2,34 @@ import 'server-only';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { canonicalRecordSchema, membershipSchema, recordRelationshipSchema, publicationSpaceSchema, validatePublicationSpace, type PublicationSpace } from '@thevoice/platform-ui/collection-space';
-import { queryHash, compileQueryIndex, QUERY_INDEX_LIMITS, type CompiledQueryIndex } from './catalog-query-index';
+import { queryHash, compileQueryIndex, indexPublishedTerms, publishedReadingTerms, QUERY_INDEX_LIMITS, type CompiledQueryIndex } from './catalog-query-index';
 import { taskDocuments, type TaskDocuments } from './task-persistence';
 
 export const catalogMetadataSchema = publicationSpaceSchema.omit({ records: true, memberships: true, relationships: true, publication: true });
 export const catalogImportChunkSchema = z.object({ records: z.array(canonicalRecordSchema).max(100), memberships: z.array(membershipSchema).max(400), relationships: z.array(recordRelationshipSchema).max(400) }).strict();
-const chunkRefSchema = z.object({ id: z.string().length(64), hash: z.string().length(64), bytes: z.number().int().min(1).max(600_000), count: z.number().int().nonnegative(), kind: z.enum(['records', 'memberships', 'relationships', 'index']), firstId: z.string().optional(), lastId: z.string().optional() }).strict();
+const chunkRefSchema = z.object({ id: z.string().length(64), hash: z.string().length(64), bytes: z.number().int().min(1).max(600_000), count: z.number().int().nonnegative(), kind: z.enum(['records', 'memberships', 'relationships', 'index', 'reading']), firstId: z.string().optional(), lastId: z.string().optional() }).strict();
 const manifestSchema = z.object({ version: z.literal(2), id: z.string().uuid(), siteId: z.string().uuid(), reviewId: z.string().uuid().optional(), revision: z.number().int(), metadata: catalogMetadataSchema,
   chunks: z.array(chunkRefSchema).max(1024), recordCount: z.number().int().max(10_000), contentHash: z.string().length(64), indexHash: z.string().length(64) }).strict();
-type Manifest = z.infer<typeof manifestSchema>;
+export type CatalogManifest = z.infer<typeof manifestSchema>;
 const reviewSchema = z.object({ version: z.literal(2), id: z.string().uuid(), siteId: z.string().uuid(), revision: z.number().int(), baseSiteRevision: z.number().int(), status: z.enum(['importing', 'review', 'applying', 'applied']),
   baselineMetadataHash: z.string().length(64).optional(), recordCorrections: z.record(z.string(), z.string().length(64)).default({}),
   metadata: catalogMetadataSchema, imports: z.array(z.string().length(64)).max(200), recordCount: z.number().int().min(0).max(10_000), manifestId: z.string().uuid().optional(),
   removedMemberships: z.array(membershipSchema).max(1000), addedMemberships: z.array(membershipSchema).max(1000),
 }).strict();
 export type CatalogReview = z.infer<typeof reviewSchema>;
+// Four independent immutable reads at a time, preserving manifest order.
+async function readChunks<T, R>(values: T[], read: (value: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = []; let next = 0;
+  await Promise.all(Array.from({ length: Math.min(4, values.length) }, async () => {
+    while (next < values.length) { const position = next++; results[position] = await read(values[position]); }
+  }));
+  return results;
+}
 export class CatalogRepository {
-  constructor(private readonly publications: TaskDocuments = taskDocuments('catalogPublications'), private readonly reviews: TaskDocuments = taskDocuments('catalogReviews')) {}
+  private manifests = new Map<string, CatalogManifest>();
+  private chunks = new Map<string, { data: unknown[]; bytes: number }>();
+  private chunkBytes = 0;
+  constructor(private readonly publications: TaskDocuments = taskDocuments('catalogPublications'), private readonly reviews: TaskDocuments = taskDocuments('catalogReviews'), private readonly cacheReads = false) {}
   async begin(siteId: string, baseSiteRevision: number, metadata: unknown, previousReviewId?: string) {
     const incoming = catalogMetadataSchema.parse(metadata), baselineMetadataHash = queryHash(incoming); await this.immutable(this.reviews, baselineMetadataHash, incoming);
     const previous = previousReviewId ? await this.review(siteId, previousReviewId) : null;
@@ -126,11 +137,11 @@ export class CatalogRepository {
     const text = JSON.stringify(value); if (Buffer.byteLength(text) > 600_000) throw new Error('Chunk exceeds 600 KB. Split the import.');
     try { await store.create(id, value); } catch (error) { if (queryHash(await store.read(id)) !== queryHash(value)) throw error; }
   }
-  async stage(siteId: string, input: PublicationSpace): Promise<Manifest> {
+  async stage(siteId: string, input: PublicationSpace): Promise<CatalogManifest> {
     const id = randomUUID();
     const space = validatePublicationSpace({ ...input, publication: { ...input.publication, revisionId: id, indexRevision: id }, records: [...input.records].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0) }); if (space.publication.siteId !== siteId) throw new Error('Wrong publication site.');
-    const chunks: Manifest['chunks'] = [];
-    const stage = async (kind: Manifest['chunks'][number]['kind'], items: unknown[], size: number) => {
+    const chunks: CatalogManifest['chunks'] = [];
+    const stage = async (kind: CatalogManifest['chunks'][number]['kind'], items: unknown[], size: number) => {
       for (let offset = 0; offset < items.length;) {
         let data = items.slice(offset, offset + size);
         while (Buffer.byteLength(JSON.stringify(data)) > 600_000 && data.length > 1) data = data.slice(0, Math.ceil(data.length / 2));
@@ -142,26 +153,64 @@ export class CatalogRepository {
     await stage('records', space.records, 24); await stage('memberships', space.memberships, 500); await stage('relationships', space.relationships, 200);
     const indexed = space.records.map(record => ({ ...record, blocks: [], summary: record.summary.slice(0, 320) }));
     await stage('index', indexed, 100);
+    await stage('reading', space.records.map(publishedReadingTerms), 100);
     const metadata = catalogMetadataSchema.strip().parse(space), compiled = compileQueryIndex({ ...space, records: indexed });
     const manifest = manifestSchema.parse({ version: 2, id, siteId, ...(z.string().uuid().safeParse(input.publication.revisionId).success ? { reviewId: input.publication.revisionId } : {}), revision: 0, metadata, chunks, recordCount: space.records.length, contentHash: queryHash(space), indexHash: compiled.hash });
     await this.publications.create(id, manifest);
     // Verify complete staged data before exposing a reference to the site mutation.
     await this.verify(siteId, id); return manifest;
   }
-  async manifest(siteId: string, id: string) { const manifest = manifestSchema.parse(await this.publications.read(id)); if (manifest.siteId !== siteId) throw new Error('Publication belongs to another site.'); return manifest; }
-  private async chunk(manifest: Manifest, id: string) {
+  async manifest(siteId: string, id: string) {
+    const key = `${siteId}:${id}`;
+    const cached = this.cacheReads ? this.manifests.get(key) : undefined;
+    if (cached) return cached;
+    const manifest = manifestSchema.parse(await this.publications.read(id));
+    if (manifest.siteId !== siteId) throw new Error('Publication belongs to another site.');
+    if (this.cacheReads) { if (this.manifests.size >= 16) this.manifests.delete(this.manifests.keys().next().value!); this.manifests.set(key, manifest); }
+    return manifest;
+  }
+  private async chunk(manifest: CatalogManifest, id: string) {
     const reference = manifest.chunks.find(chunk => chunk.id === id); if (!reference) throw new Error('Unreferenced publication chunk.');
+    const key = `${manifest.siteId}:${manifest.id}:${id}`, cached = this.cacheReads ? this.chunks.get(key) : undefined;
+    if (cached) return cached.data;
     const data = await this.publications.read(id);
-    if (!Array.isArray(data) || data.length !== reference.count || queryHash(data) !== reference.hash || Buffer.byteLength(JSON.stringify(data)) !== reference.bytes) throw new Error('Publication checksum failed.'); return data;
+    if (!Array.isArray(data) || data.length !== reference.count || queryHash(data) !== reference.hash || Buffer.byteLength(JSON.stringify(data)) !== reference.bytes) throw new Error('Publication checksum failed.');
+    if (this.cacheReads) {
+      while (this.chunks.size && (this.chunkBytes + reference.bytes > 8 * 1024 * 1024 || this.chunks.size >= 64)) {
+        const first = this.chunks.keys().next().value!; this.chunkBytes -= this.chunks.get(first)!.bytes; this.chunks.delete(first);
+      }
+      if (!this.chunks.has(key)) { this.chunks.set(key, { data, bytes: reference.bytes }); this.chunkBytes += reference.bytes; }
+    }
+    return data;
   }
   async index(siteId: string, id: string): Promise<CompiledQueryIndex> {
-    const manifest = await this.manifest(siteId, id), selected = manifest.chunks.filter(chunk => chunk.kind !== 'records');
+    const manifest = await this.manifest(siteId, id), selected = manifest.chunks.filter(chunk => ['index', 'memberships', 'relationships'].includes(chunk.kind));
     if (selected.reduce((sum, chunk) => sum + chunk.bytes, 0) > QUERY_INDEX_LIMITS.readBytes) throw new Error('Publication index exceeds I/O ceiling.');
     const records: unknown[] = [], memberships: unknown[] = [], relationships: unknown[] = [];
-    for (const reference of selected) { const data = await this.chunk(manifest, reference.id) as unknown[]; (reference.kind === 'index' ? records : reference.kind === 'memberships' ? memberships : relationships).push(...data); }
+    const loaded = await readChunks(selected, reference => this.chunk(manifest, reference.id));
+    selected.forEach((reference, i) => (reference.kind === 'index' ? records : reference.kind === 'memberships' ? memberships : relationships).push(...loaded[i]));
     const index = compileQueryIndex({ ...manifest.metadata, publication: { siteId, revisionId: manifest.id, indexRevision: manifest.id }, records, memberships, relationships });
     if (index.hash !== manifest.indexHash || records.length !== manifest.recordCount) throw new Error('Publication index is incomplete or mismatched.');
     return index;
+  }
+  async indexReading(siteId: string, id: string, index: CompiledQueryIndex) {
+    const manifest = await this.manifest(siteId, id);
+    if (index.space.publication.siteId !== siteId || index.space.publication.indexRevision !== id) throw new Error('Reading index belongs to another publication.');
+    if (manifest.chunks.reduce((total, chunk) => total + chunk.bytes, 0) > QUERY_INDEX_LIMITS.readBytes) throw new Error('Publication exceeds I/O ceiling.');
+    let count = 0;
+    const derived = manifest.chunks.filter(chunk => chunk.kind === 'reading');
+    const selected = derived.length ? derived : manifest.chunks.filter(chunk => chunk.kind === 'records');
+    const seen = new Set<string>();
+    // Process bounded batches rather than retaining a second whole catalog.
+    for (let offset = 0; offset < selected.length; offset += 4) {
+      const data = await readChunks(selected.slice(offset, offset + 4), chunk => this.chunk(manifest, chunk.id));
+      for (const chunk of data) {
+        const terms = derived.length ? z.array(z.object({ id: z.string(), terms: z.array(z.string()) }).strict()).parse(chunk) : z.array(canonicalRecordSchema).parse(chunk).map(publishedReadingTerms);
+        for (const record of terms) { if (seen.has(record.id)) throw new Error('Duplicate reading record.'); seen.add(record.id); }
+        indexPublishedTerms(index, terms); count += terms.length;
+      }
+    }
+    if (count !== manifest.recordCount) throw new Error('Published reading index is incomplete.');
   }
   async verify(siteId: string, id: string) {
     const manifest = await this.manifest(siteId, id), index = await this.index(siteId, id);
@@ -169,15 +218,21 @@ export class CatalogRepository {
     const records: PublicationSpace['records'] = [];
     for (const chunk of manifest.chunks.filter(chunk => chunk.kind === 'records')) records.push(...z.array(canonicalRecordSchema).parse(await this.chunk(manifest, chunk.id)));
     const space = validatePublicationSpace({ ...index.space, records });
+    const reading = manifest.chunks.filter(chunk => chunk.kind === 'reading');
+    if (reading.length) {
+      const terms = (await readChunks(reading, chunk => this.chunk(manifest, chunk.id))).flat();
+      if (queryHash(terms) !== queryHash(records.map(publishedReadingTerms))) throw new Error('Publication reading derivative is incomplete or mismatched.');
+    }
     if (records.length !== manifest.recordCount || queryHash(space) !== manifest.contentHash) throw new Error('Publication content is incomplete or mismatched.');
     return manifest;
   }
-  async records(manifest: Manifest, ids: string[]) {
+  async records(manifest: CatalogManifest, ids: string[]) {
     if (ids.length > 48) throw new Error('Excessive record references.');
     const references = ids.map(id => manifest.chunks.find(chunk => chunk.kind === 'records' && chunk.firstId! <= id && chunk.lastId! >= id));
     if (references.some(ref => !ref)) throw new Error('Unavailable record reference.');
     const records = new Map<string, PublicationSpace['records'][number]>();
-    for (const chunkId of new Set(references.map(ref => ref!.id))) for (const record of z.array(canonicalRecordSchema).parse(await this.chunk(manifest, chunkId))) records.set(record.id, record);
+    const loaded = await readChunks([...new Set(references.map(ref => ref!.id))], chunkId => this.chunk(manifest, chunkId));
+    for (const chunk of loaded) for (const record of z.array(canonicalRecordSchema).parse(chunk)) records.set(record.id, record);
     return ids.map(id => { const record = records.get(id); if (!record) throw new Error('Unavailable record reference.'); return record; });
   }
 }

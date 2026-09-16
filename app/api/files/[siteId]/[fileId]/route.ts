@@ -11,7 +11,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ site
     const { siteId, fileId } = await params;
     const size = new URL(request.url).searchParams.get('size') === 'thumb' ? 'thumb' : 'display';
     const { file, bytes } = await downloadFile(user, siteId, fileId, size);
-    result = fileResponse(file, bytes);
+    result = fileResponse(file, bytes, request.headers.get('range'));
     return {};
   });
   return result ?? errorResponse;

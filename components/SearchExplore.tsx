@@ -1,4 +1,6 @@
 'use client';
+import { recordedVisitorFetch } from '@/lib/visitor-test-recording-client';
+import { recordBrowserTestEvent } from '@/lib/visitor-test-events';
 import { visitorDiagnostic } from '../lib/visitor-diagnostics';
 
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react';
@@ -84,9 +86,10 @@ export default function SearchExplore({ content, slug, handleRef, onInteraction,
     setAnnotationId(annotationTarget?.instanceId); setBusy(true); setError(''); setActivity(requestedKind === 'images' ? 'Finding images…' : requestedKind === 'map' ? 'Preparing the map…' : 'Searching the web…');
     try {
       if (!slug) { await show({ ...demoExploreResult(value, requestedKind), ...(annotationTarget ? { annotationTarget } : {}) }, abortSignal); return; }
-      const response = await fetch(`/api/visitor/${encodeURIComponent(slug)}/explore`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: abortSignal,
+      const response = await recordedVisitorFetch(`/api/visitor/${encodeURIComponent(slug)}/explore`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: abortSignal,
         body: JSON.stringify({ requestId: traceId, query: value, kind: requestedKind, ...(annotationTarget ? { annotationTarget } : {}) }) });
       const body = await response.json();
+      recordBrowserTestEvent('search.result', body, traceId);
       if (abortSignal.aborted || pending.current !== controller) return;
       if (!response.ok) throw new Error(body.error || 'Search could not finish.');
       await show(body.result, abortSignal);
