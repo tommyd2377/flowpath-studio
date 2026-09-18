@@ -124,7 +124,7 @@ test.describe.serial('offline publisher-to-visitor proof', () => {
     const creation = await created;
     expect(creation.ok()).toBeTruthy();
     siteId = (await creation.json()).site.id;
-    await panel(page, 'Content');
+    await panel(page, 'The Voice');
     await expect(page.getByLabel('How visitors interact')).toHaveValue('voice');
     await panel(page, 'Files');
     const uploaded = page.waitForResponse(response => response.url().endsWith(`/api/sites/${siteId}/files`) && response.request().method() === 'POST');
@@ -186,7 +186,7 @@ test.describe.serial('offline publisher-to-visitor proof', () => {
 
   test('malformed and stale visitor plans retain the useful view; manual navigation cancels a late reply', async ({ page }, info) => {
     await openWorkspace(page);
-    await panel(page, 'Content');
+    await panel(page, 'The Voice');
     await page.getByLabel('How visitors interact').selectOption('chat');
     const saved = page.waitForResponse(response => response.url().endsWith(`/api/sites/${siteId}`) && response.request().method() === 'POST');
     await page.locator('.save-bar').getByRole('button', { name: 'Save draft', exact: true }).click();
@@ -361,11 +361,12 @@ test.describe.serial('offline publisher-to-visitor proof', () => {
     await opening.getByLabel('Opening headline', { exact: true }).fill('Find your next favorite');
     await opening.getByRole('textbox', { name: 'Introduction', exact: true }).fill('Browse our carefully selected examples.');
     await opening.getByLabel(/^Highlights/).fill('Start with our two featured examples.\nCompare the published details at your own pace.');
-    await opening.getByRole('combobox', { name: 'Tone', exact: true }).selectOption('direct');
     await opening.getByRole('combobox', { name: 'Opening visibility', exact: true }).selectOption('publisher-selected');
     await opening.getByRole('checkbox', { name: 'Draft-only Blanco', exact: true }).check();
     await opening.getByRole('checkbox', { name: 'Example Reposado Selected', exact: true }).check();
     await opening.getByRole('checkbox', { name: 'Example information page', exact: true }).check();
+    await panel(page, 'The Voice');
+    await page.getByRole('combobox', { name: 'Warmth', exact: true }).selectOption('neutral');
     const saved = page.waitForResponse(response => response.url().endsWith(`/api/sites/${siteId}`) && response.request().method() === 'POST');
     await page.locator('.save-bar').getByRole('button', { name: 'Save draft', exact: true }).click();
     expect((await saved).ok()).toBeTruthy();
@@ -374,7 +375,8 @@ test.describe.serial('offline publisher-to-visitor proof', () => {
     await page.getByRole('button', { name: 'Publish locally', exact: true }).click();
     expect((await published).ok()).toBeTruthy();
     const site = await currentSite(page);
-    expect(site.published.opening).toMatchObject({ highlights: ['Start with our two featured examples.', 'Compare the published details at your own pace.'], tone: 'direct' });
+    expect(site.published.opening).toMatchObject({ highlights: ['Start with our two featured examples.', 'Compare the published details at your own pace.'] });
+    expect(site.published.visitor.conversation.warmth).toBe('neutral');
     expect(site.published.opening.featuredEntityIds).toHaveLength(2);
     expect(site.published.opening.capabilityIds).toHaveLength(1);
     const before = visitorPosts.length;

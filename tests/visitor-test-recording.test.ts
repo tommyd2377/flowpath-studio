@@ -159,3 +159,29 @@ test('Studio voice adapter preserves actual model inputs and speech output with 
   assert.ok(events.some(event => event.type === 'model.request'));
   assert.ok(events.some(event => event.type === 'voice.received'));
 });
+
+test('late socket recording captures both speakers and stops with its store without changing provider bytes', async () => {
+  const { createLiveTestRegistry } = await import('../lib/visitor-test-live');
+  const directory = await mkdtemp(join(tmpdir(), 'late-voice-recording-'));
+  try {
+    const store = createTestRecordingStore(directory), registry = createLiveTestRegistry();
+    const socket = new FakeLiveSocket();
+    let observer: ((event: TestObservation) => void) | undefined;
+    const observed = observeTestSocket(socket as unknown as LiveSocket, event => observer?.(event));
+    const control = { id: '00000000-0000-4000-8000-000000000001', token: 'x'.repeat(43) };
+    const unregister = registry.register('synthetic', control, record => { observer = record; });
+    const { id } = await store.start('Late capture', {});
+    registry.attach('synthetic', control, store.observer(id));
+    socket.emit('message', JSON.stringify({ type: 'session.input_transcript.delta', delta: 'Repeat the phone number' }));
+    socket.emit('message', JSON.stringify({ type: 'session.output_transcript.delta', delta: '212 555 0199' }));
+    const payload = JSON.stringify({ type: 'session.input_text.append', text: 'Published phone: 212 555 0100' });
+    observed.send(payload);
+    await store.stop(id);
+    socket.emit('message', JSON.stringify({ type: 'session.output_transcript.delta', delta: 'After stop' }));
+    const events = await store.read(id), text = JSON.stringify(events);
+    assert.match(text, /Repeat the phone number/); assert.match(text, /212 555 0199/); assert.match(text, /212 555 0100/);
+    assert.doesNotMatch(text, /After stop/);
+    assert.deepEqual(socket.sent, [JSON.parse(payload)]);
+    unregister(); assert.equal(registry.attach('synthetic', control, () => {}), false);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});

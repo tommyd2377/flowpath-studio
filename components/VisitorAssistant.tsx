@@ -20,6 +20,7 @@ import { contextualSearchQuery } from '@/lib/explore-workspace';
 import { explicitWorkspaceOpen, planWorkspaceIntent, publishedWorkspace } from '@/lib/visitor-workspace';
 import { exploreSettings, exploreKindForText, exploreReference, localExploreCommand, type AnnotationTarget, type ExploreKind } from '@/lib/explore-model';
 import type { SiteContent } from '@/lib/site-model';
+import { siteStyle } from '@/lib/site-style';
 import { getWelcomeMessage } from '@/lib/site-greeting';
 import { followGreeting, greetingVisuals } from '@/lib/greeting-presentation';
 import { demoVisitorReply, visitorSettings, type VisitorAvailability, type VisitorMessage, type VisitorReply } from '@/lib/visitor-model';
@@ -576,7 +577,7 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
 
   return <MotionConfig reducedMotion="user" transition={{ ...revealTransition, duration: 0.36, layout: surfaceTransition }}><LayoutGroup id={layoutId}>
     <motion.section ref={assistantRoot} className={styles.assistant} role={layerOpen ? 'dialog' : undefined} aria-modal={layerOpen || undefined} aria-label={layerOpen ? 'Assistant exploration' : 'Site assistant'} data-ai-layer-open={layerOpen}>
-      <div className={styles.interaction} data-ai-controls>
+      <div className={styles.interaction} data-ai-controls data-voice-color={content.visitor?.conversation?.color}>
       <AnimatePresence initial={false}>
         {activeMode === 'voice' ? <VisitorVoiceStage key="voice" working={liveVoice.working || voice.phase === 'connecting' || liveVoice.active && !liveVoice.inputReady || !!searchActivity} error={Boolean(error || voice.error)} entered={entered} identity={identity} status={status || searchActivity || liveVoice.activity || liveVoice.startupStage || (voice.phase === 'connecting' ? 'Connecting…' : liveVoice.working ? 'Working on your request…' : voice.phase === 'thinking' ? 'Thinking…' : liveVoice.inputReady && voice.phase === 'listening' ? 'Listening' : '')} hint={demo ? 'Preview voice · no microphone or AI calls' : 'Tap the wave whenever you’re ready'}>
           <motion.button ref={waveControl} type="button" className="site-wave" aria-label={voiceLabel} aria-pressed={voiceBusy} disabled={disabled && !voiceBusy}
@@ -585,7 +586,7 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
             onClick={event => { if (voiceBusy && event.currentTarget.matches(':focus-visible')) requestControlFocus(); startVoice(); }}
             onKeyDown={event => { if (event.key === 'Escape' && voiceBusy) { event.preventDefault(); event.stopPropagation(); requestControlFocus(); endVoice(); } }}
             >
-            <Waveform phase={voice.phase} inputAnalyser={voice.inputAnalyser} outputAnalyser={voice.outputAnalyser}/>
+            <Waveform phase={voice.phase} inputAnalyser={voice.inputAnalyser} outputAnalyser={voice.outputAnalyser} color={siteStyle(content)['--voice-accent']}/>
           </motion.button>
           <span className={styles.srOnly}>{liveVoice.active && !liveVoice.inputReady ? 'Microphone preparing' : voice.phase === 'listening' ? 'Listening · speak naturally · tap to end' : voice.phase === 'speaking' ? 'Speaking · you can interrupt · tap to end' : ''}</span>
         </VisitorVoiceStage> : <ConversationDock key="chat" expanded={chatExpanded} onDismiss={closeLayer} suggestions={

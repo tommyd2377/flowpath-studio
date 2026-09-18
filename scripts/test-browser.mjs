@@ -8,6 +8,7 @@ const project = fileURLToPath(new URL('../', import.meta.url));
 const cli = createRequire(import.meta.url).resolve('@playwright/test/cli');
 const groups = {
   templates: ['templates.spec.ts'],
+  voiceSettings: ['voice-settings.spec.ts'],
   carousel: ['ai-carousel.spec.ts'],
   // Source imports create several sites. Give them fresh data rather than
   // exhausting the unchanged 12-site pilot cap in the runtime group.

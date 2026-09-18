@@ -1,0 +1,123 @@
+import { test, expect, type Page } from '@playwright/test';
+import { VOICE_COLORS, type VoiceColor } from '@thevoice/platform-ui/voice-design';
+import { siteStyle } from '../../lib/site-style';
+import { CONVERSATION_PRESETS } from '../../lib/voice-settings';
+import type { Site } from '../../lib/site-model';
+
+const origin = 'http://127.0.0.1:3225';
+async function post(page: Page, path: string, data: unknown) {
+  const response = await page.request.post(path, { headers: { Origin: origin }, data });
+  const body = await response.json(); expect(response.ok(), JSON.stringify(body)).toBe(true); return body;
+}
+async function read(page: Page, id: string): Promise<Site> { return (await (await page.request.get(`/api/sites/${id}`)).json()).site; }
+const navigation = (page: Page) => page.getByRole('navigation', { name: 'Workspace', exact: true });
+const editor = (page: Page) => page.getByRole('region', { name: 'Site editor', exact: true });
+async function save(page: Page) { const button = editor(page).getByRole('button', { name: 'Save draft', exact: true }); await button.click(); await expect(button).toBeDisabled(); }
+async function studio(page: Page, site: Site) {
+  await page.goto('/'); const picker = page.getByRole('combobox', { name: 'Current site', exact: true }); await expect(picker).toBeEnabled();
+  if (await picker.inputValue() !== site.id) await picker.selectOption(site.id);
+  await navigation(page).getByRole('button', { name: 'The Voice', exact: true }).click();
+}
+
+test('The Voice saves independent choices, keeps drafts private and previews all nine colors without provider calls', async ({ page, context }, info) => {
+  test.setTimeout(180_000);
+  const errors: string[] = [], external: string[] = [], voiceCalls: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await context.route(/^https?:\/\//, route => { if (new URL(route.request().url()).origin !== origin) { external.push(route.request().url()); return route.abort(); } return route.continue(); });
+  page.on('request', request => { if (/\/api\/visitor\/.*\/session$/.test(request.url())) voiceCalls.push(request.url()); });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  let site: Site = (await post(page, '/api/sites', { name: 'Voice configuration fixture', slug: `voice-settings-${Date.now()}`, kind: 'general' })).site;
+  site = (await post(page, `/api/sites/${site.id}`, { action: 'save', revision: site.revision, content: { ...site.draft, headline: 'A welcoming place to explore', description: 'Synthetic content for a local voice configuration check.', visitor: { ...site.draft.visitor, mode: 'both' }, style: { ...site.draft.style, palette: 'orchid', typography: 'literary', spacing: 'spacious', entry: 'website' } } })).site;
+  site = (await post(page, `/api/sites/${site.id}`, { action: 'publish', revision: site.revision })).site;
+  const published = structuredClone(site.published), content = { ...site.draft, visitor: undefined, style: undefined, visitorSpeaksFirst: undefined, welcomeMessage: undefined };
+  await studio(page, site);
+  await expect(editor(page).getByRole('heading', { name: 'The Voice', exact: true })).toBeVisible();
+  await expect(editor(page).getByText('GPT Live 1', { exact: true })).toBeVisible();
+  await expect(editor(page).getByRole('combobox', { name: 'Speaking voice' }).locator('option')).toHaveCount(14);
+  await page.screenshot({ path: info.outputPath('voice-studio-desktop.png') });
+  await page.getByRole('combobox', { name: 'Speaking voice' }).selectOption('willow');
+  await page.getByRole('combobox', { name: 'Conversation language' }).selectOption('es');
+  await page.getByRole('button', { name: /^Quiet Reserved/ }).click();
+  await expect(page.getByRole('combobox', { name: 'Answer length' })).toHaveValue('minimal');
+  await expect(page.getByRole('combobox', { name: 'Warmth', exact: true })).toHaveValue('reserved');
+  await page.getByText('Conversation habits & pronunciation', { exact: true }).click();
+  await expect(page.getByRole('combobox', { name: 'Listening acknowledgements' })).toHaveValue('none');
+  await page.getByRole('textbox', { name: 'Pronunciation hints' }).fill('Acme: ACK-mee.');
+  await page.screenshot({ path: info.outputPath('voice-conversation-habits.png') });
+  await page.getByText('Conversation habits & pronunciation', { exact: true }).click();
+  const preview = page.locator('.preview-scroll [data-visitor-site]');
+  const palette = await preview.evaluate(el => getComputedStyle(el).getPropertyValue('--platform-accent'));
+  for (const [id, color] of Object.entries(VOICE_COLORS)) {
+    const choice = page.getByRole('button', { name: `${color.name} voice color`, exact: true }); await choice.click();
+    await expect(choice).toHaveAttribute('aria-pressed', 'true');
+    const expected = siteStyle({ ...site.draft, visitor: { ...site.draft.visitor!, conversation: { color: id as VoiceColor } } })['--voice-accent'];
+    await expect(preview.locator('canvas[data-wave-color]')).toHaveAttribute('data-wave-color', expected);
+    expect(await preview.evaluate(el => getComputedStyle(el).getPropertyValue('--platform-accent'))).toBe(palette);
+    await preview.getByRole('button', { name: 'Chat', exact: true }).click();
+    await expect(preview.locator('.site-wave')).toHaveCount(0);
+    const send = preview.getByRole('button', { name: 'Show me', exact: true });
+    expect(await send.evaluate(el => getComputedStyle(el).getPropertyValue('--platform-accent').trim())).toBe(expected);
+    await page.screenshot({ path: info.outputPath(`voice-${id}.png`) });
+    await preview.getByRole('button', { name: 'Voice', exact: true }).click();
+  }
+  await page.getByRole('button', { name: 'Ocean voice color', exact: true }).focus(); await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: 'Ocean voice color', exact: true })).toBeFocused();
+  await page.getByRole('combobox', { name: 'Who speaks first?' }).selectOption('visitor');
+  await page.getByRole('textbox', { name: 'Welcome message' }).fill('Bienvenidos. ¿Qué te gustaría explorar?');
+  await page.getByRole('combobox', { name: 'Maximum voice session' }).selectOption('30');
+  await page.getByRole('combobox', { name: 'End voice after inactivity' }).selectOption('30');
+  await page.getByRole('spinbutton', { name: 'Daily voice task limit' }).fill('9');
+  await page.getByRole('combobox', { name: 'Website / assistant preference' }).selectOption('assistant');
+  await save(page); site = await read(page, site.id);
+  expect(site.draft.visitor?.conversation).toEqual({ ...CONVERSATION_PRESETS.quiet.settings, voice: 'willow', language: 'es', pronunciation: 'Acme: ACK-mee.', color: 'ocean' });
+  expect(site.draft.visitor).toMatchObject({ voiceSessionSeconds: 30, voiceIdleTimeoutSeconds: 30, voiceDailyLimit: 9 });
+  expect(site.draft.style).toMatchObject({ palette: 'orchid', typography: 'literary', spacing: 'spacious', entry: 'assistant' });
+  expect({ ...site.draft, visitor: undefined, style: undefined, visitorSpeaksFirst: undefined, welcomeMessage: undefined }).toEqual(content);
+  expect(site.published).toEqual(published);
+  await page.goto(`/s/${site.slug}`); await expect(page.locator('[data-ai-controls]')).toHaveAttribute('data-voice-color', 'amber');
+  await studio(page, site);
+  await expect(page.getByRole('combobox', { name: 'Speaking voice' })).toHaveValue('willow');
+  await expect(page.getByRole('combobox', { name: 'Answer length' })).toHaveValue('minimal');
+  await expect(page.getByRole('button', { name: 'Ocean voice color', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: /^Expressive Lively/ }).click(); await save(page);
+  site = await read(page, site.id); expect(site.draft.visitor?.conversation).toMatchObject({ ...CONVERSATION_PRESETS.expressive.settings, voice: 'willow', language: 'es', color: 'ocean', pronunciation: 'Acme: ACK-mee.' });
+  expect(site.draft.visitorSpeaksFirst).toBe(true); expect(site.draft.visitor?.voiceDailyLimit).toBe(9);
+  await page.getByRole('button', { name: 'Mobile preview', exact: true }).click();
+  await page.getByRole('region', { name: 'Voice color', exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: info.outputPath('voice-studio-embedded.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await editor(page).getByRole('heading', { name: 'The Voice', exact: true }).scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath('voice-studio-mobile.png') });
+  await page.getByRole('region', { name: 'Voice color', exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: info.outputPath('voice-colors-mobile.png') });
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await page.getByRole('button', { name: 'Publish', exact: true }).click();
+  await page.getByRole('button', { name: 'Publish locally', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Publish locally', exact: true })).not.toBeVisible();
+  site = await read(page, site.id); expect(site.published).toEqual(site.draft);
+  await page.goto(`/s/${site.slug}`); await expect(page.locator('[data-ai-controls]')).toHaveAttribute('data-voice-color', 'ocean');
+  await page.screenshot({ path: info.outputPath('voice-website-desktop.png') });
+  await page.setViewportSize({ width: 390, height: 844 }); await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  await expect(page.locator('.site-wave')).toHaveCount(0);
+  await expect(page.getByRole('textbox', { name: 'What would you like to see?', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath('voice-chat-mobile.png') });
+  await page.setViewportSize({ width: 1440, height: 1100 }); await studio(page, site);
+  await page.getByRole('combobox', { name: 'How visitors interact' }).selectOption('off'); await save(page);
+  site = await read(page, site.id); expect(site.draft.visitor?.enabled).toBe(false); expect(site.published?.visitor?.enabled).toBe(true);
+  expect(site.draft.visitor?.conversation).toEqual(site.published?.visitor?.conversation);
+  const other: Site = (await post(page, '/api/sites', { name: 'Independent voice fixture', slug: `other-voice-${Date.now()}`, kind: 'general' })).site;
+  await studio(page, other);
+  await expect(page.getByRole('combobox', { name: 'Speaking voice' })).toHaveValue('marin');
+  await expect(page.getByRole('combobox', { name: 'Conversation language' })).toHaveValue('auto');
+  await expect(page.getByRole('button', { name: 'Amber voice color', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const theme = page.getByRole('switch', { name: 'Dark mode', exact: true });
+  if (await theme.getAttribute('aria-checked') === 'true') await theme.click();
+  await page.screenshot({ path: info.outputPath('voice-studio-light.png') });
+  await studio(page, site);
+  await expect(page.getByRole('combobox', { name: 'Speaking voice' })).toHaveValue('willow');
+  await expect(page.getByRole('combobox', { name: 'How visitors interact' })).toHaveValue('off');
+  await expect(page.getByRole('button', { name: 'Ocean voice color', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  expect(errors).toEqual([]); expect(external).toEqual([]); expect(voiceCalls).toEqual([]);
+});

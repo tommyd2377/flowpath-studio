@@ -8,6 +8,7 @@ export type VisitorTaskUsage = { inputTokens?: number; outputTokens?: number; to
 export type ToolResult = { data: unknown; silent?: boolean; directText?: string; displaySatisfied?: boolean };
 export type VisitorTaskOptions = {
   model: string; channel: 'chat' | 'voice';
+  responseWordLimit?: number;
   apiKey: string; instructions: string | (() => string | Promise<string>); context: unknown; signal: AbortSignal;
   tools: readonly VisitorTaskTool[]; execute: (name: string, args: string, signal: AbortSignal) => Promise<ToolResult>;
   fetch?: typeof fetch; beforeModel?: () => Promise<void>; onUsage?: (usage: VisitorTaskUsage) => void | Promise<void>; maxToolRounds?: number;
@@ -27,6 +28,8 @@ export async function runVisitorTask(options: VisitorTaskOptions): Promise<{ tex
   const request = options.fetch ?? fetch;
   const input: unknown[] = [{ role: 'user', content: JSON.stringify(options.context) }];
   const maxTools = options.maxToolRounds ?? 4;
+  const wordLimit = options.responseWordLimit ?? (options.channel === 'voice' ? 75 : 200);
+  if (!Number.isInteger(wordLimit) || wordLimit < 20 || wordLimit > 300) throw new Error('Invalid response length preference.');
   if (!Number.isInteger(maxTools) || maxTools < 0 || maxTools > 4) throw new Error('Invalid backend tool limit.');
   for (let round = 0; round <= maxTools; round++) {
     options.signal.throwIfAborted();
@@ -39,7 +42,7 @@ export async function runVisitorTask(options: VisitorTaskOptions): Promise<{ tex
     const started = performance.now();
     options.onModelTiming?.('model', 'started', 0);
     const body = { model: options.model, store: false, reasoning: { effort: options.reasoningEffort ?? 'low' },
-      instructions: `${VISITOR_KNOWLEDGE_POLICY}\n${instructions}\n${options.channel === 'voice' ? 'Transcripts may be incomplete or overlapping; use the latest user request and current application state. Return a concise, grounded answer (at most 75 words) for spoken delivery.' : 'Use the latest typed request, conversation and current application state. Return a concise, grounded answer for the website visitor.'} Never claim unconfirmed actions.`,
+      instructions: `${VISITOR_KNOWLEDGE_POLICY}\n${instructions}\n${options.channel === 'voice' ? 'Transcripts may be incomplete or overlapping; use the latest user request and current application state. Return a grounded answer for spoken delivery.' : 'Use the latest typed request, conversation and current application state. Return a grounded answer for the website visitor.'} Aim for at most ${wordLimit} words, preserving necessary qualifications and explicit visitor requests for detail. Never claim unconfirmed actions.`,
       include: ['reasoning.encrypted_content'],
       input, tools: round < maxTools ? options.tools.map(tool => ({ ...tool, strict: false })) : [],
       tool_choice: round < maxTools ? 'auto' : 'none', parallel_tool_calls: false, max_output_tokens: round === 0 ? 1200 : 500,

@@ -1,6 +1,6 @@
 'use client';
 import { visitorWorkLabel } from './visitor-progress';
-import { recordedVisitorFetch } from '@/lib/visitor-test-recording-client';
+import { recordedVisitorFetch, registerRecordingVoice } from '@/lib/visitor-test-recording-client';
 import { recordBrowserTestEvent } from '@/lib/visitor-test-events';
 
 import { createStartupAudioGuard, needsStartupAudioGuard, monitorLiveAudio, waitForIce } from './gpt-live/browser';
@@ -40,7 +40,7 @@ type Session = {
   protectOpening?: boolean;
   startup?: ReturnType<typeof createStartupAudioGuard>; stopMonitor?: () => void; audioState?: LiveAudioState; resumeAfterQuiet?: boolean; resumeAfterRevision?: number;
   idle?: ReturnType<typeof createLiveIdleTimer>;
-  finish?: () => void;
+  finish?: () => void; unregisterRecording?: () => void;
   queue: (immediate?: boolean) => void;
 };
 
@@ -65,7 +65,7 @@ export function useVisitorSession() {
       // Ask the server to finalize while media stays negotiated. Mute immediately.
       session.startup?.setInputEnabled(false);
       if (session.audio) session.audio.muted = true;
-      session.end(); session.navigation?.abort();
+      session.end(); session.navigation?.abort(); session.unregisterRecording?.();
       const timeout = setTimeout(() => session.finish?.(), 6500);
       let released = false;
       session.finish = () => {
@@ -318,6 +318,7 @@ export function useVisitorSession() {
           if (event.type === 'session') {
           if (session.sdpReady) throw new Error('The voice connection returned a duplicate session.');
           options.onAvailability(event.availability); session.control = event.control; session.protectOpening = event.protectOpening;
+          session.unregisterRecording = registerRecordingVoice(options.slug, event.control);
           session.idle?.setTimeoutMs(event.idleTimeoutMs ?? DEFAULT_LIVE_IDLE_TIMEOUT_MS);
           const remaining = Math.min(VISITOR_SESSION_MS, event.expiresAt - Date.now());
           if (remaining <= 0) throw new Error('This voice session expired. Tap the wave to start again.');

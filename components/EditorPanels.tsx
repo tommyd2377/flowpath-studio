@@ -8,15 +8,13 @@ import { ArrowUpRight, Check, FileText, Globe2, Image as ImageIcon, Link2, Plus,
 import type { Site, SiteContent } from '@/lib/site-model';
 import type { WorkspaceUser } from '@/lib/firebase/types';
 import type { EditorStatus } from '@/lib/editor-types';
-import GreetingSettings from './GreetingSettings';
-import VisitorSettings from './VisitorSettings';
-import ExploreSettings from './ExploreSettings';
+import VoicePanel from './VoicePanel';
 import OpeningSettings from './OpeningSettings';
 import RecentActivity from './RecentActivity';
 import BillingPanel from './BillingPanel';
 import MediaPanel, { type UploadFiles } from './MediaPanel';
 
-export type Panel = 'chat' | 'branding' | 'content' | 'knowledge' | 'files' | 'domains' | 'billing';
+export type Panel = 'chat' | 'branding' | 'voice' | 'content' | 'knowledge' | 'files' | 'domains' | 'billing';
 export type Command = { action: string; [key: string]: unknown };
 type Props = {
   editor: EditorStatus; mode: WorkspaceUser['mode']; panel: Panel; site: Site; content: SiteContent; setContent: (content: SiteContent) => void;
@@ -32,14 +30,12 @@ export function EditorPanels({ editor, mode, panel, site, content, setContent, b
   const saveBar = <div className="save-bar"><span>{unsaved ? 'Save to keep these changes in your draft.' : 'Your draft is up to date.'}</span><button className="button primary" disabled={busy || !unsaved} onClick={save}><Check size={16}/>Save draft</button></div>;
 
   if (panel === 'branding') return <BrandingPanel site={site} content={content} setContent={setContent} busy={busy} unsaved={unsaved} upload={upload} save={save}/>;
+  if (panel === 'voice') return <VoicePanel key={site.id} siteId={site.id} content={content} setContent={setContent} busy={busy} unsaved={unsaved} save={save}/>;
 
   if (panel === 'content') return <div className="settings-panel">
     <div className="panel-heading"><span className="eyebrow">Your story</span><h2>Content</h2><p>Keep the information on your site clear and current.</p></div>
     <label className="field">Hours or availability<input disabled={busy} value={content.hours} maxLength={180} onChange={e => change('hours', e.target.value)}/></label>
     <label className="field">Contact information<input disabled={busy} value={content.contact} maxLength={180} onChange={e => change('contact', e.target.value)}/></label>
-    <VisitorSettings content={content} setContent={setContent} busy={busy}/>
-    <ExploreSettings content={content} setContent={setContent} busy={busy}/>
-    <GreetingSettings key={site.id} siteId={site.id} content={content} setContent={setContent} busy={busy}/>
     <OpeningSettings siteId={site.id} content={content} setContent={setContent} busy={busy}/>
     <div className="section-heading"><h3>Content sections</h3><span>{content.sections.length} / 12</span></div>
     {content.sections.map((section, index) => <div className="section-editor" key={section.id}>

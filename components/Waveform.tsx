@@ -11,12 +11,14 @@ export type VoicePhase =
   | "error";
 
 type WaveformProps = {
+  color?: string;
   phase: VoicePhase;
   inputAnalyser: AnalyserNode | null;
   outputAnalyser: AnalyserNode | null;
 };
 
 export default function Waveform({
+  color,
   phase,
   inputAnalyser,
   outputAnalyser,
@@ -83,6 +85,8 @@ export default function Waveform({
       const pattern = context.createPattern(palette, "repeat-y");
       pattern?.setTransform(new DOMMatrix().scale(1 / dpr, 1));
       stroke = pattern ?? (/^#[\da-f]{6}$/i.test(brand) ? brand : "#f6eddb");
+      // Explicit voice colors use one solid hue; old sites keep their existing stroke.
+      if (color && /^#[\da-f]{6}$/i.test(color)) { stroke = color; shadow = color + '33'; }
       previousDraw = 0;
       // Resizing clears the bitmap after animation frames have run. Paint before
       // this frame reaches the screen, without creating a second animation loop.
@@ -196,12 +200,13 @@ export default function Waveform({
       window.removeEventListener("resize", resize);
       motionQuery.removeEventListener("change", onMotionChange);
     };
-  }, []);
+  }, [color]);
 
   return (
     <canvas
       ref={canvasRef}
       aria-hidden="true"
+      data-wave-color={color}
       // Trim the surrounding vertical space without scaling the drawn strands.
       style={{ display: "block", position: "absolute", top: "50%", transform: "translateY(-50%)",
         width: "100%", height: "calc(100% / var(--wave-vertical-scale, 1))", pointerEvents: "none" }}

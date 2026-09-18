@@ -3,6 +3,7 @@ import { greetingPointSchema, WELCOME_MESSAGE_MAX_LENGTH } from './site-greeting
 import { visitorSettingsSchema } from './visitor-model';
 import { exploreSettingsSchema } from './explore-model';
 import { siteDesignSchema } from '@thevoice/platform-ui/site-design';
+import { conversationSummary } from './voice-settings';
 
 export const sectionSchema = z.object({
   id: z.string().trim().min(1).max(80),
@@ -85,7 +86,7 @@ export function describeChanges(before: SiteContent, after: SiteContent): Change
     hours: 'Opening hours', contact: 'Contact', accent: 'Brand color', logoAssetId: 'Logo',
     welcomeMessage: 'Welcome message', greetingPoints: 'Spoken greeting points', style: 'Visitor style', visitorSpeaksFirst: 'Conversation opening', visitor: 'Visitor conversations', explore: 'Search and explore', knowledgeRevisionId: 'Knowledge revision', catalogPublicationId: 'Collection publication', mediaRevisionId: 'Photos and albums', opening: 'Opening experience' };
   const display = (content: SiteContent, key: keyof typeof labels) => key === 'visitor'
-    ? content.visitor?.enabled ? `${content.visitor.mode} · ${content.visitor.voiceTier} voice · ${content.visitor.chatDailyLimit} chat messages / ${content.visitor.voiceDailyLimit} voice tasks per day · ${content.visitor.voiceIdleTimeoutSeconds ?? 60}s idle close · Purpose: ${content.visitor.assistantPurpose || 'Help visitors explore published information'}` : 'Off'
+    ? `${content.visitor?.enabled ? content.visitor.mode : 'Off'} · GPT Live 1 · ${content.visitor?.chatDailyLimit ?? 25} chat messages / ${content.visitor?.voiceDailyLimit ?? 5} voice tasks per day · ${content.visitor?.voiceIdleTimeoutSeconds ?? 60}s idle close · ${content.visitor?.voiceSessionSeconds ?? 120}s session maximum · Purpose: ${content.visitor?.assistantPurpose || 'Help visitors explore published information'} · ${conversationSummary(content)}`
     : key === 'explore' ? content.explore?.enabled ? `On · ${content.explore.dailyLimit} searches/day · ${content.explore.images ? 'images on' : 'images off'} · ${content.explore.maps ? 'maps on' : 'maps off'} · ${content.explore.annotations ? 'web additions on' : 'web additions off'} · ${content.explore.allowedDomains.join(', ') || 'wider web'}` : 'Off'
     : key === 'welcomeMessage' ? content.welcomeMessage?.trim() || 'Default greeting'
     : key === 'visitorSpeaksFirst' ? content.visitorSpeaksFirst ? 'Visitor speaks first' : 'Assistant welcomes the visitor' : String(content[key] ?? 'None');

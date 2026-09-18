@@ -33,7 +33,7 @@
 .srOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* The shared dock owns position and motion; the host owns input behavior. */
-.assistant :global(.platform-conversation-dock) { --conversation-height: calc(var(--conversation-wave-height) + var(--conversation-top) + 38px); }
+.assistant :global(.platform-conversation-dock) { --conversation-top: env(safe-area-inset-top, 0px); --conversation-height: calc(var(--conversation-wave-height) + var(--conversation-top)); }
 .assistant :global(.platform-conversation-dock) .composer { width: 100%; padding: 8px 12px 8px 18px; }
 
 /* The dock stays mounted above both surfaces. Only the cards occupy the AI layer. */
@@ -64,3 +64,17 @@
 :global([data-site-template]) .send { color: var(--platform-on-accent); background: var(--platform-accent); }
 :global([data-site-template]) .voiceNote { color: var(--platform-muted); }
 :global([data-site-template]) .cancelWork { color: var(--platform-text); background: var(--platform-surface); }
+
+/* Override only the conversation region; publisher cards and the website keep their palette. */
+.interaction[data-voice-color] { --site-accent: var(--voice-accent); --platform-accent: var(--voice-accent); --platform-on-accent: var(--voice-on-accent); background: var(--platform-bg); }
+.interaction[data-voice-color] .composer { background: var(--platform-surface); border-color: color-mix(in srgb, var(--voice-accent) 30%, var(--platform-border)); }
+.interaction[data-voice-color] .composer:focus-within { border-color: var(--voice-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--voice-accent) 12%, transparent); }
+.interaction[data-voice-color] .composer textarea { color: var(--platform-text); }
+.interaction[data-voice-color] .composer textarea::placeholder { color: var(--platform-muted); }
+.interaction[data-voice-color] .send { color: var(--voice-on-accent); background: var(--voice-accent); }
+.interaction[data-voice-color] .modes { border-color: color-mix(in srgb, var(--voice-accent) 25%, var(--platform-border)); }
+.interaction[data-voice-color] .modes button { color: var(--platform-muted); }
+.interaction[data-voice-color] .modes button[aria-pressed=true] { color: var(--voice-accent); }
+.interaction[data-voice-color] .modeSelection { background: var(--platform-surface); }
+.interaction[data-voice-color] .suggestions button { color: var(--platform-text); background: var(--platform-surface); border-color: var(--platform-border); }
+.interaction[data-voice-color] button:focus-visible { outline-color: var(--voice-accent); }

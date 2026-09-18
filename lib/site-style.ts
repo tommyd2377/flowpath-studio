@@ -1,5 +1,6 @@
 import type { SiteContent } from './site-model';
 import { sitePalette, websiteDesignTokens } from '@thevoice/platform-ui/site-design';
+import { voiceDesignTokens } from '@thevoice/platform-ui/voice-design';
 export { SITE_PALETTES } from '@thevoice/platform-ui/site-design';
 
 function luminance(hex: string) {
@@ -7,6 +8,11 @@ function luminance(hex: string) {
   return channels[0] * .2126 + channels[1] * .7152 + channels[2] * .0722;
 }
 export function siteStyle(content: SiteContent): Record<string, string> {
+  const tokens = websiteStyle(content);
+  const color = content.visitor?.conversation?.color;
+  return color ? { ...tokens, ...voiceDesignTokens(color, tokens['--platform-bg'], tokens['--platform-surface']) } : tokens;
+}
+function websiteStyle(content: SiteContent): Record<string, string> {
   if (content.style?.template) return websiteDesignTokens(content.style, content.accent);
   const palette = sitePalette(content.style);
   const light = luminance(content.accent), background = luminance(palette.background);

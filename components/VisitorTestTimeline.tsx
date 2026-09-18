@@ -44,6 +44,8 @@ export default function VisitorTestTimeline() {
       <button disabled={!id || busy} onClick={() => { if (confirm('Delete this local recording permanently?')) void recordingApi({ action: 'delete', id }).then(() => { history.replaceState(null, '', '/dev/recordings'); return refresh(''); }).catch(() => setError('Could not delete recording.')); }}>Delete recording</button>
     </div>
     {selected && <p>{selected.active ? 'Recording is active. Refresh to see new events.' : 'Recording is stopped.'} {events.length} events · {(selected.bytes / 1_000_000).toFixed(2)} MB · {selected.dropped} dropped. {selected.error}</p>}
+    {events.some(event => event.type === 'voice.capture_attached') && <p>Voice capture attached during the connection. Earlier unrecorded speech and model activity are unavailable; attachment snapshots describe application state, not reconstructed model history.</p>}
+    {events.some(event => event.type.startsWith('voice.')) && !events.some(event => event.type === 'voice.config' || event.type === 'voice.capture_attached') && <p role="alert">Incomplete voice capture: this recording has no confirmed server attachment. Assistant speech and model context may be missing.</p>}
     {events.some(event => event.truncated) && <p>Some events exceeded capture limits and are marked incomplete.</p>}
     <div className={styles.toolbar}>
       <label>Search time, text, request ID<input value={query} onChange={event => { setQuery(event.target.value); setLimit(100); }} placeholder="10:42 or photo gallery"/></label>

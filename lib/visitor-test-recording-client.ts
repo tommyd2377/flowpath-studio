@@ -1,7 +1,8 @@
 'use client';
+import type { VisitorControlCapability } from './visitor-realtime-context';
 import { LOCAL_TEST_HEADER, RECORDING_HEADER, sanitizeTestObservation, setBrowserTestRecorder, recordBrowserTestEvent, type TestEvent } from './visitor-test-events';
 
-type RecordingState = { id?: string; active: boolean; busy: boolean; dropped: number; error?: string };
+type RecordingState = { id?: string; active: boolean; busy: boolean; dropped: number; error?: string; voiceCapture?: 'attaching' | 'attached' | 'unavailable' };
 const initial: RecordingState = { active: false, busy: false, dropped: 0 };
 let state = initial, queue: TestEvent[] = [], queuedBytes = 0, sequence = 0;
 let timer: ReturnType<typeof setTimeout> | undefined, sending: Promise<void> | undefined;
@@ -17,6 +18,26 @@ export async function recordingApi(body: object) {
   const response = await fetch('/api/dev/recordings', { method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json', [LOCAL_TEST_HEADER]: '1' }, body: JSON.stringify(body), signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error('The local recording could not be read or saved.');
   return response;
+}
+let liveConnection: { slug: string; control: VisitorControlCapability } | undefined;
+async function attachVoice() {
+  const connection = liveConnection, id = state.id;
+  if (!connection || !state.active || !id || !localTestRecordingAvailable()) return;
+  update({ voiceCapture: 'attaching' });
+  try {
+    const result = await (await recordingApi({ action: 'attach-voice', id, ...connection })).json();
+    if (state.active && state.id === id && liveConnection === connection) {
+      update({ voiceCapture: result.attached ? 'attached' : 'unavailable' });
+      recordBrowserTestEvent('voice.capture_status', { attached: result.attached === true });
+    }
+  } catch { if (state.active && state.id === id && liveConnection === connection) update({ voiceCapture: 'unavailable' }); }
+}
+/** Register only this tab's existing connection; attachment never starts voice. */
+export function registerRecordingVoice(slug: string, control: VisitorControlCapability) {
+  if (!localTestRecordingAvailable()) return () => {};
+  const connection = { slug, control }; liveConnection = connection;
+  void attachVoice();
+  return () => { if (liveConnection === connection) { liveConnection = undefined; update({ voiceCapture: undefined }); } };
 }
 function forget() { try { sessionStorage.removeItem('flowpath-test-recording'); } catch {} }
 async function flush() {
@@ -58,9 +79,10 @@ export async function startTestRecording(label = 'Visitor test') {
   try {
     const result = await (await recordingApi({ action: 'start', label, page: location.pathname })).json();
     queue = []; queuedBytes = 0; sequence = 0;
-    update({ id: result.id, active: true, dropped: 0 }); observe();
+    update({ id: result.id, active: true, dropped: 0, voiceCapture: undefined }); observe();
     try { sessionStorage.setItem('flowpath-test-recording', result.id); } catch {}
     recordBrowserTestEvent('browser.started', { page: location.pathname, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, userAgent: navigator.userAgent, viewport: { width: innerWidth, height: innerHeight }, reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches });
+    await attachVoice();
   } catch { update({ error: 'Could not start the local recorder.' }); }
   finally { update({ busy: false }); }
 }
@@ -71,7 +93,7 @@ export async function resumeTestRecording() {
   update({ busy: true });
   try {
     const { sessions } = await (await recordingApi({ action: 'list' })).json();
-    if (sessions.some((session: { id: string; active: boolean }) => session.id === id && session.active)) { update({ id, active: true }); observe(); recordBrowserTestEvent('browser.resumed', { page: location.pathname }); }
+    if (sessions.some((session: { id: string; active: boolean }) => session.id === id && session.active)) { update({ id, active: true }); observe(); recordBrowserTestEvent('browser.resumed', { page: location.pathname }); await attachVoice(); }
     else forget();
   } catch { forget(); update({ error: 'The previous recording could not be resumed.' }); }
   finally { update({ busy: false }); }
@@ -85,7 +107,7 @@ export async function stopTestRecording() {
     await flush(); while (state.active && queue.length) await flush();
     await recordingApi({ action: 'stop', id: state.id });
   } catch { update({ error: 'Recording stopped locally; the server recording will expire automatically.' }); }
-  finally { forget(); update({ active: false, busy: false }); }
+  finally { forget(); update({ active: false, busy: false, voiceCapture: undefined }); }
 }
 export async function markTestProblem(note: string) {
   if (!state.active || state.busy) return false;

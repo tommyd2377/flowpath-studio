@@ -14,6 +14,7 @@ import { publicationContent } from '../lib/site-opening';
 import { semanticFixture, semanticMediaFixture } from '../fixtures/semantic-knowledge/graph';
 import { annotationTargetForObject, DEFAULT_EXPLORE_SETTINGS, demoExploreResult, exploreContextForResult } from '../lib/explore-model';
 import { publishedProseFixture } from './helpers/published-prose-fixture';
+import { CONVERSATION_PRESETS } from '../lib/voice-settings';
 
 const availability = { enabled: true, mode: 'voice' as const, live: true, chatRemaining: 25, voiceRemaining: 4, resetsAt: '' };
 export async function liveVisitorSetup(output: unknown[] = [liveAnswer()], overrides: Partial<VisitorRealtimeControlOptions> = {}) {
@@ -101,6 +102,19 @@ test('no greeting or paid backend starts until browser readiness is applied', as
   assert.equal(h.socket.sent.length, 0); assert.equal(h.requests.length, 0);
   await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: {} });
   assert.ok(h.socket.sent.some(x => x.type === 'session.commentary.append')); assert.equal(h.requests.length, 0);
+});
+
+test('greeting respects language and Quiet does not acquire a conflicting acknowledgement instruction', async t => {
+  const content = { ...sampleContent('general'), welcomeMessage: 'Bienvenidos.', visitor: { ...DEFAULT_VISITOR_SETTINGS, conversation: { language: 'es' as const, ...CONVERSATION_PRESETS.quiet.settings } } };
+  const h = await liveVisitorSetup([liveAnswer('Respuesta publicada.')], { content }); t.after(() => h.control.close());
+  h.control.start();
+  const opening = JSON.stringify(h.socket.sent);
+  assert.match(opening, /Use Spanish/); assert.doesNotMatch(opening, /in English|Briefly acknowledge requests/); assert.equal(h.requests.length, 0);
+  h.socket.user('Describe this website.');
+  for (let i = 0; i < 8; i++) await flushLive();
+  assert.equal(h.requests.length, 1);
+  assert.match(String(h.requests[0].instructions), /cool and reserved/); assert.match(String(h.requests[0].instructions), /at most 25 words/);
+  assert.doesNotMatch(String(h.requests[0].instructions), /in a warm tone|at most 75 words/);
 });
 test('opening captions are visual-only and stop after an interruption without adding voice requests', async t => {
   const content = { ...sampleContent('general'), greetingPoints: [{ kind: 'custom' as const, text: 'Explore the neighborhood.' }, null, null] };
@@ -631,4 +645,20 @@ test('a cited single lookup delivers facts before display and skips the closing 
   assert.equal(searches, 1); assert.equal(h.requests.length, 1);
   assert.equal(h.socket.sent.filter(event => event.type === 'session.commentary.append' && event.content === result.answer).length, 1);
   assert.ok(h.events.some(event => event.type === 'backend_idle'));
+});
+
+test('recorder snapshot resolves the published value of a foreground fact rather than only its label', async t => {
+  const content = { ...sampleContent('general'), knowledgeRevisionId: semanticFixture.id };
+  const authority = publishedWorkspace(content, semanticFixture);
+  const record = authority.records.find(item => item.reference.kind === 'fact');
+  assert.ok(record);
+  const initial = emptyWorkspace(authority.publicationId);
+  const workspace = applyWorkspaceBatch(initial, workspaceBatch(initial, [{ kind: 'add', object: objectInput(record) }]), authority).state;
+  const h = await liveVisitorSetup([], { content, catalog: semanticFixture, context: { workspace } });
+  t.after(() => h.control.close());
+  const snapshot = h.control.recordingSnapshot();
+  const captured = snapshot.publishedRecords.find(item => item.reference.id === record.reference.id);
+  assert.ok(captured && 'value' in captured && captured.value);
+  assert.ok(captured.value.display, 'The displayed value must be available for comparison with spoken digits');
+  assert.equal(h.requests.length, 0, 'Inspection must not ask the model to explain itself');
 });

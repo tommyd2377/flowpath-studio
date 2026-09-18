@@ -2,8 +2,8 @@
   --opening-progress: 1;
   --wave-vertical-scale: calc(.6 + .4 * var(--opening-progress));
   --wave-height: calc(clamp(110px, 21svh, 220px) * var(--wave-vertical-scale));
-  --wave-top: calc(6px + env(safe-area-inset-top, 0px));
-  --dock-height: calc(var(--wave-height) + var(--wave-top) + 38px);
+  --wave-top: env(safe-area-inset-top, 0px);
+  --dock-height: calc(var(--wave-height) + var(--wave-top));
   position: relative; top: 0; z-index: 25; width: 100%; flex: none;
   height: calc(var(--dock-height) + var(--opening-progress) * (var(--site-viewport, 100svh) - var(--dock-height)));
   background: #101110;
@@ -15,6 +15,8 @@
 .conversation :global(.site-wave) { width: min(100%, 1060px); height: var(--wave-height); padding: 0; flex: none; border-radius: 18px; pointer-events: auto; }
 .copy { color: #b8b9ae; font: 400 14px/1.7 Arial, Helvetica, sans-serif; width: min(100%, 600px); text-align: center; margin-top: 4px; pointer-events: none; }
 .copy p { color: #b8b9ae; font: 400 14px/1.7 Arial, Helvetica, sans-serif; letter-spacing: .015em; margin: 0; }
+.stage[data-started=true] .copy { position: absolute; bottom: 4px; margin-top: 0; }
+.stage[data-started=true] .conversation { height: var(--wave-height); }
 .hint { color: #c5bba6; font: 400 13px/1.7 Arial, Helvetica, sans-serif; letter-spacing: .015em; text-align: center; margin: 12px 0 0; }
 .stage[data-started=true] .hint { pointer-events: none; }
 @media (max-width: 600px) {

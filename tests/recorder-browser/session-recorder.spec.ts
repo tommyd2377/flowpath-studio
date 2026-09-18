@@ -84,3 +84,41 @@ test('recording persistence failures leave the normal visitor controls usable', 
   await expect(page.locator('[data-ai-carousel]')).toContainText('9 matching items');
   await expect(page.locator('[data-ai-carousel]')).toHaveAttribute('aria-busy', 'false');
 });
+
+test('starting the recorder during voice requests attachment and reports success without reconnecting (mocked attachment)', async ({ page }) => {
+  await prepareCarouselVoice(page);
+  let attachments = 0;
+  await page.route('**/api/dev/recordings', route => {
+    if (route.request().postDataJSON().action !== 'attach-voice') return route.continue();
+    attachments++;
+    return route.fulfill({ json: { attached: true } });
+  });
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
+  const before = await page.evaluate(() => window.__visitorVoice.calls);
+  const id = await start(page);
+  await expect(recorder(page).getByText('Voice server capture attached:', { exact: false })).toBeVisible();
+  expect(attachments).toBe(1);
+  await page.evaluate(() => {
+    window.__visitorVoice.emit({ type: 'transcript', id: 'phone-question', role: 'user', text: 'Repeat the number', revision: 1 });
+    window.__visitorVoice.emit({ type: 'transcript', id: 'phone-answer', role: 'assistant', text: '212 555 0199', revision: 1 });
+  });
+  await recorder(page).getByRole('button', { name: 'Stop recording' }).click();
+  await expect(recorder(page).getByRole('button', { name: 'Record test session', exact: true })).toBeEnabled();
+  expect(await page.evaluate(() => window.__visitorVoice.calls)).toBe(before);
+  expect(await page.evaluate(() => window.__visitorVoice.tracks.every(track => !track.stopped))).toBe(true);
+  const events = (await (await api(page, { action: 'read', id })).json()).events;
+  expect(JSON.stringify(events)).toContain('Repeat the number');
+  expect(JSON.stringify(events)).toContain('212 555 0199');
+  expect(JSON.stringify(events)).not.toContain('a'.repeat(43));
+});
+
+test('an existing voice connection without a server observer shows incomplete capture', async ({ page }) => {
+  await prepareCarouselVoice(page);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
+  await start(page);
+  await expect(recorder(page).getByText('Incomplete capture:', { exact: false })).toBeVisible();
+  expect(await page.evaluate(() => window.__visitorVoice.calls)).toBe(1);
+  await recorder(page).getByRole('button', { name: 'Stop recording' }).click();
+});

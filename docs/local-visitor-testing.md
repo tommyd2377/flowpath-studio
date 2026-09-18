@@ -10,9 +10,12 @@ requests, and does not issue additional model calls.
 
 1. Run the usual local Studio server and open a published visitor page.
 2. Open **Local test recorder** near the developer diagnostics, then click
-   **Record test session**. Start voice afterwards. If a call was already open,
-   reconnect it yourself so the recorder can capture its server-side context;
-   the recorder never reconnects or interrupts a call for you.
+   **Record test session** before or during voice. For an existing connection,
+   wait for **Voice server capture attached** before reproducing the problem.
+   Attachment does not reconnect or interrupt audio and makes no model calls.
+   Earlier unrecorded speech is unavailable. An explicit incomplete-capture
+   warning appears if attachment fails (including connections started before
+   this recorder update or on a different development worker).
 3. Test normally with voice, chat and clicks. When something goes wrong, click
    **Mark a problem**. Optionally enter a note first. You can also note your local
    clock time and continue testing.
@@ -33,6 +36,7 @@ before reloading to ensure the final browser buffer is saved.
 
 | Evidence | What it can establish |
 | --- | --- |
+| `voice.capture_attached`, `voice.config_snapshot`, `voice.context_snapshot`, `screen.published` | Attachment boundary, original session configuration and current application context with referenced published record values; snapshots are not reconstructed prior model inputs |
 | `voice.config`, `voice.sent`, `voice.received` | Actual voice configuration and sideband messages, including supplied context, transcript events, delegations, commentary and interruption events |
 | `model.request`, `model.transport`, `model.response` | Bounded copies of actual backend inputs/tools/settings and output, with the WebSocket cache reference/delta when used |
 | `tool.request/result`, `action.request/result/failed` | Requested actions, arguments, validated results, failures and timings; direct navigation is captured as well as delegated work |
@@ -86,8 +90,10 @@ event includes Node version and hashes of the relevant source files at that time
   test content and review exports before sharing them.
 - A crash/reload can lose buffered events. A recording without a stop marker is
   shown as incomplete after server restart. Starting recording during an existing
-  voice session cannot retroactively attach its server observer; reconnect to
-  capture that connection. Model capture does not include unrequested private
+  voice session attaches its server observer going forward. It cannot recover
+  earlier speech or model events. The capability-scoped local registry is
+  removed when the session ends; it never writes tokens or recording IDs to
+  Firebase. Attachment failure is shown rather than silently reporting success. Model capture does not include unrequested private
   publisher data or hidden state outside the supplied API context.
 
 ## Implementation map
@@ -169,3 +175,15 @@ production telemetry dashboard are not enabled by this implementation.
 - No paid provider calls, real microphone/speaker testing or deployment. The
   normal Studio development server was restarted on port 3220 and its unsigned
   root request correctly redirected to sign-in.
+
+## Active-session capture verification
+
+- Recording can attach to a running local voice connection using that connection's existing capability, without restarting it or issuing a provider request.
+- Attachment snapshots include current approved fact values, separately labeled
+  from actual subsequent model inputs and outputs. No missing historical speech
+  is reconstructed. The timeline warns about older recordings with no server attachment.
+- `lib/visitor-test-live.ts` owns the development-only capability-scoped registry;
+  `visitor-realtime-session.ts` owns registration, observer switching and cleanup.
+- Verified with 95 offline server/recorder/control tests and six isolated recorder
+  browser cases, including mocked active-voice attachment and attachment failure.
+  These checks do not establish live spoken-phone-number accuracy.

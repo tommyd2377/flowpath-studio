@@ -4,6 +4,7 @@ import type { VisitorControlUpdate } from '../lib/visitor-realtime-context';
 import { sampleContent } from '../lib/site-model';
 import { DEFAULT_VISITOR_SETTINGS, type VisitorAvailability } from '../lib/visitor-model';
 import { validateVisitorOffer, visitorRealtimeSession, type VisitorSessionOptions } from '../lib/visitor-realtime-session';
+import { LIVE_VOICE_CHOICES, CONVERSATION_PRESETS } from '../lib/voice-settings';
 
 const offer = 'v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendrecv\r\n';
 const availability: VisitorAvailability = { enabled: true, mode: 'voice', live: true, chatRemaining: 25, voiceRemaining: 4, resetsAt: '2026-09-10T00:00:00.000Z' };
@@ -80,6 +81,28 @@ test('session streams only public setup, and cancelling the body closes and hang
   h.controller.abort(); await flush();
   assert.equal(h.calls.filter(url => url.endsWith('/hangup')).length, 1);
   assert.deepEqual(h.metrics(), { blocked: 0, released: 1, stopped: 1 });
+});
+
+test('mocked Live session creation uses the selected built-in voice, personality and shorter session limit', async () => {
+  for (const voice of Object.keys(LIVE_VOICE_CHOICES) as (keyof typeof LIVE_VOICE_CHOICES)[]) {
+    const h = harness({ content: { ...sampleContent('general'), visitor: { ...DEFAULT_VISITOR_SETTINGS, voiceSessionSeconds: 30, conversation: { voice, language: 'es', ...CONVERSATION_PRESETS.quiet.settings } } } });
+    const original = h.options.fetch!;
+    h.options.fetch = async (url, init) => {
+      if (!String(url).endsWith('/hangup')) {
+        const { session } = JSON.parse(String(init?.body));
+        assert.deepEqual(session.audio, { output: { voice } }); assert.equal(session.model, 'gpt-live-1');
+        assert.match(session.instructions, /Listen quietly/); assert.match(session.instructions, /Use Spanish/);
+        assert.match(session.instructions, /cool and reserved/); assert.match(session.instructions, /at most 25 words/);
+        assert.equal(session.store, false); assert.deepEqual(session.delegation, { type: 'client' });
+        assert.equal('temperature' in session, false); assert.equal('speed' in session.audio.output, false);
+      }
+      return original(url, init);
+    };
+    const before = Date.now(), response = visitorRealtimeSession(h.options), reader = response.body!.getReader();
+    const event = JSON.parse(new TextDecoder().decode((await reader.read()).value));
+    assert.ok(event.expiresAt >= before + 30_000 && event.expiresAt <= Date.now() + 30_000);
+    await reader.cancel(); h.controller.abort(); await flush();
+  }
 });
 
 test('restarting does not resubmit an unfinished question as fresh voice input', async () => {
@@ -256,4 +279,28 @@ test('audio SDP is delivered while sideband connects, but ready waits for sideba
     assert.equal(JSON.parse(new TextDecoder().decode((await second).value)).type, 'ready');
     assert.equal(starts, 0, 'Browser readiness still gates greeting and microphone');
   } finally { release(); await reader.cancel(); }
+});
+
+test('recording attaches to an already-running session without provider calls or reconnection', async t => {
+  const { createLiveTestRegistry } = await import('../lib/visitor-test-live');
+  const registry = createLiveTestRegistry();
+  const events: import('../lib/visitor-test-events').TestObservation[] = [];
+  const h = harness({ testRegistry: registry });
+  const response = visitorRealtimeSession(h.options);
+  t.after(() => { h.controller.abort(); return response.body!.cancel(); });
+  await flush(); await flush();
+  const capability = { id: '00000000-0000-4000-8000-000000000001', token: 'x'.repeat(43) };
+  h.control.record?.({ type: 'voice.received', data: { delta: 'Before recording' } });
+  const beforeCalls = [...h.calls];
+  assert.equal(registry.attach('other-site', capability, event => events.push(event)), false);
+  assert.equal(registry.attach('synthetic', { ...capability, token: 'y'.repeat(43) }, event => events.push(event)), false);
+  assert.equal(registry.attach('synthetic', capability, event => events.push(event)), true);
+  h.control.record?.({ type: 'voice.received', data: { type: 'session.output_transcript.delta', delta: 'Call 212 555 0199' } });
+  assert.ok(events.some(event => event.type === 'voice.config_snapshot'));
+  assert.ok(events.some(event => event.type === 'voice.capture_attached'));
+  assert.match(JSON.stringify(events), /Call 212 555 0199/);
+  assert.doesNotMatch(JSON.stringify(events), /Before recording|offline-placeholder/);
+  assert.deepEqual(h.calls, beforeCalls);
+  h.controller.abort(); await flush();
+  assert.equal(registry.attach('synthetic', capability, () => {}), false);
 });

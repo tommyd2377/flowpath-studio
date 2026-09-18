@@ -7,6 +7,7 @@ import { demoWebsiteQuery } from './visitor-demo-query';
 import { visitorTaskContext } from './visitor-task-context';
 import { createHash, randomUUID } from 'node:crypto';
 import { runVisitorTask } from './visitor-task-runner';
+import { conversationWordLimit } from './voice-settings';
 import { createVisitorTaskBridge, requiresWebsiteQuery } from './visitor-task-bridge';
 import { createVisitorRealtimeMailbox } from './visitor-realtime-mailbox';
 import { validateVisitorContext, type VisitorContext } from './visitor-realtime-context';
@@ -84,7 +85,7 @@ export function visitorChatTask(options: { record?: TestRecorder; preview?: bool
           : [{ type: 'message', content: [{ type: 'output_text', text: session.clarification?.question ?? 'The website is ready. You can refine these filters or open an item.' }] }];
         return Response.json({ status: 'completed', output });
       };
-      const result = await runVisitorTask({ record, fetch: options.preview ? previewFetch : undefined, model: 'gpt-5.6-luna', channel: 'chat', apiKey: options.preview ? 'offline-preview' : process.env.OPENAI_API_KEY?.trim() ?? '', signal,
+      const result = await runVisitorTask({ record, fetch: options.preview ? previewFetch : undefined, model: 'gpt-5.6-luna', channel: 'chat', responseWordLimit: conversationWordLimit(options.content, 'chat'), apiKey: options.preview ? 'offline-preview' : process.env.OPENAI_API_KEY?.trim() ?? '', signal,
         activeImage: options.preview ? undefined : () => activeCarouselImage(options.slug, context, options.media, signal, options.request.text, options.request.requestId),
         onAnswer: (text, round) => { if (!signal.aborted) emit({ type: 'answer', requestId: options.request.requestId, round, text, provisional: true }); },
         instructions: async () => `${taskBridge ? await taskBridge.instructions(context.carousel) : ''}\n${assistantPurposeInstructions(options.content)}\n${carouselInstructions(context, publishedWorkspace(options.content, options.catalog, options.media))}\n${workspaceInstructions(context.workspace!, publishedWorkspace(options.content, options.catalog, options.media, context.externalResults), context.scene, options.request.text, options.catalog, options.media, 'tool')}`,

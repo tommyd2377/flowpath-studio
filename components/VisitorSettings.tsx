@@ -15,17 +15,18 @@ export default function VisitorSettings({ content, setContent, busy }: {
       <span className="field-help">For example: Help visitors explore this travel guide, compare destinations, and open the places and photos they ask about. Applies to chat and voice after publishing; it does not add facts or enable services.</span>
     </label>
     <label className="field">How visitors interact
-      <select disabled={busy} value={settings.mode} onChange={event => {
+      <select disabled={busy} value={settings.enabled ? settings.mode : 'off'} onChange={event => {
         const mode = event.target.value;
+        if (mode === 'off') change({ enabled: false });
         if (mode === 'chat' || mode === 'voice' || mode === 'both') change({ enabled: true, mode });
       }}>
-        <option value="voice">Voice only</option><option value="chat">Chat only</option><option value="both">Chat and voice</option>
+        <option value="voice">Voice with chat fallback</option><option value="chat">Chat only</option><option value="both">Chat and voice</option><option value="off">Off — website only</option>
       </select>
-      <span className="field-help">Voice only is the default. Save and publish to update your site. In voice-only mode, visitors see chat after the voice limit is reached. Chat and voice lets them switch from the start.</span>
+      <span className="field-help">Voice starts with spoken conversation and keeps chat available as a fallback. Chat and voice offers both from the start. Off leaves your normal website available. Save and publish to update your site.</span>
     </label>
     {settings.enabled && <>
       {settings.mode !== 'chat' && <>
-        <p className="field-help">Every site uses GPT-Live for natural, continuous voice conversations.</p>
+        <label className="field">Maximum voice session<select disabled={busy} value={settings.voiceSessionSeconds ?? 120} onChange={event => change({ voiceSessionSeconds: Number(event.target.value) as Settings['voiceSessionSeconds'] })}><option value={30}>30 seconds</option><option value={60}>1 minute</option><option value={120}>2 minutes</option></select><span className="field-help">Shorten the existing two-minute platform limit to manage usage. Visitors can start another session within the daily allowance.</span></label>
         <label className="field">End voice after inactivity<select disabled={busy} value={settings.voiceIdleTimeoutSeconds} onChange={event => change({ voiceIdleTimeoutSeconds: Number(event.target.value) as Settings['voiceIdleTimeoutSeconds'] })}>
           <option value={30}>30 seconds</option><option value={60}>1 minute</option><option value={120}>2 minutes</option><option value={0}>Never</option>
         </select>

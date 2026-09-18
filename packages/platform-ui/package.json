@@ -5,6 +5,7 @@
   "files": ["dist"],
   "sideEffects": ["**/*.css", "./dist/openui-compat.js"],
   "exports": {
+    "./voice-design": { "types": "./dist/voice-design.d.ts", "import": "./dist/voice-design.js" },
     "./site-design": { "types": "./dist/site-design.d.ts", "import": "./dist/site-design.js" },
     "./carousel": { "types": "./dist/carousel.d.ts", "import": "./dist/carousel.js" },
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },

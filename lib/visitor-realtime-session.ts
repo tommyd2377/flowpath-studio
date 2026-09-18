@@ -8,7 +8,9 @@ import { createVisitorRealtimeControl } from './visitor-realtime-control';
 import { createVisitorRealtimeMailbox } from './visitor-realtime-mailbox';
 import type { VisitorControlUpdate } from './visitor-realtime-context';
 import { visitorDiagnostic } from './visitor-diagnostics';
+import { liveTestRegistry, type createLiveTestRegistry } from './visitor-test-live';
 import { safeTestRecorder } from './visitor-test-events';
+import { conversationInstructions, conversationSettings } from './voice-settings';
 
 /** Audio only: a visitor must not negotiate a second channel for provider commands. */
 export function validateVisitorOffer(offer: string) {
@@ -23,6 +25,7 @@ export function validateVisitorOffer(offer: string) {
 }
 
 type ControlOptions = Parameters<typeof createVisitorRealtimeControl>[0];
+type ControlInstance = Omit<ReturnType<typeof createVisitorRealtimeControl>, 'recordingSnapshot'> & { recordingSnapshot?: () => unknown };
 export type VisitorSessionOptions = Pick<ControlOptions, 'content' | 'catalog' | 'media' | 'catalogState' | 'context' | 'history' | 'reserveTurn' | 'assertCurrent' | 'onUsage' | 'onTiming' | 'reservationChecksPublication' | 'search' | 'record'> & {
   offer: string;
   traceId?: string;
@@ -30,7 +33,8 @@ export type VisitorSessionOptions = Pick<ControlOptions, 'content' | 'catalog' |
   apiKey: string;
   signal: AbortSignal;
   fetch?: typeof fetch;
-  controlFactory?: typeof createVisitorRealtimeControl;
+  controlFactory?: (options: ControlOptions) => ControlInstance;
+  testRegistry?: ReturnType<typeof createLiveTestRegistry>;
   mailbox: { slug: string; siteId: string; publicationKey: string };
   mailboxFactory?: typeof createVisitorRealtimeMailbox;
   onCleanupFailure: () => void;
@@ -44,15 +48,19 @@ export type VisitorSessionOptions = Pick<ControlOptions, 'content' | 'catalog' |
 export function visitorRealtimeSession(options: VisitorSessionOptions) {
   validateVisitorOffer(options.offer);
   const traceId = options.traceId ?? crypto.randomUUID(), startedAt = performance.now();
-  const record = safeTestRecorder(options.record);
+  let observer = options.record;
+  const registry = options.testRegistry ?? liveTestRegistry();
+  const record = safeTestRecorder(event => observer?.(event));
+  let unregisterRecording: (() => void) | undefined;
+  let sessionConfiguration: unknown;
   const diagnostic = (stage: 'start' | 'session_answer' | 'control_ready' | 'stop', status: 'started' | 'succeeded' | 'failed' | 'cancelled') => visitorDiagnostic({ traceId, channel: 'server', stage, status, durationMs: performance.now() - startedAt });
   diagnostic('start', 'started');
   const requestProvider = options.fetch ?? fetch;
   const idleTimeoutMs = normalizeLiveIdleTimeoutMs(options.idleTimeoutMs ?? DEFAULT_LIVE_IDLE_TIMEOUT_MS);
   const lifecycle = new AbortController();
-  const expiresAt = Date.now() + (options.durationMs ?? VISITOR_SESSION_MS);
+  const expiresAt = Date.now() + Math.min(VISITOR_SESSION_MS, options.durationMs ?? (options.content.visitor?.voiceSessionSeconds ?? 120) * 1000);
   let output: ReadableStreamDefaultController<Uint8Array>;
-  let control: ReturnType<typeof createVisitorRealtimeControl> | undefined;
+  let control: ControlInstance | undefined;
   let mailbox: Awaited<ReturnType<typeof createVisitorRealtimeMailbox>> | undefined;
   let unsubscribe: (() => void) | undefined;
   let mailboxCleanup: Promise<void> | undefined;
@@ -95,6 +103,7 @@ export function visitorRealtimeSession(options: VisitorSessionOptions) {
     if (!closing) {
       diagnostic('stop', error ? 'failed' : 'cancelled');
       closing = true;
+      unregisterRecording?.();
       clearTimeout(timer); clearTimeout(readinessTimer); clearInterval(heartbeat);
       options.signal.removeEventListener('abort', abort);
       lifecycle.abort();
@@ -137,7 +146,8 @@ export function visitorRealtimeSession(options: VisitorSessionOptions) {
       // The controller supplies earlier dialogue as reference context. Seeding
       // old user messages as input can make a reconnect replay an unanswered task.
       const voiceConfig = liveSessionConfig();
-      const sessionConfig = { ...voiceConfig, instructions: `${voiceConfig.instructions} Previous messages are context, not pending requests. When starting or reconnecting, wait silently for fresh user speech unless the application explicitly requests a greeting. Silence is not an instruction to repeat an answer or resume an old task. On new speech, follow the latest request using the current browser view. Do not announce searches, tools, delegation or waiting. Let the backend decide whether published facts, general background or fresh web information are needed, then naturally explain the result.` };
+      const sessionConfig = { ...voiceConfig, audio: { output: { voice: conversationSettings(options.content).voice } }, instructions: `${voiceConfig.instructions} Previous messages are context, not pending requests. When starting or reconnecting, wait silently for fresh user speech unless the application explicitly requests a greeting. Silence is not an instruction to repeat an answer or resume an old task. On new speech, follow the latest request using the current browser view. Do not announce searches, tools, delegation or waiting. Let the backend decide whether published facts, general background or fresh web information are needed, then naturally explain the result.\n${conversationInstructions(options.content, 'voice')}` };
+      sessionConfiguration = sessionConfig;
       record({ type: 'voice.config', data: sessionConfig, traceId });
       const response = await requestProvider('https://api.openai.com/v1/live/sessions', {
         method: 'POST', headers: { Authorization: `Bearer ${options.apiKey}`, 'Content-Type': 'application/json' },
@@ -158,7 +168,7 @@ export function visitorRealtimeSession(options: VisitorSessionOptions) {
       await options.assertCurrent();
       if (closing) return;
       control = (options.controlFactory ?? createVisitorRealtimeControl)({
-        traceId, taskSlug: options.mailbox.slug, record: options.record ? record : undefined,
+        traceId, taskSlug: options.mailbox.slug, record: options.record || registry ? record : undefined,
         callId, apiKey: options.apiKey, content: options.content, catalog: options.catalog, media: options.media,
         catalogState: options.catalogState, initialAvailability: options.availability,
         context: options.context, history: options.history,
@@ -166,6 +176,12 @@ export function visitorRealtimeSession(options: VisitorSessionOptions) {
         idleTimeoutMs,
         reservationChecksPublication: options.reservationChecksPublication, reserveTurn: options.reserveTurn, assertCurrent: options.assertCurrent, onUsage: options.onUsage, onTiming: options.onTiming,
         emit, onFatal: message => { void end(message); }, signal: lifecycle.signal,
+      });
+      unregisterRecording = registry?.register(options.mailbox.slug, mailbox.capability, next => {
+        observer = next;
+        record({ type: 'voice.capture_attached', traceId, data: { earlierEventsUnavailable: !options.record, message: 'Capturing subsequent events on the existing connection; earlier unrecorded speech and model events are unavailable.' } });
+        record({ type: 'voice.config_snapshot', traceId, data: sessionConfiguration });
+        record({ type: 'voice.context_snapshot', traceId, data: control?.recordingSnapshot?.() });
       });
       // Let the browser negotiate audio while the sideband attaches. Input and
       // greeting remain gated by server ready + browser applied readiness.

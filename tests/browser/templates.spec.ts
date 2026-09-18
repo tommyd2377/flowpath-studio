@@ -93,7 +93,9 @@ test('Branding saves independent options, reset preserves content, and drafts re
   await page.getByRole('button', { name: 'Sage', exact: true }).click();
   await page.getByRole('combobox', { name: 'Text size', exact: true }).selectOption('larger');
   await page.getByRole('combobox', { name: 'Spacing', exact: true }).selectOption('compact');
+  await page.getByRole('navigation', { name: 'Workspace', exact: true }).getByRole('button', { name: 'The Voice', exact: true }).click();
   await page.getByRole('combobox', { name: 'Website / assistant preference' }).selectOption('assistant');
+  await page.getByRole('navigation', { name: 'Workspace', exact: true }).getByRole('button', { name: 'Branding', exact: true }).click();
   await page.getByLabel('Use a custom accent color').check(); await page.getByLabel('Brand color', { exact: true }).fill('#ffff00');
   await page.getByRole('region', { name: 'Site editor' }).getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Site editor' }).getByRole('button', { name: 'Save draft', exact: true })).toBeDisabled();

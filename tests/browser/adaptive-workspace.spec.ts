@@ -265,7 +265,7 @@ test('publisher presets and three greeting slots work in a narrow Studio preview
     await page.screenshot({ path: info.outputPath(`studio-${layout}-${palette}.png`) });
     await focus(page).getByRole('button', { name: 'Back to workspace' }).click(); await expect(focus(page)).toHaveCount(0);
   }
-  await navigation.getByRole('button', { name: 'Content', exact: true }).click();
+  await navigation.getByRole('button', { name: 'The Voice', exact: true }).click();
   const welcome = page.getByRole('region', { name: 'Voice welcome', exact: true });
   await welcome.getByRole('combobox', { name: 'Greeting point 1', exact: true }).selectOption('fact:address');
   await welcome.getByRole('combobox', { name: 'Greeting point 2', exact: true }).selectOption('fact:email');

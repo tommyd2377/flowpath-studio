@@ -68,7 +68,7 @@ test('disabled capability stays hidden until saved and published through Studio'
   await page.goto(`/s/${site.slug}`); await expect(page.getByRole('region', { name: 'Search results', exact: true })).toHaveCount(0);
   await page.goto('/');
   await page.getByRole('combobox', { name: 'Current site', exact: true }).selectOption(site.id);
-  await page.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name: 'Content', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name: 'The Voice', exact: true }).click();
   const settings = page.getByRole('region', { name: 'Search and explore settings' });
   await settings.getByRole('checkbox', { name: 'Allow visitors to search beyond this site' }).check();
   await settings.getByRole('textbox', { name: 'Search websites' }).fill('nps.gov, wikipedia.org');

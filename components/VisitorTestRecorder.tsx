@@ -14,7 +14,8 @@ export default function VisitorTestRecorder() {
     <details>
       <summary>{state.active ? '● Recording test session' : 'Local test recorder'}</summary>
       <p>Opt-in local transcripts, model inputs, actions and screen state. No audio or hidden reasoning. Old recordings are cleaned up when you next use the recorder.</p>
-      <p>Start recording before starting voice. Reconnect an existing voice call to capture its server context.</p>
+      <p>Recording attaches to an existing voice connection without restarting it. Earlier unrecorded speech cannot be recovered.</p>
+      {state.active && <p role="status">{state.voiceCapture === 'attached' ? 'Voice server capture attached: subsequent transcript events, model activity and context are recorded.' : state.voiceCapture === 'attaching' ? 'Attaching voice server capture…' : state.voiceCapture === 'unavailable' ? 'Incomplete capture: the active voice server could not attach. Start a new voice connection while recording; earlier speech is unavailable.' : 'Browser capture active. Voice server capture will attach when you start voice.'}</p>}
       <button disabled={state.busy} onClick={() => void (state.active ? stopTestRecording() : startTestRecording())}>{state.active ? 'Stop recording' : 'Record test session'}</button>
       {state.active && <label>Problem note (optional)<input value={note} maxLength={1000} onChange={event => setNote(event.target.value)}/></label>}
       {state.dropped > 0 && <p role="status">{state.dropped} browser events dropped. The recording is incomplete.</p>}
