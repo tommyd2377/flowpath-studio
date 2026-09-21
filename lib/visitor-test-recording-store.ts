@@ -81,7 +81,7 @@ export function createTestRecordingStore(directory: string, limits = recordingLi
     if ((await stat(path(id))).size > limits.bytes + 2048) throw new Error('Recording exceeds the read limit.');
     const lines = (await readFile(path(id), 'utf8')).split('\n').filter(Boolean);
     const events: TestEvent[] = [];
-    for (const line of lines) { try { events.push(JSON.parse(line)); } catch { /* A crash may leave a partial final line. */ } }
+    for (const line of lines) { try { const event = JSON.parse(line) as TestEvent; events.push({ ...event, ...sanitizeTestObservation(event) }); } catch { /* A crash may leave a partial final line. */ } }
     return events;
   }
   return {
@@ -100,7 +100,7 @@ export function createTestRecordingStore(directory: string, limits = recordingLi
     }),
     observer(id: string, traceId?: string): TestRecorder {
       const state = sessions.get(id);
-      return safeTestRecorder(state?.active ? event => enqueue(state, 'server', { ...event, traceId: event.traceId ?? traceId }) : undefined);
+      return safeTestRecorder(state?.active ? event => enqueue(state, 'server', { ...event, traceId: event.traceId ?? traceId }) : undefined, () => id);
     },
     append(id: string, events: TestEvent[], dropped = 0) {
       const state = sessions.get(id); if (!state?.active) throw new Error('Recording is no longer active.');
@@ -140,7 +140,9 @@ export function testRecordingStore() { return globals.visitorTestRecordings ??= 
 export function requestTestRecorder(request: Request, traceId?: string): TestRecorder | undefined {
   if (!localRecordingRequest(request)) return undefined;
   const id = request.headers.get(RECORDING_HEADER) ?? '', store = testRecordingStore();
-  return store.active(id) ? store.observer(id, traceId) : undefined;
+  // A global store can survive HMR with an older observer implementation.
+  // Attach validated request scope here as well, rather than relying on its age.
+  return store.active(id) ? safeTestRecorder(store.observer(id, traceId), () => id) : undefined;
 }
 export async function recordingBuildMetadata() {
   // Also eliminate development source-file tracing from production bundles.

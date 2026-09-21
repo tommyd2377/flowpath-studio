@@ -4,6 +4,7 @@ import { readJson } from '@/lib/http';
 import { assertSameOrigin } from '@/lib/firebase/session';
 import { slugSchema } from '@/lib/site-store';
 import { exploreRequestSchema } from '@/lib/explore-model';
+import { requestTestRecorder } from '@/lib/visitor-test-recording-store';
 import { authorizedExplore } from '@/lib/explore-service';
 
 export const runtime = 'nodejs';
@@ -19,7 +20,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
     const slug = slugSchema.parse((await params).slug);
     const input = exploreRequestSchema.parse(await readJson(request));
     if (request.signal.aborted) throw new AppError('Search cancelled.', 499);
-    return Response.json(await authorizedExplore(slug, input, request.signal), { headers: { 'Cache-Control': 'no-store' } });
+    return Response.json(await authorizedExplore(slug, input, request.signal, undefined, requestTestRecorder(request, input.requestId)), { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     return Response.json({ error: error instanceof AppError ? error.message : error instanceof ZodError ? 'Check your search request.' : 'Search is temporarily unavailable. Your current view is unchanged.' },
       { status: error instanceof AppError ? error.status : error instanceof ZodError ? 400 : 502, headers: { 'Cache-Control': 'no-store' } });

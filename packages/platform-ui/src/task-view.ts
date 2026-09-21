@@ -45,3 +45,12 @@ export const visitorTaskViewSchema: z.ZodType<VisitorTaskView> = z.object({
   artifactSummaries: z.array(z.object({ id: z.string(), title: z.string().max(160), saved: z.boolean() }).strict()).max(12).optional(),
   detail: z.object({ nextBlockOffset: z.number().int().nullable().optional(), nextFieldOffset: z.number().int().nullable().optional(), blockOffset: z.number().int().optional(), fieldOffset: z.number().int().optional(), record: canonicalRecordSchema, values: z.array(valueSchema).max(64) }).strict().optional(), artifacts: z.array(z.unknown()).max(12), business: z.record(z.string(), z.unknown()),
 }).strict();
+
+/** Record visibility is scoped to the current task presentation, not adjacent regions. */
+export function displayedTaskRecordIds(view: VisitorTaskView): string[] {
+  if (!view.active || view.focus === 'clarification') return [];
+  if (view.focus === 'detail') return view.detail ? [view.detail.record.id] : [];
+  if (view.focus === 'comparison') return view.comparison?.rows.map(row => row.id) ?? [];
+  if (view.focus === 'records') return view.lookupRecords?.map(record => record.id) ?? [];
+  return view.records.map(record => record.id);
+}

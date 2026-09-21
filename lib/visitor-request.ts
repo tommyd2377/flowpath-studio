@@ -4,9 +4,12 @@ import { catalogFilterSchema, presentationPlanSchema } from '@thevoice/platform-
 import { presentationSchema } from './site-presentation';
 import { exploreContextSchema } from './explore-model';
 import { workspaceStateSchema, workspaceSceneSchema } from '@thevoice/platform-ui/workspace';
+import { informationSurfaceContextSchema } from '@thevoice/platform-ui/surface';
 import { carouselContextSchema } from '@thevoice/platform-ui/carousel';
+import { MAX_VISITOR_HISTORY_MESSAGES, MAX_VISITOR_MESSAGE_CHARACTERS, MAX_VISITOR_HISTORY_BYTES, visitorHistoryBytes } from './visitor-conversation-bounds';
 
-export const visitorHistorySchema = z.array(z.object({ role: z.enum(['user', 'assistant']), text: z.string().trim().min(1).max(2000) }).strict()).max(8).default([]);
+export const visitorHistorySchema = z.array(z.object({ role: z.enum(['user', 'assistant']), text: z.string().trim().min(1).max(MAX_VISITOR_MESSAGE_CHARACTERS) }).strict())
+  .max(MAX_VISITOR_HISTORY_MESSAGES).refine(history => visitorHistoryBytes(history) <= MAX_VISITOR_HISTORY_BYTES, 'Conversation history is too large.').default([]);
 export type VisitorHistory = z.infer<typeof visitorHistorySchema>;
 export const visitorCatalogStateSchema = z.object({ snapshotId: z.string().max(100), filters: z.array(catalogFilterSchema).max(24),
   selectedIds: z.array(z.string().max(100)).max(6), focusedId: z.string().max(100).nullable(),
@@ -25,6 +28,7 @@ export const visitorScreenSchema = z.object({
   focusedEntityId: z.string().min(1).max(100).nullable(), focusedSourceId: z.string().min(1).max(100).nullable(),
 }).strict();
 export const visitorContextSchema = z.object({
+  surface: informationSurfaceContextSchema.optional(),
   carousel: carouselContextSchema.optional(),
   taskSession: z.object({ sessionId: z.string().uuid(), revision: z.number().int().nonnegative(), generation: z.number().int().nonnegative() }).strict().optional(),
   workspace: workspaceStateSchema.optional(), scene: workspaceSceneSchema.optional(), externalResults: z.array(exploreContextSchema).max(6).optional(),

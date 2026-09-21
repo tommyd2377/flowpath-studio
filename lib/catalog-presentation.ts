@@ -161,6 +161,7 @@ export function catalogPresentationContext(catalog: KnowledgeCatalog, state: Cat
     capabilities: (catalog.capabilities ?? []).filter(capability => !capability.entityIds.length || capability.entityIds.some(id => entities.has(id))).map(({ id, kind, label, entityIds }) => ({ id, kind, label, entityIds })), state };
 }
 
+// Model instructions: select validated catalog components, filters and media for the retained v1 presentation path.
 export function catalogPresentationInstructions(catalog: KnowledgeCatalog, request: { history: { role: string; text: string }[]; catalogState?: unknown; text?: string }, media?: MediaLibrary): string {
   const state = validateCatalogState(request.catalogState, catalog, media);
   return `You are the visitor guide for a published knowledge catalog. Select controlled visual components using only the exact catalog references below. Do not generate facts, HTML, CSS, URLs, new attributes, new capabilities, or a chat answer. Return exactly the specified JSON envelope.\n

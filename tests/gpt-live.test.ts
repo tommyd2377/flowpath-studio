@@ -28,6 +28,23 @@ function harness(delegate: Parameters<typeof createLiveRuntime>[0]['delegate'], 
 function transcript(socket: Socket, delta: string, start_ms = 0) { socket.frame({ type: 'session.input_transcript.delta', delta, start_ms, end_ms: start_ms + 100 }); }
 function delegate(socket: Socket, id = 'item_task') { socket.frame({ type: 'session.delegation.created', offset_ms: 500, delegation: { id, target: 'client', type: 'delegation' } }); }
 
+test('resuming waits for fresh speech, including speech received during readiness', async () => {
+  for (const earlySpeech of [false, true]) {
+    const socket = new Socket(); let calls = 0;
+    const live = createLiveRuntime({ sessionId: 'live_test', apiKey: 'synthetic', closeTimeoutMs: 10, history: [{ role: 'user', text: 'An earlier unfinished request' }], socketFactory: () => socket as unknown as LiveSocket, onFatal: assert.fail, delegate: async () => { calls++; return { text: 'New answer' }; } });
+    socket.open();
+    if (earlySpeech) transcript(socket, 'Show the current photos');
+    delegate(socket, 'early');
+    live.start('listen'); await flush();
+    assert.equal(calls, earlySpeech ? 1 : 0);
+    const instructions = socket.sent.filter(event => event.type === 'session.instructions.append').map(event => event.content).join('');
+    assert.match(instructions, /Wait silently for fresh user speech/);
+    assert.doesNotMatch(instructions, /Listen and respond to the caller now/);
+    if (!earlySpeech) { transcript(socket, 'Show the current photos'); delegate(socket, 'new'); await flush(); assert.equal(calls, 1); }
+    await live.close();
+  }
+});
+
 test('Live configuration uses one voice model and client delegation without Realtime fields', () => {
   const config = liveSessionConfig([{ role: 'assistant', text: 'Earlier context' }]);
   assert.equal(config.model, 'gpt-live-1'); assert.equal(config.store, false); assert.deepEqual(config.delegation, { type: 'client' });

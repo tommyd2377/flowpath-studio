@@ -16,9 +16,9 @@ export const templateFixtures: { id: string; content: SiteContent; catalog: Know
   },
   {
     id: 'services', content: { name: 'Mara Ellis', tagline: 'Independent design & direction', headline: 'Thoughtful design. Lasting character.', description: 'I help small teams bring clarity to their ideas through identity, digital design and considered communication.', hours: '', contact: 'studio@mara.example', logoAssetId: null, accent: '#315e4a', sections: [{ id: 'approach', title: 'Good work begins with listening.', body: 'Every project starts with a conversation about the people it serves. Together, we define what matters and build from there, with a clear process and space to explore.' }] },
-    catalog: { schemaVersion: 1, id: 'fixture-services', name: 'Mara Ellis', description: '', attributes: [],
+    catalog: { schemaVersion: 1, id: 'fixture-services', name: 'Mara Ellis', description: '', attributes: [{ id: 'price', label: 'Price', type: 'text' }],
       entities: [
-        { id: 'identity', kind: 'service', name: 'Identity & art direction', summary: 'A clear visual language, from the first concept to a practical set of brand guidelines.', attributes: {} },
+        { id: 'identity', kind: 'service', name: 'Identity & art direction', summary: 'A clear visual language, from the first concept to a practical set of brand guidelines.', attributes: { price: 'From $1,200 · scope agreed after an initial conversation' } },
         { id: 'digital', kind: 'service', name: 'Digital experiences', summary: 'Useful, expressive websites shaped around the people who use them.', attributes: {} },
         { id: 'field-notes', kind: 'project', name: 'Field Notes — an independent journal of place, culture and everyday life', summary: 'A synthetic editorial design study exploring rhythm, image and generous reading space.', attributes: {}, blocks: [{ id: 'detail', kind: 'paragraph', text: 'A flexible visual system allows essays, interviews and illustrated features to sit comfortably together. Each format shares a typographic foundation while retaining its own pace.' }] },
       ], collections: [{ id: 'services', name: 'Ways we can work together', entityIds: ['identity', 'digital'] }, { id: 'projects', name: 'Selected work', entityIds: ['field-notes'] }], relationships: [], jobs: [], capabilities: [] },

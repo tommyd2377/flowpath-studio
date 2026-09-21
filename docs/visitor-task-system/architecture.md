@@ -16,6 +16,18 @@ Filtering is central: “outdoors, at least 50 people, under $3,000” becomes p
 
 Simple navigation remains a direct semantic command when the target is unambiguous. Compound requests must reach the task system intact; a phrase detector must never consume the first verb and discard the rest.
 
+The local `query.command` shortcut is not exposed as a model tool. It compiles
+recognized simple commands into typed capabilities; compound requests, requested
+display attributes, and explicit external image/web/map searches defer intact to
+the assistant. Models use `query.patch`, separating selection criteria from the
+fields or explanations the visitor wants displayed. For example, asking for
+items with their published durations does not impose a duration filter.
+Simple keyword shortcuts use `searchText`; Boolean alternatives use explicit
+search expressions with `searchText` empty. `setSearch` changes only that text
+channel and never silently removes existing `where` predicates. Replacing an
+explicit search expression requires a named node edit, preserving typed and
+negative constraints. These boundaries are shared by all publisher vocabularies.
+
 ## 2. Current implementation and gaps
 
 The following are source observations, not a new comprehensive test report.

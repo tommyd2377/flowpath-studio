@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { appendFile, mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { safeTestRecorder, sanitizeTestObservation, LOCAL_TEST_HEADER, type TestObservation } from '../lib/visitor-test-events';
-import { createTestRecordingStore, localRecordingRequest, recordingLimits } from '../lib/visitor-test-recording-store';
+import { safeTestRecorder, sanitizeTestObservation, LOCAL_TEST_HEADER, RECORDING_HEADER, type TestObservation } from '../lib/visitor-test-events';
+import { createTestRecordingStore, localRecordingRequest, recordingLimits, requestTestRecorder } from '../lib/visitor-test-recording-store';
 import { runVisitorTask } from '../lib/visitor-task-runner';
 import { createLiveRuntime, type LiveSocket } from '../lib/gpt-live/runtime';
 import { FakeLiveSocket, flushLive, liveAnswer, liveTool } from './helpers/live-fixture';
@@ -35,6 +35,56 @@ test('copies redact nested JSON, credentials, opaque reasoning and binary media 
   const source = { count: 1 };
   safeTestRecorder(event => { (event.data as { count: number }).count = 9; throw new Error('broken observer'); })({ type: 'test', data: source });
   assert.deepEqual(source, { count: 1 });
+});
+
+test('nested provider error causes retain diagnostic codes while redacting secrets and cycles', () => {
+  const cause = Object.assign(new Error('connect failed: Bearer private-test-token'), { code: 'ENOTFOUND', cause: { authorization: 'private-authorization', url: 'https://user:pass@example.test/?token=private-url' } });
+  const error = new TypeError('fetch failed', { cause });
+  const saved = sanitizeTestObservation({ type: 'task.failed', data: { error } });
+  const serialized = JSON.stringify(saved);
+  assert.match(serialized, /ENOTFOUND/); assert.match(serialized, /connect failed/); assert.match(serialized, /fetch failed/);
+  for (const secret of ['private-test-token', 'private-authorization', 'private-url', 'user:pass']) assert.ok(!serialized.includes(secret));
+  assert.equal(saved.redacted, true);
+  cause.cause = error as unknown as typeof cause.cause;
+  assert.match(JSON.stringify(sanitizeTestObservation({ type: 'task.failed', data: error })), /circular/);
+});
+
+test('audio delta payloads are omitted while transcript deltas and original transport bytes remain intact', () => {
+  for (const type of ['session.output_audio.delta', 'session.input_audio.append', 'response.audio.delta', 'response.output_audio.delta']) {
+    const data = { type, delta: 'synthetic-audio-bytes', audio: 'synthetic-input-bytes' };
+    const saved = sanitizeTestObservation({ type: 'voice.received', data });
+    assert.doesNotMatch(JSON.stringify(saved), /synthetic-(?:audio|input)-bytes/); assert.equal(saved.redacted, true);
+    assert.equal(data.delta, 'synthetic-audio-bytes');
+  }
+  assert.match(JSON.stringify(sanitizeTestObservation({ type: 'voice.received', data: { type: 'session.output_transcript.delta', delta: 'The phone is 212 555 0194.' } })), /212 555 0194/);
+});
+
+test('reading older captures re-sanitizes audio payloads before timeline or export', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'old-audio-recording-'));
+  try {
+    const store = createTestRecordingStore(directory), { id } = await store.start('Legacy capture', {});
+    await store.stop(id);
+    await appendFile(join(directory, `${id}.jsonl`), JSON.stringify({ type: 'voice.received', source: 'server', at: 123, monotonicMs: 1, sequence: 3, data: { type: 'session.output_audio.delta', delta: 'synthetic-old-audio' } }) + '\n');
+    const events = await store.read(id);
+    assert.equal(events.at(-1)?.sequence, 3); assert.equal(events.at(-1)?.redacted, true);
+    assert.doesNotMatch(JSON.stringify(events), /synthetic-old-audio/);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('validated request recording scope survives a global pre-HMR store observer', () => {
+  const environment = process.env as Record<string, string | undefined>, previousMode = environment.NODE_ENV;
+  const globals = globalThis as typeof globalThis & { visitorTestRecordings?: ReturnType<typeof createTestRecordingStore> };
+  const previousStore = globals.visitorTestRecordings;
+  const id = '00000000-0000-4000-8000-000000000001', events: TestObservation[] = [];
+  try {
+    environment.NODE_ENV = 'development';
+    globals.visitorTestRecordings = { active: (value: string) => value === id, observer: () => (event: TestObservation) => { events.push(event); } } as unknown as ReturnType<typeof createTestRecordingStore>;
+    const request = new Request('http://127.0.0.1:3220/api/visitor/synthetic-qa', { method: 'POST', headers: { origin: 'http://127.0.0.1:3220', [LOCAL_TEST_HEADER]: '1', [RECORDING_HEADER]: id } });
+    const observer = requestTestRecorder(request);
+    assert.equal(observer?.recordingId, id);
+    observer?.({ type: 'test.event', data: { code: 'synthetic' } });
+    assert.equal(events.length, 1);
+  } finally { if (previousMode === undefined) delete environment.NODE_ENV; else environment.NODE_ENV = previousMode; globals.visitorTestRecordings = previousStore; }
 });
 
 test('oversized and cyclic observations are bounded and visibly incomplete', () => {
@@ -144,12 +194,13 @@ test('Studio voice adapter preserves actual model inputs and speech output with 
     const control = createVisitorRealtimeControl({ callId: 'live_recording_fixture', traceId: 'recording-parity', apiKey: 'synthetic', record,
       content: { ...sampleContent('general'), visitorSpeaksFirst: true }, initialAvailability: availability,
       signal: new AbortController().signal, reserveTurn: async () => availability, assertCurrent: async () => {},
-      emit: event => events.push(event), onFatal: message => assert.fail(message), socketFactory: () => socket as unknown as LiveSocket,
+      emit: event => { events.push(event); if (event.type === 'response_started') void control.applyControl({ seq: 1, interactionRevision: event.interactionRevision, viewRevision: event.revision, ready: true,
+        context: control.recordingSnapshot().context, preparationAck: { revision: event.revision, status: 'applied' } }); }, onFatal: message => assert.fail(message), socketFactory: () => socket as unknown as LiveSocket,
       fetch: async (_url, init) => { requests.push(JSON.parse(String(init?.body))); return Response.json({ status: 'completed', output: [liveAnswer('Published answer')] }); },
     });
     socket.open(); await control.ready; control.start(); socket.user('What information can you help me find?'); await flushLive(); await flushLive();
-    if (!record) assert.equal(socket.listenerCount('message'), 1, 'No additional socket observation when recording is disabled');
     await control.close();
+    assert.equal(socket.listenerCount('message'), record ? 3 : 2, 'Only the runtime, context flow control and optional recorder observe the socket');
     return { requests, sent: socket.sent, transcripts: events.filter(event => event.type === 'transcript').map(event => ({ role: event.role, text: event.text })) };
   }
   const baseline = await scenario(), events: TestObservation[] = [];

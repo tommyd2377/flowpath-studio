@@ -37,8 +37,17 @@ async function prepare(page: Page, welcome = false) {
   await page.addInitScript(() => {
     const availability = { enabled: true, mode: 'both', live: true, chatRemaining: 25, voiceRemaining: 5, resetsAt: '' };
     let sink: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let preparation: { revision: number; interactionRevision: number; queued: unknown[] } | undefined;
     const state: Harness = { controls: [], requests: [], chats: [], inputActive: false, outputActive: false, outgoing: [], audioMuted: false, ack: true, failControl: false, deferConnection: false, deferTrack: false, neverResolvePlay: false, connect() {}, attach() {}, revision: 0, calls: 0, closed: 0, aborted: 0, tracks: [], deferPermission: false, releasePermission() {}, offers: [],
-      emit(event) { const frame = event as { type: string; revision?: number; interactionRevision?: number }; if (frame.revision !== undefined) state.revision = Math.max(state.revision, frame.revision); sink?.enqueue(new TextEncoder().encode(`${JSON.stringify(['response_started', 'plan', 'playback_started', 'transcript', 'navigation'].includes(frame.type) ? { interactionRevision: 0, ...frame } : frame)}\n`)); },
+      emit(event) {
+        const frame = event as { type: string; revision?: number; interactionRevision?: number };
+        if (frame.revision !== undefined) state.revision = Math.max(state.revision, frame.revision);
+        if (frame.type === 'response_started') preparation = { revision: frame.revision!, interactionRevision: frame.interactionRevision ?? 0, queued: [] };
+        else if (['ended', 'error', 'response_cancelled'].includes(frame.type)) preparation = undefined;
+        else if (preparation && frame.revision === preparation.revision && (frame.interactionRevision ?? 0) === preparation.interactionRevision
+          && ['navigation', 'plan', 'backend_idle', 'answer_completed', 'result_ready'].includes(frame.type)) { preparation.queued.push(event); return; }
+        sink?.enqueue(new TextEncoder().encode(`${JSON.stringify(['response_started', 'plan', 'playback_started', 'transcript', 'navigation'].includes(frame.type) ? { interactionRevision: 0, ...frame } : frame)}\n`));
+      },
       disconnect() { sink?.close(); sink = undefined; } };
     window.__visitorVoice = state;
     class Track { clone() { const clone = new Track(); state.outgoing.push(clone); return clone; } enabled = true; stopped = false; onended: (() => void) | null = null; stop() { this.stopped = true; } }
@@ -67,9 +76,10 @@ async function prepare(page: Page, welcome = false) {
       const path = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url;
       if (/\/api\/visitor\/[^/]+$/.test(path) && !init?.method) return Response.json({ availability });
       if (/\/api\/visitor\/[^/]+\/session$/.test(path)) {
+        preparation = undefined;
         state.calls++; state.requests.push(JSON.parse(String(init?.body))); state.offers.push(JSON.parse(String(init?.body)).sdp);
         const body = new ReadableStream<Uint8Array>({ start(controller) { sink = controller; }, cancel() { state.aborted++; sink = undefined; } });
-        state.emit({ type: 'session', sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n', availability, expiresAt: Date.now() + 120000, control: { id: '00000000-0000-4000-8000-000000000001', token: 'a'.repeat(43) } });
+        state.emit({ type: 'session', sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n', availability, expiresAt: Date.now() + 120000, protectOpening: true, control: { id: '00000000-0000-4000-8000-000000000001', token: 'a'.repeat(43) } });
         state.emit({ type: 'ready' });
         return new Response(body, { headers: { 'Content-Type': 'application/x-ndjson' } });
       }
@@ -77,6 +87,14 @@ async function prepare(page: Page, welcome = false) {
         const { update } = JSON.parse(String(init?.body)); state.controls.push(update); if (update.end) queueMicrotask(() => state.emit({ type: 'ended', message: 'Ended.' }));
         if (state.failControl) return Response.json({ error: 'Synthetic control failure' }, { status: 503 });
         if (state.ack && !update.end) state.emit({ type: 'control_applied', seq: update.seq, interactionRevision: update.interactionRevision, revision: state.revision, ready: update.ready });
+        if (update.end || preparation && update.interactionRevision > preparation.interactionRevision) preparation = undefined;
+        // Mirror the owner: restored task state is confirmed before display work.
+        if (state.ack && preparation && update.ready && update.preparationAck?.revision === preparation.revision
+          && update.interactionRevision === preparation.interactionRevision) {
+          const pending = preparation; preparation = undefined;
+          if (update.preparationAck.status === 'applied') pending.queued.forEach(event => state.emit(event));
+          else state.emit({ type: 'task_error', revision: pending.revision, interactionRevision: pending.interactionRevision, message: 'The current information could not be prepared.' });
+        }
         return new Response(null, { status: 204 });
       }
       if (/\/api\/visitor\/[^/]+$/.test(path) && init?.method === 'POST') {
@@ -95,6 +113,31 @@ async function browse(page: Page) {
   const button = page.getByRole('button', { name: 'Browse published content', exact: true });
   if (await button.count()) await button.click();
 }
+
+for (const mobile of [false, true]) test(`microphone remains available throughout the opening${mobile ? ' on iPhone' : ' on desktop'}`, async ({ page }) => {
+  if (mobile) {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.addInitScript(() => Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)' }));
+  }
+  await prepare(page, true);
+  await page.evaluate(() => { window.__visitorVoice.ack = false; });
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.ready))).toBe(true);
+  expect(await page.evaluate(() => window.__visitorVoice.outgoing.every(track => !track.enabled))).toBe(true);
+  await page.evaluate(() => {
+    const state = window.__visitorVoice, latest = state.controls.at(-1)!;
+    state.ack = true;
+    state.emit({ type: 'control_applied', seq: latest.seq, interactionRevision: latest.interactionRevision, revision: 0, ready: true });
+  });
+  // Check before playback begins: a greeting must not hold input until its end.
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.outgoing.every(track => track.enabled && !track.stopped))).toBe(true);
+  await page.evaluate(() => { window.__visitorVoice.outputActive = true; window.__visitorVoice.inputActive = true; });
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.at(-1)?.audio)).toEqual({ inputActive: true, outputActive: true });
+  expect(await page.evaluate(() => window.__visitorVoice.outgoing.every(track => track.enabled && !track.stopped))).toBe(true);
+  expect(await page.evaluate(() => window.__visitorVoice.calls)).toBe(1);
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__visitorVoice.outgoing.every(track => track.stopped))).toBe(true);
+});
 
 for (const mobile of [false, true]) test(`voice closes, switches and exits workspace panels across successive requests${mobile ? ' on mobile with reduced motion' : ''}`, async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
@@ -225,6 +268,7 @@ test('manual browsing cancels opening focus and rejects late captions without re
 test('one tap maintains streaming conversation, interruption and explicit Stop', async ({ page }, info) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await prepare(page);
+  const information = page.getByRole('article', { name: 'Current information', exact: true });
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
   await page.evaluate(() => {
@@ -237,7 +281,8 @@ test('one tap maintains streaming conversation, interruption and explicit Stop',
   await expect(page.getByText('Speaking · you can interrupt · tap to end', { exact: true })).toBeAttached();
   await expect(page.locator('.site-opening')).toHaveCount(0);
   await expect(page.locator('.site-cards')).toHaveCount(0);
-  await expect(page.locator('[data-workspace-focused]:not([inert])')).toHaveCSS('opacity', '1');
+  await expect(information).toHaveCSS('opacity', '1');
+  await expect(information.getByRole('heading', { name: 'Wedding stories', exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath('continuous-voice.png'), fullPage: true });
   expect(await page.evaluate(() => window.__visitorVoice.tracks.every(track => track.enabled && !track.stopped))).toBe(true);
   await page.evaluate(() => window.__visitorVoice.emit({ type: 'playback_stopped', responseId: 'unrelated-response' }));
@@ -249,8 +294,8 @@ test('one tap maintains streaming conversation, interruption and explicit Stop',
     window.__visitorVoice.emit({ type: 'plan', revision: 1, presentation: { layout: 'detail', sources: ['section:portraits'], status: 'ready' } });
   });
   await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
-  await expect(page.locator('[data-workspace-focused]:not([inert])').getByRole('heading', { name: 'Wedding stories', exact: true })).toBeVisible();
-  await expect(page.locator('[data-workspace-focused]:not([inert])').getByRole('heading', { name: 'Portrait sessions', exact: true })).toHaveCount(0);
+  await expect(information.getByRole('heading', { name: 'Wedding stories', exact: true })).toBeVisible();
+  await expect(information.getByRole('heading', { name: 'Portrait sessions', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'End conversation', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeVisible();
   expect(await page.evaluate(() => ({ calls: window.__visitorVoice.calls, closed: window.__visitorVoice.closed, aborted: window.__visitorVoice.aborted, stopped: window.__visitorVoice.tracks.every(track => track.stopped), offer: window.__visitorVoice.offers[0] }))).toEqual({ calls: 1, closed: 1, aborted: 1, stopped: true, offer: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n' });
@@ -305,7 +350,7 @@ test('stream failure stops without retry; exhausted session falls back to chat',
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
   await page.evaluate(() => window.__visitorVoice.disconnect());
-  await expect(page.getByRole('region', { name: 'Site assistant', exact: true }).getByRole('alert')).toContainText('voice connection ended');
+  await expect(page.getByRole('dialog', { name: 'Assistant exploration', exact: true }).getByRole('alert')).toContainText('voice connection ended');
   expect(await page.evaluate(() => window.__visitorVoice.calls)).toBe(1);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
@@ -338,18 +383,22 @@ test('unpublished references fail their request and preserve the last accepted w
 
 test('readiness waits for connected media and the owner ACK, without waiting for audio samples', async ({ page }) => {
   await prepare(page);
-  await browse(page);
-  await page.locator('[data-workspace-content$=":section:weddings"]').first().click();
+  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  const input = page.getByRole('textbox', { name: 'What would you like to see?', exact: true });
+  await input.fill('Tell me about weddings'); await input.press('Enter');
+  await expect(page.locator('[data-information-surface]')).toContainText('Wedding stories');
+  await expect(page.locator('[data-information-surface]')).toHaveAttribute('aria-busy', 'false');
+  await page.getByRole('button', { name: 'Voice', exact: true }).click();
   await page.evaluate(() => { const state = window.__visitorVoice; state.deferConnection = true; state.deferTrack = true; state.neverResolvePlay = true; state.ack = false; });
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.__visitorVoice.calls)).toBe(1);
   expect(await page.evaluate(() => window.__visitorVoice.outgoing.every(track => !track.enabled))).toBe(true);
   await page.evaluate(() => window.__visitorVoice.connect());
-  await expect(page.getByText('Connecting…', { exact: true })).toBeVisible();
+  await expect(page.getByText('Connecting voice…', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.__visitorVoice.controls.some(update => update.ready))).toBe(false);
   await page.evaluate(() => window.__visitorVoice.attach());
   await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.ready))).toBe(true);
-  await expect(page.getByText('Connecting…', { exact: true })).toBeVisible();
+  await expect(page.getByText('Connecting voice…', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.__visitorVoice.outgoing.every(track => !track.enabled))).toBe(true);
   await page.evaluate(() => {
     const state = window.__visitorVoice, update = state.controls.filter(update => update.ready).at(-1)!;
@@ -357,21 +406,26 @@ test('readiness waits for connected media and the owner ACK, without waiting for
   });
   await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
   expect(await page.evaluate(() => window.__visitorVoice.tracks.every(track => track.enabled))).toBe(true);
-  await expect(page.getByRole('button', { name: 'Back to workspace', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Close assistant', exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.__visitorVoice.requests[0].context.scene?.objects.flatMap(object => object.references.map(ref => ref.id)))).toContain('section:weddings');
 });
 
 test('a failed control update stops once and offers typing without reconnecting', async ({ page }) => {
   await prepare(page);
-  await browse(page);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
+  for (const [index, id] of ['section:weddings', 'section:portraits'].entries()) {
+    await page.evaluate(({ index, id }) => { window.__visitorVoice.emit({ type: 'response_started', revision: index + 1 }); window.__visitorVoice.emit({ type: 'navigation', id, revision: index + 1, target: { kind: 'source', id } }); }, { index, id });
+    await expect.poll(() => page.evaluate(id => window.__visitorVoice.controls.find(update => update.navigationAck?.id === id)?.navigationAck?.status, id)).toBe('applied');
+    await page.evaluate(index => window.__visitorVoice.emit({ type: 'backend_idle', revision: index + 1, interactionRevision: 0 }), index);
+    await expect(page.locator('[data-information-surface]')).toHaveAttribute('data-pending-request', '');
+  }
   await page.evaluate(() => { window.__visitorVoice.failControl = true; });
-  await browse(page);
-  await page.locator('[data-workspace-content$=":section:weddings"]').first().click();
-  await expect(page.getByRole('region', { name: 'Site assistant', exact: true }).getByRole('alert')).toContainText('could not update your view');
-  await expect(page.getByRole('button', { name: 'Continue by typing', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Back to previous information', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Assistant exploration', exact: true }).getByRole('alert')).toContainText('could not update your view');
   expect(await page.evaluate(() => ({ calls: window.__visitorVoice.calls, stopped: window.__visitorVoice.tracks.every(track => track.stopped), ended: window.__visitorVoice.controls.at(-1)?.end }))).toEqual({ calls: 1, stopped: true, ended: true });
+  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'What would you like to see?', exact: true })).toBeVisible();
 });
 
 test('bounded voice history and accepted views survive typing and restarting voice', async ({ page }) => {
@@ -388,6 +442,11 @@ test('bounded voice history and accepted views survive typing and restarting voi
     emit({ type: 'transcript', id: 'u1', role: 'user', text: 'Tell me about weddings.', revision: 1 });
   });
   await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.some(update => update.viewRevision === 1 && update.context.scene?.objects.some(object => object.references.some(ref => ref.id === 'section:weddings'))))).toBe(true);
+  // A displayed plan and transcripts do not complete the backend transaction.
+  // Switching modes before its terminal event deliberately rolls it back.
+  await expect(page.locator('[data-information-surface]')).toHaveAttribute('data-pending-request', 'voice:1');
+  await page.evaluate(() => window.__visitorVoice.emit({ type: 'backend_idle', revision: 1, interactionRevision: 0 }));
+  await expect(page.locator('[data-information-surface]')).toHaveAttribute('data-pending-request', '');
   await page.getByRole('button', { name: 'Chat', exact: true }).click();
   const input = page.getByRole('textbox', { name: 'What would you like to see?', exact: true });
   await input.fill('And what else?'); await input.press('Enter');

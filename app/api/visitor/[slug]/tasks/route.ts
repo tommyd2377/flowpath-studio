@@ -5,13 +5,14 @@ import { readJson, respond } from '@/lib/http';
 import { assertSameOrigin } from '@/lib/firebase/session';
 import { visitorTaskContext } from '@/lib/visitor-task-context';
 import { acknowledgeTaskDisplay, observeTaskScene, buildVisitorTaskView, capabilityCallSchema, executeVisitorCapability } from '@/lib/visitor-capabilities';
-import { confirmVisitorView, restoreConfirmedView } from '@/lib/visitor-task-store';
+import { confirmVisitorView, restoreConfirmedView, retainTaskSurface, restoreTaskSurface } from '@/lib/visitor-task-store';
 import { queryHash } from '@/lib/catalog-query-index';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 const requestSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('init') }).strict(),
+  z.object({ action: z.literal('restore'), sessionId: z.string().uuid(), bookmark: z.string().max(200), generation: z.number().int().nonnegative() }).strict(),
   z.object({ action: z.literal('refresh'), sessionId: z.string().uuid() }).strict(),
   z.object({ action: z.literal('execute'), sessionId: z.string().uuid(), call: capabilityCallSchema }).strict(),
   z.object({ action: z.literal('interrupt'), sessionId: z.string().uuid() }).strict(),
@@ -35,9 +36,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
     if (input.action === 'ack') { const saved = await acknowledgeTaskDisplay(store, input.sessionId, publication, input); return { revision: saved.revision, generation: saved.generation }; }
     if (input.action === 'scene') { const scene = { operationId: input.operationId, queryId: input.queryId, queryRevision: input.queryRevision, resultSetId: input.resultSetId, sceneRevision: input.sceneRevision, generation: input.generation, ready: input.ready, recordIds: input.recordIds }; await observeTaskScene(store, input.sessionId, publication, scene); return { sceneRevision: scene.sceneRevision }; }
     let session = input.action === 'init' ? await store.create(publication) : await store.read(input.sessionId, publication);
+    if (input.action === 'restore') { if (input.generation !== session.generation) throw new Error('A newer request replaced this restoration.'); const view = restoreTaskSurface(session, input.bookmark); session = await store.save(session, session.revision); view.revision = session.revision; return { view }; }
     if (input.action === 'interrupt') { restoreConfirmedView(session); session.generation++; for (const task of session.tasks) if (!['completed', 'reconciling', 'failed', 'cancelled'].includes(task.status)) { task.status = 'cancelled'; for (const step of task.steps) if (step.status === 'pending' || step.status === 'running') step.status = 'cancelled'; } session = await store.save(session, session.revision); return { revision: session.revision, generation: session.generation, view: buildVisitorTaskView({ index, session, signal: request.signal }) }; }
     const view = buildVisitorTaskView({ index, session, signal: request.signal });
-    if (input.action === 'init') confirmVisitorView(session);
+    if (input.action === 'init') { confirmVisitorView(session); retainTaskSurface(session, view); }
     session = await store.save(session, session.revision); view.revision = session.revision;
     return { view };
     } catch (error) {

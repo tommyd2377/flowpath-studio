@@ -1,0 +1,7 @@
+{
+  "samples": 182,
+  "medianFrameMs": 16.699999999999818,
+  "p95FrameMs": 16.800000000000182,
+  "longTasks": [],
+  "layoutShift": 0
+}

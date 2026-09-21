@@ -8,18 +8,18 @@ export const workspaceReferenceSchema = z.object({
   id, revisionId: id,
 }).strict();
 export type WorkspaceReference = z.infer<typeof workspaceReferenceSchema>;
-export const workspaceComponentSchema = z.enum(['information', 'detail', 'photo', 'map', 'collection', 'gallery', 'comparison', 'actions', 'external']);
+export const workspaceComponentSchema = z.enum(['information', 'detail', 'photo', 'map', 'chart', 'collection', 'gallery', 'comparison', 'actions', 'external']);
 export type WorkspaceComponent = z.infer<typeof workspaceComponentSchema>;
 export const workspaceOriginSchema = z.object({ objectId: id.nullable(), reference: workspaceReferenceSchema.nullable(),
   focusKey: z.string().max(240), scrollTop: z.number().int().min(0).max(10000000) }).strict();
 export const workspaceObjectSchema = z.object({
   instanceId: id, component: workspaceComponentSchema, references: z.array(workspaceReferenceSchema).min(1).max(12),
-  expanded: z.boolean(), selected: z.boolean(), layout: z.enum(['auto', 'wide']),
+  metric: id.optional(), expanded: z.boolean(), selected: z.boolean(), layout: z.enum(['auto', 'wide']),
   origin: workspaceOriginSchema.nullable(), scrollTop: z.number().int().min(0).max(10000000),
   query: z.string().max(200).default(''), filters: z.array(catalogFilterSchema).max(24).default([]),
 }).strict();
 export type WorkspaceObject = z.infer<typeof workspaceObjectSchema>;
-const objectInput = workspaceObjectSchema.pick({ instanceId: true, component: true, references: true });
+const objectInput = workspaceObjectSchema.pick({ instanceId: true, component: true, references: true, metric: true });
 export const workspaceOperationSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('add'), object: objectInput, origin: workspaceOriginSchema.nullable().optional() }).strict(),
   z.object({ kind: z.literal('update'), instanceId: id, component: workspaceComponentSchema, references: z.array(workspaceReferenceSchema).min(1).max(12) }).strict(),
@@ -59,13 +59,17 @@ function validateObject(object: WorkspaceObject, authority: WorkspaceAuthority) 
   const records = object.references.map(ref => workspaceRecord(authority, ref) ?? fail('This content is not in the current publication.'));
   if (new Set(object.references.map(referenceKey)).size !== object.references.length) fail('Content references must be distinct.');
   const kinds = records.map(record => record.reference.kind);
-  const valid = object.component === 'comparison' ? records.length >= 2 && records.length <= 6 && kinds.every(kind => kind === 'entity')
+  const valid = object.component === 'chart' ? records.length <= 12 && kinds.every(kind => kind === 'entity')
+    : object.component === 'comparison' ? records.length >= 2 && records.length <= 6 && kinds.every(kind => kind === 'entity')
     : object.component === 'map' ? records.length === 1 && ['entity', 'fact', 'source'].includes(kinds[0])
-    : object.component === 'gallery' ? kinds.every(kind => ['photo', 'album'].includes(kind))
+    : object.component === 'gallery' ? records.every(record => ['photo', 'album'].includes(record.reference.kind)
+      || record.reference.kind === 'collection' && record.component === 'gallery' && !!record.members?.length
+        && record.members.every(member => member.kind === 'photo' && !!workspaceRecord(authority, member)))
     : object.component === 'collection' ? kinds.every(kind => ['entity', 'collection'].includes(kind))
     : object.component === 'actions' ? kinds.every(kind => kind === 'capability')
     : records.length === 1 && records[0].component === object.component;
   if (!valid) fail('This component cannot display those references.');
+  if (object.metric && (object.component !== 'chart' || !authority.catalog?.attributes.some(attribute => attribute.id === object.metric && ['number', 'money'].includes(attribute.type)))) fail('Choose an approved numeric chart field.');
   if (object.filters.length) {
     if (object.component !== 'collection' || !authority.catalog) fail('Filters require published catalog content.');
     validateCatalogFilters(object.filters, authority.catalog);
@@ -115,12 +119,12 @@ export function applyWorkspaceBatch(current: WorkspaceState, input: unknown, aut
     if (op.kind === 'add') {
       const existing = next.objects.find(object => object.instanceId === op.object.instanceId);
       if (existing) {
-        if (existing.component !== op.object.component || JSON.stringify(existing.references) !== JSON.stringify(op.object.references)) fail('That object ID already identifies different content.');
+        if (existing.metric !== op.object.metric || existing.component !== op.object.component || JSON.stringify(existing.references) !== JSON.stringify(op.object.references)) fail('That object ID already identifies different content.');
         if (op.origin !== undefined) existing.origin = op.origin;
       } else {
         // Reopening an identical, unfiltered reference reuses its existing surface.
         // Distinct references, comparison order, and filtered collections stay distinct.
-        const same = next.objects.find(object => object.component === op.object.component && !object.query && !object.filters.length
+        const same = next.objects.find(object => object.component === op.object.component && object.metric === op.object.metric && !object.query && !object.filters.length
           && JSON.stringify(object.references.map(referenceKey)) === JSON.stringify(op.object.references.map(referenceKey)));
         if (same) aliases[op.object.instanceId] = same.instanceId;
         else next.objects.push(materialize(op.object, op.origin ?? null));

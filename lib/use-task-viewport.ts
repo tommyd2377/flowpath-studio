@@ -1,20 +1,21 @@
 'use client';
 import { workspaceElementVisible } from './workspace-screen';
 import { useCallback, useEffect, useRef, type RefObject } from 'react';
-import type { VisitorTaskView } from '@thevoice/platform-ui/task-view';
+import { displayedTaskRecordIds, type VisitorTaskView } from '@thevoice/platform-ui/task-view';
 
 /** Track current visible records independently of one-time action completion. */
 export function useTaskViewport(root: RefObject<HTMLElement | null>, open: boolean, nextSceneRevision: () => number, request: (input: unknown, signal?: AbortSignal) => Promise<unknown>) {
   const accepted = useRef<VisitorTaskView | null>(null), pending = useRef<Promise<void>>(Promise.resolve());
   const transport = useRef<AbortController | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined), dirty = useRef(false), failure = useRef<unknown>(null), last = useRef('');
-  const recordIds = useCallback(() => {
+  const recordIds = useCallback((view = accepted.current) => {
     if (!root.current || root.current.dataset.carouselActive === 'false' || document.visibilityState !== 'visible') return [];
     const viewport = window.visualViewport, top = viewport?.offsetTop ?? 0, left = viewport?.offsetLeft ?? 0;
     const bottom = top + (viewport?.height ?? innerHeight), right = left + (viewport?.width ?? innerWidth);
+    const allowed = new Set(view ? displayedTaskRecordIds(view) : []);
     const records = [...root.current.querySelectorAll<HTMLElement>('[data-task-record]')].flatMap(element => {
       const rect = element.getBoundingClientRect();
-      if (!workspaceElementVisible(element) || element.closest('[inert], [hidden], [aria-hidden="true"]') || element.checkVisibility?.({ checkOpacity: true, checkVisibilityCSS: true }) === false || getComputedStyle(element).visibility === 'hidden' || rect.width <= 0 || rect.height <= 0 || rect.bottom <= top || rect.top >= bottom || rect.right <= left || rect.left >= right) return [];
+      if (!allowed.has(element.dataset.taskRecord!) || !workspaceElementVisible(element) || element.closest('[inert], [hidden], [aria-hidden="true"]') || element.checkVisibility?.({ checkOpacity: true, checkVisibilityCSS: true }) === false || getComputedStyle(element).visibility === 'hidden' || rect.width <= 0 || rect.height <= 0 || rect.bottom <= top || rect.top >= bottom || rect.right <= left || rect.left >= right) return [];
       return [{ id: element.dataset.taskRecord!, top: rect.top, left: rect.left }];
     }).sort((a, b) => a.top - b.top || a.left - b.left);
     return [...new Set(records.map(record => record.id))].slice(0, 48);

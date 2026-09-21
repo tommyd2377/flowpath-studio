@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SITE_PALETTES, WEBSITE_TEMPLATES, contrastRatio, resetWebsiteStyle, selectWebsiteTemplate, websiteDesignTokens } from '@thevoice/platform-ui/site-design';
+import { SITE_PALETTES, WEBSITE_TEMPLATES, contrastRatio, effectiveWebsiteTemplate, resetWebsiteStyle, selectWebsiteTemplate, websiteDesignTokens } from '@thevoice/platform-ui/site-design';
 import { contentSchema, sampleContent } from '../lib/site-model';
 import { siteStyle } from '../lib/site-style';
 import { websiteSections, websiteHeroId } from '../lib/website-presentation';
@@ -10,6 +10,8 @@ import { templateFixtures } from '../fixtures/template-sites';
 import { interpretStructuredSource } from '../lib/source-extractors';
 import { visitorDraft, DEFAULT_VISITOR_SETTINGS } from '../lib/visitor-model';
 import { initialSite } from '../lib/local-store';
+import { addWebsiteOfferings } from '../lib/website-structure';
+import { designWebsite, extractWebsitePage, websitePageCatalog } from '../lib/website-import';
 
 test('new sites have a complete template while editor loads preserve explicit assistant settings', () => {
   assert.equal(initialSite('general').draft.style?.template, 'clarity');
@@ -39,13 +41,42 @@ test('template defaults follow the design while deliberate choices including a m
   assert.equal(selectWebsiteTemplate(editorial, 'showcase').palette, 'cloud');
 });
 
-test('legacy snapshots are unchanged until explicit template selection and designs preserve opening selections', () => {
+test('legacy saved branding remains unchanged and designs preserve opening selections', () => {
   const legacy = { ...sampleContent('general'), style: { layout: 'compact' as const, palette: 'forest' as const, entry: 'assistant' as const } };
   assert.deepEqual(contentSchema.parse(legacy), legacy); assert.equal(siteStyle(legacy)['--platform-bg'], SITE_PALETTES.forest.background);
   const chosen = selectWebsiteTemplate(legacy.style, 'editorial'); assert.equal(chosen.entry, 'assistant'); assert.equal(chosen.palette, 'linen');
   const content = { ...legacy, style: chosen, opening: { highlights: ['Publisher wording'], featuredEntityIds: ['stable'], capabilityIds: [], tone: 'warm' as const } };
   const applied = applyWebsiteDesign(content, { name: 'New name', headline: 'New headline', description: 'New description', accent: '#111111', style: { layout: 'balanced', palette: 'midnight', entry: 'website' } });
   assert.deepEqual(applied.style, chosen); assert.deepEqual(applied.opening?.featuredEntityIds, ['stable']); assert.deepEqual(applied.opening?.highlights, ['Publisher wording']);
+});
+
+test('legacy published content gets refined composition without rewriting saved branding or content', () => {
+  for (const [layout, template] of [['editorial', 'editorial'], ['compact', 'clarity'], ['balanced', 'clarity']] as const) {
+    const fixture = structuredClone(templateFixtures[0]);
+    const content = { ...fixture.content, style: { layout, palette: 'forest' as const, websiteMotion: 'off' as const } };
+    const original = structuredClone(content);
+    assert.equal(effectiveWebsiteTemplate(content.style), template);
+    assert.equal(effectiveWebsiteTemplate({ ...content.style, template: 'showcase' }), 'showcase');
+    const sections = websiteSections(publishedWorkspace(content, fixture.catalog), content, fixture.catalog);
+    const entries = sections.flatMap(section => section.entries);
+    assert.equal(entries.filter(entry => entry.name === 'The shared table').length, 2, 'distinct same-name offerings retain both approved prices');
+    assert.ok(sections.some(section => section.kind === 'faq'));
+    assert.deepEqual(content, original);
+    assert.equal(siteStyle(content)['--platform-bg'], SITE_PALETTES.forest.background);
+  }
+});
+
+test('real website price headings retain price semantics and complete terms in website composition', () => {
+  const page = extractWebsitePage('<h1>Menu</h1><h2>Catering</h2><h3>Half Sheet ~ $150.00*</h3><p>*Starting Price - Additional charges may apply based on order.</p>', 'https://bakery.example/menu');
+  const catalog = addWebsiteOfferings(websitePageCatalog([page]), [page]).catalog;
+  const content = { ...sampleContent('general'), sections: [], style: undefined };
+  const original = structuredClone(catalog);
+  const entry = websiteSections(publishedWorkspace(content, catalog), content, catalog).flatMap(section => section.entries).find(entry => entry.kind === 'offering')!;
+  assert.equal(entry.values?.find(value => value.role === 'price')?.label, 'Listed price (USD)');
+  assert.match(entry.values?.find(value => value.role === 'price-terms')?.text ?? '', /Starting Price - Additional charges may apply/);
+  assert.deepEqual(catalog, original);
+  assert.equal(designWebsite(page, 1).style?.template, 'editorial');
+  assert.equal(designWebsite(page, 12).style?.template, 'clarity');
 });
 
 test('all palette foregrounds and custom accent fallbacks maintain WCAG text contrast', () => {
@@ -99,4 +130,32 @@ test('qualified menu prices stay source wording rather than false exact money am
   const catalog = interpretStructuredSource('menu.csv', { format: 'csv', text: 'ID,Name,Price [USD]\nsupper,Shared supper,from 18 per person - minimum 6 - 48 hours notice' })!;
   assert.equal(catalog.attributes[0].type, 'text'); assert.match(String(catalog.entities[0].attributes['price-usd']), /from 18 per person/);
   assert.throws(() => interpretStructuredSource('empty.csv', { format: 'csv', text: 'ID,Name\n' }), /no item rows|at least|between 1 and 100/i);
+});
+
+test('website motion is optional, bounded and independent of shared tokens and other branding', () => {
+  const content = { ...sampleContent('general'), style: { ...WEBSITE_TEMPLATES.editorial.defaults } };
+  delete content.style.websiteMotion;
+  assert.equal(contentSchema.parse(content).style?.websiteMotion, undefined, 'old snapshots remain valid without migration');
+  const original = websiteDesignTokens(content.style, content.accent);
+  for (const websiteMotion of ['off', 'subtle', 'expressive'] as const) {
+    const style = { ...content.style, websiteMotion, customized: ['websiteMotion' as const] };
+    assert.equal(contentSchema.parse({ ...content, style }).style?.websiteMotion, websiteMotion);
+    assert.deepEqual(websiteDesignTokens(style, content.accent), original, 'website choice must not change shared assistant tokens');
+    assert.equal(selectWebsiteTemplate(style, 'showcase').websiteMotion, websiteMotion);
+    assert.equal(resetWebsiteStyle(style).websiteMotion, 'subtle');
+  }
+  assert.equal(contentSchema.safeParse({ ...content, style: { ...content.style, websiteMotion: 'unbounded' } }).success, false);
+  assert.equal(selectWebsiteTemplate({ layout: 'balanced', palette: 'midnight', websiteMotion: 'off' }, 'clarity').websiteMotion, 'off');
+});
+
+test('website presentation carries semantic kinds without changing canonical content', () => {
+  for (const fixture of templateFixtures) {
+    const original = structuredClone(fixture);
+    const content = { ...fixture.content, style: WEBSITE_TEMPLATES.editorial.defaults };
+    const sections = websiteSections(publishedWorkspace(content, fixture.catalog), content, fixture.catalog);
+    for (const entity of fixture.catalog.entities) {
+      assert.equal(sections.flatMap(section => section.entries).find(entry => entry.id.endsWith(`:${entity.id}`))?.kind, entity.kind);
+    }
+    assert.deepEqual(fixture, original);
+  }
 });

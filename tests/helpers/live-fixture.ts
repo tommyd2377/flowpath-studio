@@ -1,7 +1,11 @@
 import { EventEmitter } from 'node:events';
 export class FakeLiveSocket extends EventEmitter {
-  readyState = 0; sent: Record<string, unknown>[] = [];
-  send(raw: string) { const event = JSON.parse(raw); this.sent.push(event); if (event.type === 'session.close') queueMicrotask(() => this.frame({ type: 'session.closed', usage: { seconds: 10 }, reason: 'close_requested' })); }
+  readyState = 0; sent: Record<string, unknown>[] = []; acknowledgeAppends = true;
+  send(raw: string) {
+    const event = JSON.parse(raw); this.sent.push(event);
+    if (event.type === 'session.close') queueMicrotask(() => this.frame({ type: 'session.closed', usage: { seconds: 10 }, reason: 'close_requested' }));
+    if (this.acknowledgeAppends && /^session\.(thinking|instructions|commentary)\.append$/.test(event.type)) queueMicrotask(() => this.frame({ type: `${event.type}ed`, client_event_id: event.event_id, start_ms: 0, end_ms: 1 }));
+  }
   close() { this.terminate(); }
   terminate() { if (this.readyState === 3) return; this.readyState = 3; this.emit('close'); }
   open() { this.readyState = 1; this.emit('open'); }

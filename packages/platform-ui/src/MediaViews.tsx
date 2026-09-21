@@ -97,8 +97,8 @@ function MediaProviderContent({ library, resolveAssetUrl, children, onInteractio
   </MediaContext.Provider></LayoutGroup>;
 }
 
-export type MediaImageProps = { assetId: string; size?: 'thumb' | 'display'; className?: string; fit?: 'cover' | 'contain'; aspectRatio?: string; interactive?: boolean; onOpen?: () => void; layoutId?: string };
-export function MediaImage({ assetId, size = 'thumb', className = '', fit = 'cover', aspectRatio, interactive = true, onOpen, layoutId }: MediaImageProps) {
+export type MediaImageProps = { assetId: string; size?: 'thumb' | 'display'; className?: string; fit?: 'cover' | 'contain'; aspectRatio?: string; interactive?: boolean; onOpen?: () => void; layoutId?: string; checkInitialLoad?: boolean };
+export function MediaImage({ assetId, size = 'thumb', className = '', fit = 'cover', aspectRatio, interactive = true, onOpen, layoutId, checkInitialLoad = false }: MediaImageProps) {
   const context = useContext(MediaContext);
   const [failedSource, setFailedSource] = useState<string | undefined>();
   const asset = context?.library.assets.find(item => item.id === assetId);
@@ -106,7 +106,7 @@ export function MediaImage({ assetId, size = 'thumb', className = '', fit = 'cov
   let src: string | undefined;
   try { src = safeSource(context.resolveAssetUrl(asset.id, size)); } catch { /* A missing host image keeps its reserved space. */ }
   const image = <motion.span layout={layoutId ? 'position' : false} layoutId={layoutId} className={`platform-media-image ${className}`} data-source-id={`photo:${asset.id}`} data-fit={fit} style={{ aspectRatio: aspectRatio ?? (fit === 'contain' ? `${asset.width} / ${asset.height}` : '4 / 3') }}>
-    {src && failedSource !== src ? <img src={src} width={asset.width} height={asset.height} alt={asset.alt || asset.caption || 'Photo'} loading={size === 'thumb' ? 'lazy' : 'eager'} decoding="async" onError={() => setFailedSource(src)}/>
+    {src && failedSource !== src ? <img ref={image => { if (checkInitialLoad && image?.complete && image.naturalWidth === 0) setFailedSource(src); }} src={src} width={asset.width} height={asset.height} alt={asset.alt || asset.caption || 'Photo'} loading={size === 'thumb' ? 'lazy' : 'eager'} decoding="async" onError={() => setFailedSource(src)}/>
       : <span className="platform-media-unavailable" role="img" aria-label={asset.alt || asset.caption || 'Photo unavailable'}>Photo unavailable</span>}
   </motion.span>;
   return interactive ? <motion.button type="button" className="platform-photo-open" aria-label={`Open photo: ${asset.caption || asset.alt || 'Photo'}`} onClick={onOpen ?? (() => context.open([asset.id], asset.id))}

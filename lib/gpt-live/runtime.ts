@@ -106,6 +106,7 @@ export function createLiveRuntime(options: LiveRuntimeOptions) {
       const context = { history: options.history ?? [], transcripts: transcripts.map(item => ({ ...item })),
         report: (kind: 'thinking' | 'commentary', text: string) => { if (!closing && version === epoch && !signal.aborted) append(kind, text, id); } };
       if (!context.transcripts.some(item => item.role === 'user')) {
+        // Model commentary: request a repeat when a delegation has no user transcript.
         append('commentary', 'Please repeat what you would like help with.', id); return;
       }
       const result = await Promise.race([options.delegate(context, signal), aborted]);
@@ -116,6 +117,7 @@ export function createLiveRuntime(options: LiveRuntimeOptions) {
       if (!closing && version === epoch && !controller.signal.aborted) {
         const message = liveTaskFailureMessage(error);
         options.onTaskError?.(message);
+        // Model commentary: report the bounded backend failure and available recovery options.
         append('commentary', `${message} You can try another question or use the page controls.`, id);
       }
     } finally {
@@ -167,7 +169,17 @@ export function createLiveRuntime(options: LiveRuntimeOptions) {
   if (options.signal?.aborted) abort();
   return {
     ready, closed, close, append,
-    start() { if (closing || enabled) return; enabled = true; append('instructions', 'The application is ready. Listen and respond to the caller now.'); if (pending) { const id = pending; pending = undefined; void run(id); } },
+    // Model instructions: enable listening and responses once the application is ready.
+    start(mode: 'listen' | 'respond' = 'respond') {
+      if (closing || enabled) return;
+      // Readiness on a resumed call is not a request to answer retained history.
+      append('instructions', mode === 'listen'
+        ? 'The application is ready for listening. Wait silently for fresh user speech. Earlier dialogue is context only, not a pending request. Do not greet, replay an answer, or resume unfinished work.'
+        : 'The application is ready. Listen and respond to the caller now.');
+      enabled = true;
+      if (pending) { const id = pending; pending = undefined; if (mode === 'respond' || transcripts.some(item => item.role === 'user')) void run(id); }
+    },
+    // Model instructions: stop the superseded answer and use the changed application context.
     interrupt() { task?.abort(); task = undefined; epoch++; pending = undefined; options.onBusy?.(false); append('instructions', 'Stop speaking now. The user changed the page or task. Discard the previous pending answer and use the new application context.'); },
     observeAudio(next: LiveAudioState) { audio = next; },
     get audio() { return audio; },

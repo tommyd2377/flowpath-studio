@@ -1,6 +1,6 @@
-# AI layer: carousel design
+# Historical AI carousel study (superseded)
 
-Status: **approved design; implementation recorded separately**. September 15, 2026. See [implementation and verification](ai-layer-implementation.md) for what is now built, tested and still limited.
+Status: **superseded September 18, 2026** by the [evolving information surface](../information-surface.md). The study below is a historical record, not current implementation guidance. Global slides, peeks, next/previous history controls and collapse-first Back no longer apply. The current surface restores whole answer states and retains related media in one composition.
 
 Revision 2 incorporates the user's top-dock correction: preserve the current waveform/chat location, remove the added assistant header and bottom composer, and dismiss by clicking the softened background. This revision controls where it differs from the first interaction study.
 

@@ -3,6 +3,26 @@ import { useState } from 'react';
 import { visitorArtifactSchema, type VisitorArtifact } from './artifacts.js';
 import { fakeQuoteSchema, fakeBookingSchema, fakeReceiptSchema, fakeSlotSchema, fakeLineSchema } from './business.js';
 import { ExternalSearchResults, type ExternalSearchResult } from './ExternalSearchResults.js';
+import type { VisitorTaskView } from './task-view.js';
+
+/** The same reviewed values become aligned columns or compact mobile records. */
+export function TaskComparison({ comparison }: { comparison: NonNullable<VisitorTaskView['comparison']> }) {
+  const { rows } = comparison;
+  const value = (row: typeof rows[number], fieldId: string) => row.values.find(field => field.fieldId === fieldId)?.text ?? 'unknown';
+  // Retained older results may still contain fields with no evidence on either item.
+  const fields = comparison.fields.filter(field => rows.some(row => value(row, field.id) !== 'unknown'));
+  const display = (text: string) => text === 'unknown' ? 'Not specified' : text;
+  return <section aria-label="Selection comparison" className="platform-task-comparison">
+    <p className="platform-task-comparison-count">{rows.length} items</p>
+    <div className="platform-task-comparison-table"><table style={{ minWidth: 140 + rows.length * 180 }}>
+      <thead><tr><th scope="col">Compare</th>{rows.map(row => <th scope="col" key={row.id} data-task-record={row.id}>{row.name}</th>)}</tr></thead>
+      <tbody>{fields.map(field => <tr key={field.id}><th scope="row">{field.label}</th>{rows.map(row => <td key={row.id}>{display(value(row, field.id))}</td>)}</tr>)}</tbody>
+    </table></div>
+    <div className="platform-task-comparison-records">{rows.map(row => <article key={row.id} data-task-record={row.id}>
+      <h3>{row.name}</h3><dl>{fields.map(field => <div key={field.id}><dt>{field.label}</dt><dd>{display(value(row, field.id))}</dd></div>)}</dl>
+    </article>)}</div>
+  </section>;
+}
 
 export function TaskProgress({ busy, label }: { busy: boolean; label: string }) { return <div role="status" aria-live="polite">{busy ? 'Updating collection…' : label}</div>; }
 type Run = (capability: string, input: unknown) => void;

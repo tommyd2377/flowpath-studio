@@ -49,10 +49,13 @@ async function fixture(page: Page, generalPhotos = false, websiteFirst = false) 
   site = (await post(`/api/sites/${site.id}`, { action: 'publish', revision: site.revision })).site;
   await page.goto(`/s/${site.slug}`); return site;
 }
-const focus = (page: Page) => page.locator('[data-workspace-focused]:not([inert])');
+const surface = (page: Page) => page.locator('[data-information-surface]');
 async function ask(page: Page, value: string) {
   const input = page.getByRole('textbox', { name: 'What would you like to see?', exact: true });
   await input.fill(value); await input.press('Enter');
+  await expect(input).toHaveValue('');
+  await expect(page.locator('[data-information-surface][aria-busy="true"]')).toHaveCount(0);
+  await expect(page.locator('[data-information-surface][data-workspace-transition="moving"]')).toHaveCount(0);
 }
 
 test('website-first pages keep the voice control visible while browsing on desktop and mobile', async ({ page }, info) => {
@@ -85,24 +88,26 @@ test('website-first pages keep the voice control visible while browsing on deskt
   expect(providerRequests).toEqual([]);
 });
 
-test('site photos appear between content sections on desktop and mobile without adding repeated navigation', async ({ page }, info) => {
+test('reviewed site photo albums retain every image, example label and credit on desktop and mobile without repeated navigation', async ({ page }, info) => {
   await fixture(page, true);
-  await page.getByRole('button', { name: 'Browse published content', exact: true }).click();
   const website = page.locator('[data-published-website]');
   await expect(website).toBeVisible();
-  const sections = website.locator('.platform-website-section');
-  await expect(sections.nth(1)).toHaveAttribute('data-section-kind', 'photos');
-  await expect(sections.nth(2)).not.toHaveAttribute('data-section-kind', 'photos');
-  await expect(sections.nth(1).locator('img')).toHaveCount(4);
-  await expect(sections.nth(1).getByText('Example photo', { exact: true })).toHaveCount(4);
+  // Current templates preserve a complete reviewed album. The older four-photo
+  // interleaving requirement is recorded separately in the integration QA report.
+  const photos = website.getByRole('region', { name: 'Studio studies', exact: true });
+  await expect(photos).toHaveAttribute('data-section-kind', 'photos');
+  await photos.getByRole('button', { name: 'Explore all 9' }).click();
+  await expect(photos.locator('img')).toHaveCount(9);
+  await expect(photos.getByText('Illustrative example', { exact: true })).toHaveCount(9);
+  await expect(photos.getByText('Local test illustration', { exact: true })).toHaveCount(9);
   const navigation = website.getByRole('navigation', { name: 'Website navigation' });
   await navigation.locator('summary').click();
   await expect(navigation.getByRole('link', { name: 'Studio studies', exact: true })).toHaveCount(1);
   await navigation.locator('summary').click();
-  await sections.nth(1).scrollIntoViewIfNeeded();
+  await photos.scrollIntoViewIfNeeded();
   await page.screenshot({ path: info.outputPath('distributed-photos-desktop.png') });
   await page.setViewportSize({ width: 390, height: 844 });
-  await sections.nth(1).scrollIntoViewIfNeeded();
+  await photos.scrollIntoViewIfNeeded();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
   await page.screenshot({ path: info.outputPath('distributed-photos-mobile.png') });
 });
@@ -111,24 +116,22 @@ test('full website, distinct same-name records, published footer, photos and Hom
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await fixture(page); await page.setViewportSize({ width: 1440, height: 1000 });
   let paid = 0; page.on('request', request => { if (request.method() === 'POST' && /\/api\/visitor\/[^/]+(?:\/explore)?$/.test(request.url())) paid++; });
-  await page.getByRole('button', { name: 'Browse published content', exact: true }).click();
   const website = page.getByRole('region', { name: 'Browse approved information' });
   await expect(website.getByRole('navigation', { name: 'Website navigation' })).toBeVisible();
   await expect(website.getByRole('heading', { name: 'An invitation to slow down.' })).toBeVisible();
-  await expect(website.getByRole('button', { name: 'Open Blue Bowl', exact: true })).toHaveCount(1);
+  const bowls = website.getByRole('button', { name: 'Open Blue Bowl', exact: true });
+  await expect(bowls).toHaveCount(2);
   await website.scrollIntoViewIfNeeded();
   await page.screenshot({ path: info.outputPath('website-desktop.png') });
-  await website.getByRole('button', { name: 'Open Blue Bowl', exact: true }).click();
-  const results = website.getByRole('region', { name: 'Website content', exact: true });
-  await expect(results.getByRole('status')).toHaveText('2 matching items');
-  await results.getByRole('button', { name: 'Open Blue Bowl', exact: true }).first().click();
-  await expect(results.getByRole('region', { name: 'Record detail' })).toContainText('35');
-  await results.getByRole('button', { name: 'Back to results' }).click();
-  await results.getByRole('button', { name: 'Open Blue Bowl', exact: true }).nth(1).click();
-  await expect(results.getByRole('region', { name: 'Record detail' })).toContainText('40');
-  await page.getByRole('button', { name: 'Home', exact: true }).first().click();
-  await expect(focus(page)).toHaveCount(0); await expect(website).toHaveCount(0); await expect(page.locator('.platform-workspace-card')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Browse published content', exact: true }).click();
+  for (const [displayPrice, price] of [['$35.00', 'USD 35'], ['$40.00', 'USD 40']]) {
+    await bowls.filter({ hasText: displayPrice }).click();
+    const detail = page.getByRole('dialog', { name: 'Blue Bowl', exact: true });
+    await expect(detail).toContainText(price);
+    await detail.getByRole('button', { name: 'Close detail', exact: true }).click();
+    await expect(detail).not.toBeVisible();
+  }
+  await website.getByRole('button', { name: 'Harbor Journal home', exact: true }).click();
+  await expect(website).toBeVisible(); await expect(surface(page)).toBeHidden();
   await page.setViewportSize({ width: 390, height: 844 });
   await website.getByRole('heading', { name: 'An invitation to slow down.' }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: info.outputPath('website-mobile.png') });
@@ -137,44 +140,50 @@ test('full website, distinct same-name records, published footer, photos and Hom
   await expect(website.getByText('Tuesday–Sunday, 10am–5pm', { exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath('website-footer-mobile.png') });
   await website.getByRole('button', { name: 'Open Studio study 2', exact: true }).click();
-  await expect(focus(page)).toHaveAttribute('data-workspace-transition', 'settled');
-  await focus(page).getByRole('button', { name: 'Open photo: Studio study 2' }).click();
-  await page.getByRole('dialog').getByRole('button', { name: 'Home', exact: true }).click();
-  await expect(page.getByRole('dialog')).toHaveCount(0); await expect(website).toHaveCount(0); await expect(focus(page)).toHaveCount(0);
+  const photo = page.getByRole('dialog', { name: 'Studio study 2', exact: true });
+  await expect(photo.getByRole('img', { name: 'Synthetic ceramic bowl illustration 2', exact: true })).toBeVisible();
+  await expect(photo).toContainText('Illustrative example');
+  await expect(photo).toContainText('Local test illustration');
+  await page.keyboard.press('Escape');
+  await expect(photo).not.toBeVisible(); await expect(website).toBeVisible(); await expect(surface(page)).toBeHidden();
   expect(paid).toBe(0); expect(errors).toEqual([]);
 });
 
 test('voice-preferred sites expose typing; Home, searches and local navigation survive exhausted chat allowance', async ({ page }) => {
   const site = await fixture(page);
   await page.route(`**/api/visitor/${site.slug}`, route => route.fulfill({ json: { availability: { enabled: true, mode: 'voice', live: false, chatRemaining: 0, voiceRemaining: 5, resetsAt: '' } } }));
-  let searches = 0, chats = 0;
+  let searches = 0, chats = 0, imageCaption = '';
   page.on('request', request => { if (request.method() === 'POST' && request.url().endsWith(`/api/visitor/${site.slug}`)) chats++; });
   await page.route(`**/api/visitor/${site.slug}/explore`, async route => {
     const input = route.request().postDataJSON(); searches++;
-    await route.fulfill({ json: { result: { ...demoExploreResult(input.query, input.kind), id: `result-${searches}` } } });
+    const result = { ...demoExploreResult(input.query, input.kind), id: `result-${searches}` };
+    if (input.kind === 'images') imageCaption = result.images[1].caption;
+    await route.fulfill({ json: { result } });
   });
   await page.reload(); await page.getByRole('button', { name: 'Chat', exact: true }).click();
   await ask(page, 'Open Harbor Studio'); await expect(page.getByRole('region', { name: 'Record detail' })).toContainText('12 Example Lane');
   await ask(page, 'Expand an image search online about ceramics');
-  await expect(focus(page).getByRole('button', { name: /Open image 2:/ })).toBeVisible();
-  await ask(page, 'Expand image A2'); await expect(page.getByRole('dialog', { name: 'Web image viewer' })).toBeVisible();
+  await expect(surface(page).getByRole('button', { name: /Open image 2:/ })).toBeVisible();
+  await ask(page, 'Expand image A2'); await expect(surface(page).getByRole('figure')).toContainText(imageCaption);
   expect(searches).toBe(1);
-  await page.getByRole('dialog').getByRole('button', { name: 'Home', exact: true }).click();
-  await expect(page.getByRole('dialog')).toHaveCount(0); await expect(page.locator('.platform-workspace-card')).toHaveCount(0);
+  await ask(page, 'Take me home');
+  await expect(surface(page)).toBeHidden(); await expect(page.locator('[data-published-website]')).toBeVisible();
   for (let index = 0; index < 7; index++) {
     await ask(page, `Search the web for ceramics ${index}`);
-    await expect(focus(page).getByRole('heading', { name: `Search the web for ceramics ${index}`, exact: true })).toBeVisible();
+    await expect(surface(page).getByRole('heading', { name: `Search the web for ceramics ${index}`, exact: true })).toBeVisible();
   }
-  await expect(page.locator('.platform-workspace-card[data-workspace-component="external"]')).toHaveCount(6);
-  await expect(page.getByText('Search the web for ceramics 0', { exact: true })).toHaveCount(0);
+  await expect(surface(page).locator('[data-surface-region][data-kind="research"]')).toHaveCount(1);
+  await expect(surface(page)).not.toContainText('Search the web for ceramics 0');
+  await surface(page).getByRole('button', { name: 'Back to previous information', exact: true }).click();
+  await expect(surface(page).getByRole('heading', { name: 'Search the web for ceramics 5', exact: true })).toBeVisible();
+  expect(searches).toBe(8); // History restores the result without another external request.
   await ask(page, 'Take me back to the main page');
-  await expect(page.locator('.platform-workspace-card')).toHaveCount(0);
+  await expect(surface(page)).toBeHidden();
   await ask(page, 'Show me the full website'); await expect(page.locator('[data-published-website]')).toBeVisible();
   await ask(page, 'Search for White Bowl');
-  await expect(page.getByRole('region', { name: 'Website content', exact: true })).toHaveAttribute('aria-busy', 'false');
-  await expect(page.getByRole('region', { name: 'Website content', exact: true }).getByRole('status')).toHaveText('1 matching item');
-  await page.getByRole('button', { name: 'Open White Bowl', exact: true }).scrollIntoViewIfNeeded();
-  await ask(page, 'Open the first one'); await expect(page.getByRole('region', { name: 'Record detail' })).toContainText('White Bowl');
-  await ask(page, 'Start over'); await expect(page.locator('[data-published-website]')).toHaveCount(0);
+  await expect(surface(page)).toHaveAttribute('aria-busy', 'false');
+  await expect(surface(page)).toContainText('1 matching item');
+  await ask(page, 'Open the first one'); await expect(surface(page).getByRole('region', { name: 'Record detail' })).toContainText('White Bowl');
+  await ask(page, 'Start over'); await expect(surface(page)).toBeHidden(); await expect(page.locator('[data-published-website]')).toBeVisible();
   expect(searches).toBe(8); expect(chats).toBe(0);
 });

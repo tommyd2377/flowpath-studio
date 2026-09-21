@@ -8,6 +8,7 @@ import { slugSchema } from '@/lib/site-store';
 import { visitorAccess } from '@/lib/visitor-store';
 import { VisitorAttemptError } from '@/lib/visitor-quota';
 import { visitorRequestSchema } from '@/lib/visitor-request';
+import { boundVisitorHistory } from '@/lib/visitor-conversation-bounds';
 import { visitorRequestContext, visitorTextReply, visitorVoiceReply } from '@/lib/visitor-provider';
 import { demoVisitorReply, MAX_PCM_BYTES } from '@/lib/visitor-model';
 import { getWelcomeMessage } from '@/lib/site-greeting';
@@ -65,7 +66,7 @@ export async function POST(request: Request, { params }: Context) {
     const preview = await visitorAccess(slug);
     const catalog = preview.content.catalogPublicationId ? null : await getPublishedKnowledgeSnapshot(preview.siteId, preview.content.knowledgeRevisionId);
     const media = await getPublishedMedia(preview.siteId, preview.content.mediaRevisionId);
-    input.context = visitorRequestContext(preview.content, input, catalog ?? undefined, media ?? undefined);
+    input.context = visitorRequestContext(preview.content, input, catalog ?? undefined, media ?? undefined, slug);
     input.catalogState = input.context.catalogState;
     if (preview.availability.live) await assertNoStripeTestPaidAi(preview.siteId);
     const { content, siteId, availability } = await visitorAccess(slug, { requestId: input.requestId, kind: input.kind === 'chat' ? 'chat' : 'voice', greeting: input.kind === 'greeting' });
@@ -83,7 +84,7 @@ export async function POST(request: Request, { params }: Context) {
         }
         if (catalog) return { text: 'Explore the published items below.', catalogPlan: planForIntent(catalog, input.kind === 'chat' ? input.text : '', input.catalogState, media ?? undefined), demo: true, availability };
         const history = input.context.presentation
-          ? [...input.history.slice(-7), { role: 'assistant' as const, text: presentationSummary(input.context.presentation, content, media).slice(0, 2000) }]
+          ? boundVisitorHistory([...input.history, { role: 'assistant' as const, text: presentationSummary(input.context.presentation, content, media) }])
           : input.history;
         const presentation = demoPresentation(content, input.kind === 'chat' ? input.text : '', history, media);
         return { text: input.kind === 'chat' ? presentationSummary(presentation, content, media) : demoVisitorReply(content, ''), presentation, demo: true, availability };
@@ -92,7 +93,7 @@ export async function POST(request: Request, { params }: Context) {
       if (input.kind === 'chat' && input.context.workspace) return visitorChatTask({ record, slug, siteId, content, catalog: catalog ?? undefined, media: media ?? undefined, request: input, availability, signal: request.signal,
         onUsage: usage => { void recordPlatformEvent(siteId, { ...observed, requestId: `${input.requestId}-${crypto.randomUUID()}`, type: 'provider_usage', status: 'confirmed', count: 1, usage }).catch(() => undefined); },
       });
-      const reply = input.kind === 'chat' ? await visitorTextReply(content, input, request.signal, catalog ?? undefined, media ?? undefined) : await visitorVoiceReply(content, input, request.signal, catalog ?? undefined, media ?? undefined);
+      const reply = input.kind === 'chat' ? await visitorTextReply(content, input, request.signal, catalog ?? undefined, media ?? undefined, { slug, record }) : await visitorVoiceReply(content, input, request.signal, catalog ?? undefined, media ?? undefined);
       if (request.signal.aborted) throw new AppError('Request cancelled.', 499);
       if (JSON.stringify((await visitorAccess(slug)).content) !== JSON.stringify(content)) throw new AppError('The publication changed during this request. Reload to continue.', 409);
       await recordPlatformEvent(siteId, { ...observed, type: 'provider_usage', status: 'confirmed', count: 1, usage: reply.usage }).catch(() => undefined);

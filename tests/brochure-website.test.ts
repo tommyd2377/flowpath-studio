@@ -34,17 +34,16 @@ test('topics become reading sections, leaf collections organize names and all re
   const content = { ...initialSite('general').draft, style: undefined, sections: [], knowledgeRevisionId: graph.id };
   const authority = publishedWorkspace(content, graph);
   const sections = websiteSections(authority, content, graph);
-  assert.equal(sections[0].kind, 'stories');
-  assert.equal(sections[0].title, 'History');
-  assert.equal(sections[0].entries[0].blocks?.[0].text, 'A complete account beyond the summary.');
-  assert.equal(sections[1].title, 'Places', 'parent all-items collections must not swallow leaf sections');
+  assert.equal(sections[0].title, 'Places', 'parent all-items collections must not swallow leaf sections');
+  const story = sections.find(section => section.kind === 'stories')!.entries.find(entry => entry.name === 'History')!;
+  assert.equal(story.blocks?.[0].text, 'A complete account beyond the summary.');
   const ids = sections.flatMap(section => section.entries.map(entry => entry.id));
   assert.equal(new Set(ids).size, graph.entities.length);
   for (const entity of graph.entities) assert.ok(authority.records.some(record => record.reference.kind === 'entity' && record.reference.id === entity.id));
   assert.equal(sections.at(-1)?.title, 'Read the document');
 });
 
-test('reviewed business photos are spread between sections without inventing item associations or repeating strip images', () => {
+test('reviewed albums appear once while item photos retain their approved associations', () => {
   const graph = catalog();
   graph.entities.push(...Array.from({ length: 4 }, (_, index) => ({ id: `topic-${index}`, kind: 'article', name: `Topic ${index}`, summary: 'Useful content.', attributes: {}, blocks: [{ id: 'body', kind: 'paragraph' as const, text: 'Some substantive topic content.' }] })));
   const media = validateMediaLibrary({ schemaVersion: 1, id: randomUUID(),
@@ -56,15 +55,11 @@ test('reviewed business photos are spread between sections without inventing ite
   const content = { ...initialSite('general').draft, style: undefined, sections: [], logoAssetId: 'photo-0', knowledgeRevisionId: graph.id };
   const authority = publishedWorkspace(content, graph, media);
   const sections = websiteSections(authority, content, graph, media);
-  const highlights = sections.filter(section => section.navigation === false);
-  assert.equal(highlights.length, 3);
-  const photoIds = highlights.flatMap(section => section.entries.map(entry => entry.imageAssetId));
-  assert.equal(new Set(photoIds).size, photoIds.length);
-  assert.ok(photoIds.every(id => !['photo-0', 'photo-1', 'photo-2'].includes(id!)), 'logo, lead and already placed item photos are not reused in highlights');
-  assert.ok(highlights.flatMap(section => section.entries).find(entry => entry.imageAssetId === 'photo-3')?.example);
-  assert.ok(sections.find(section => section.id === 'article-history')?.entries.some(entry => entry.imageAssetId === 'photo-2'));
-  assert.equal(sections[1].kind, 'photos');
-  assert.equal(sections[2].kind, 'stories');
+  const albums = sections.filter(section => section.kind === 'photos');
+  assert.equal(albums.length, 1, 'one reviewed album must not become three identically titled strips');
+  assert.equal(albums[0].title, 'Our work');
+  assert.ok(albums.flatMap(section => section.entries).find(entry => entry.imageAssetId === 'photo-3')?.example);
+  assert.ok(sections.find(section => section.kind === 'stories')?.entries.some(entry => entry.name === 'History' && entry.imageAssetId === 'photo-2'));
   const galleryIds = sections.filter(section => section.kind === 'photos').flatMap(section => section.entries.map(entry => entry.imageAssetId));
   assert.equal(new Set(galleryIds).size, galleryIds.length);
   assert.equal(galleryIds.length, 13, 'all non-logo photos remain browsable');

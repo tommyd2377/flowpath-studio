@@ -1,0 +1,19 @@
+{
+  "method": "Production-minified isolated website consumer; same current dependency graph, only website renderer/design and opt-in MediaImage inputs replaced for baseline. Fonts and media excluded. CSS is additive.",
+  "before": {
+    "bytes": 681525,
+    "gzip": 178329
+  },
+  "after": {
+    "bytes": 700436,
+    "gzip": 185234
+  },
+  "addedCss": {
+    "bytes": 27371,
+    "gzip": 3837
+  },
+  "delta": {
+    "bytes": 18911,
+    "gzip": 6905
+  }
+}

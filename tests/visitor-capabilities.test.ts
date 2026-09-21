@@ -5,7 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { compileQueryIndex } from '../lib/catalog-query-index';
-import { taskFixture } from '../fixtures/visitor-tasks';
+import { publisherVocabularies, taskFixture } from '../fixtures/visitor-tasks';
 import { localTaskDocuments } from '../lib/task-persistence';
 import { VisitorTaskStore } from '../lib/visitor-task-store';
 import { acknowledgeTaskDisplay, executeVisitorCapability, buildVisitorTaskView, visitorCapabilities } from '../lib/visitor-capabilities';
@@ -37,6 +37,40 @@ test('dependent typed handles compose lookup/filter/selection/compare with exact
     session.generation++; session = await store.save(session, session.revision);
     assert.throws(() => resolveEvidence(session, lookup.handleId, 'records'), /stale/);
     await assert.rejects(() => execute('selection.fromRecords', { records: [] }, [{ input: 'records', handleId: 'fabricated', outputType: 'records' }]), /Evidence/);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('comparisons omit fields unknown for every selected item while retaining zero, false and qualified evidence', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'visitor-comparison-fields-'));
+  try {
+    const space = taskFixture(publisherVocabularies[2], 2), [first, second] = space.records;
+    const numeric = space.fields[0];
+    // Put unrelated fields first to verify they do not consume the bounded comparison slots.
+    space.fields.unshift(...Array.from({ length: 18 }, (_, i) => ({ ...numeric, id: `unrelated-${i}`, label: `Unrelated field ${i}`, coverage: { known: 0, total: 2 } })));
+    for (const id of ['qualified', 'conflict', 'outdated', 'denied']) space.fields.push({ ...numeric, id, label: id, coverage: { known: 1, total: 2 } });
+    second.assertions[0].value = null;
+    for (const record of [first, second]) record.assertions[2].value = { type: 'boolean', value: false };
+    const base = { value: { type: 'number' as const, value: 12, unit: 'units' }, polarity: 'affirmed' as const, conditions: [], authority: 'publisher' as const };
+    first.assertions.push(
+      { ...base, id: 'qualified-value', fieldId: 'qualified', conditions: ['At the pickup studio only'] },
+      { ...base, id: 'conflict-a', fieldId: 'conflict' },
+      { ...base, id: 'conflict-b', fieldId: 'conflict', value: { type: 'number', value: 14, unit: 'units' } },
+      { ...base, id: 'outdated-value', fieldId: 'outdated', validTo: '2000-01-01' },
+      { ...base, id: 'denied-value', fieldId: 'denied', polarity: 'denied' },
+    );
+    const index = compileQueryIndex(space), store = new VisitorTaskStore(localTaskDocuments(directory));
+    let session = await store.create(index.space.publication);
+    buildVisitorTaskView({ index, session, signal: new AbortController().signal }); session = await store.save(session, session.revision);
+    const result = await executeVisitorCapability({ sessionId: session.id, store, index, signal: new AbortController().signal, assertCurrent: async () => {},
+      call: { capabilityId: 'selection.compare', input: { records: [first, second] }, operationId: randomUUID(), expectedRevision: session.revision } });
+    const comparison = result.view.comparison!;
+    assert.deepEqual(comparison.fields.map(field => field.id), ['weight', 'compatible-families', 'flag', 'qualified', 'conflict', 'outdated', 'denied']);
+    const cells = comparison.rows.map(row => Object.fromEntries(row.values.map(value => [value.fieldId, value.text])));
+    assert.equal(cells[0].weight, '0 units'); assert.equal(cells[1].weight, 'unknown');
+    assert.equal(cells[0].flag, 'false'); assert.equal(cells[1].flag, 'false');
+    for (const [field, state] of [['qualified', 'conditional'], ['conflict', 'conflicting'], ['outdated', 'stale'], ['denied', 'conditional']]) {
+      assert.equal(cells[0][field], state); assert.equal(cells[1][field], 'unknown');
+    }
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -129,9 +163,12 @@ test('clarification retains current criteria and completes only as a needs-input
     const index = compileQueryIndex(taskFixture()), store = new VisitorTaskStore(localTaskDocuments(directory));
     let session = await store.create(index.space.publication); buildVisitorTaskView({ index, session, signal: new AbortController().signal }); session = await store.save(session, session.revision);
     const where = session.queries[0].current.where;
+    await executeVisitorCapability({ sessionId: session.id, store, index, signal: new AbortController().signal, assertCurrent: async () => {}, call: { operationId: randomUUID(), expectedRevision: session.revision, capabilityId: 'record.detail', input: { recordId: index.space.records[0].id } } });
+    session = await store.read(session.id, index.space.publication);
     const result = await executeVisitorCapability({ sessionId: session.id, store, index, signal: new AbortController().signal, assertCurrent: async () => {}, call: { operationId: randomUUID(), expectedRevision: session.revision, capabilityId: 'task.clarify', input: { question: 'Which reviewed quantity do you mean?', options: ['Duration', 'Word count'] } } });
     assert.deepEqual(result.view.query.where, where); assert.equal(result.view.clarification!.options.length, 2);
-    session = await acknowledgeTaskDisplay(store, session.id, index.space.publication, { operationId: result.view.operationId!, queryId: result.view.query.queryId, queryRevision: result.view.query.revision, resultSetId: result.view.result.resultSetId, sceneRevision: 1, recordIds: result.view.records.map(record => record.id) });
+    assert.equal(result.view.focus, 'clarification');
+    session = await acknowledgeTaskDisplay(store, session.id, index.space.publication, { operationId: result.view.operationId!, queryId: result.view.query.queryId, queryRevision: result.view.query.revision, resultSetId: result.view.result.resultSetId, sceneRevision: 1, recordIds: [] });
     assert.equal(session.tasks.at(-1)!.status, 'needsClarification');
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

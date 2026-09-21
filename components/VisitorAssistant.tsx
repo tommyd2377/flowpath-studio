@@ -7,7 +7,7 @@ import { carouselCommand } from '@thevoice/platform-ui/carousel';
 import { readVisitorChatEvents, type VisitorChatEvent } from '@/lib/visitor-chat-protocol';
 import { visitorDiagnostic, visitorDiagnosticTimer } from '../lib/visitor-diagnostics';
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode, type FormEvent, type MutableRefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useState, type ReactNode, type FormEvent, type MutableRefObject } from 'react';
 
 import { AnimatePresence, LayoutGroup, MotionConfig, motion, useReducedMotion } from 'motion/react';
 import { ArrowUp, ArrowUpRight, AudioLines, Clock3, MessageCircle, Square } from 'lucide-react';
@@ -24,6 +24,7 @@ import { siteStyle } from '@/lib/site-style';
 import { getWelcomeMessage } from '@/lib/site-greeting';
 import { followGreeting, greetingVisuals } from '@/lib/greeting-presentation';
 import { demoVisitorReply, visitorSettings, type VisitorAvailability, type VisitorMessage, type VisitorReply } from '@/lib/visitor-model';
+import { VisitorConversationHistory } from '@/lib/visitor-conversation-history';
 import { demoPresentation, presentationSources, presentationSummary, validatePresentation, type SitePresentation as Presentation } from '@/lib/site-presentation';
 import { useVisitorVoice } from '@/lib/use-visitor-voice';
 import { useVisitorSession } from '@/lib/use-visitor-session';
@@ -67,8 +68,8 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
   const [availabilityLoading, setAvailabilityLoading] = useState(!!slug);
   const tasks = useVisitorTasks(), websiteTasks = useWebsiteTasks();
   const [mode, setMode] = useState<'chat' | 'voice'>(settings.mode === 'chat' ? 'chat' : 'voice');
-  const historyRef = useRef<VisitorMessage[]>([]);
-  function appendMessages(additions: VisitorMessage[]) { historyRef.current = [...historyRef.current, ...additions].slice(-8).map(item => ({ ...item, text: item.text.slice(0, 2000) })); }
+  const historyRef = useRef(new VisitorConversationHistory());
+  function appendMessages(additions: VisitorMessage[], revision?: number, signal?: AbortSignal) { historyRef.current.append(additions, revision, signal); }
   const initialTextSourceIds = useMemo(() => initialSourceIds.filter(id => !/^(?:album|photo):/.test(id)), [initialSourceIds]);
   const initialPresentation = useMemo(() => {
     const photoIds = initialSourceIds.filter(id => /^(?:album|photo):/.test(id));
@@ -95,12 +96,13 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
   const [searchActivity, setSearchActivity] = useState('');
   const [, setPreparingView] = useState(false);
   const [error, setError] = useState('');
-  const [answer, setAnswer] = useState('');
+  const setAnswer = (text: string) => { if (text.trim()) void workspaceView.current?.answer(text); };
   const [chatProgress, setChatProgress] = useState('');
   const [provisionalAnswer, setProvisionalAnswer] = useState('');
   const [greeted, setGreeted] = useState(false);
   const pending = useRef<AbortController | null>(null);
   const inFlight = useRef(false);
+  const inputCancelledRequest = useRef(false);
   const input = useRef<HTMLTextAreaElement>(null);
   const waveControl = useRef<HTMLButtonElement>(null);
   const focusReturn = useRef<{ mode: 'chat' | 'voice'; preventScroll: boolean; origin: Element | null } | null>(null);
@@ -112,7 +114,7 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
   const liveVoice = useVisitorSession();
   const cancelDemo = demoVoice.cancel;
   const stopLive = liveVoice.stop;
-  const cancelVoice = useCallback(() => { cancelDemo(); stopLive(); }, [cancelDemo, stopLive]);
+  const cancelVoice = useCallback(() => { historyRef.current.endVoice(); cancelDemo(); stopLive(); }, [cancelDemo, stopLive]);
   function endVoice() { cancelGreeting(); cancelVoice(); }
   const useLiveState = liveVoice.active || liveVoice.phase === 'error';
   const voice = { ...demoVoice, cancel: cancelVoice,
@@ -128,7 +130,7 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
     ...workspaceView.current?.context(),
     ...(tasks?.current() ? { taskSession: tasks.current() } : {}),
   }), [tasks]);
-  const manualInteraction = useCallback(() => { cancelGreeting(); setProvisionalAnswer(''); setChatProgress(''); pending.current?.abort(); searchView.current?.cancel(); cancelDemo(); setAnswer(''); manualInterrupt(); tasks?.interrupt(); }, [cancelGreeting, cancelDemo, manualInterrupt, tasks]);
+  const manualInteraction = useCallback(() => { historyRef.current.invalidatePending(); inputCancelledRequest.current = false; cancelGreeting(); setProvisionalAnswer(''); setChatProgress(''); pending.current?.abort(); searchView.current?.cancel(); cancelDemo(); manualInterrupt(); tasks?.interrupt(); }, [cancelGreeting, cancelDemo, manualInterrupt, tasks]);
   useEffect(() => {
     const hidden = () => { if (document.hidden) cancelGreeting(); };
     document.addEventListener('visibilitychange', hidden);
@@ -142,8 +144,9 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
     interactionRef.current = manualInteraction;
     return () => { interactionRef.current = null; };
   }, [interactionRef, manualInteraction]);
+  function restoredSurface() { historyRef.current.invalidatePending(); setError(''); setProvisionalAnswer(''); setChatProgress(''); updateContext(getContext(), true); }
   function closeLayer() {
-    manualInteraction(); endVoice(); pending.current?.abort(); inFlight.current = false;
+    manualInteraction(); void workspaceView.current?.cancel(); endVoice(); pending.current?.abort(); inFlight.current = false;
     setBusy(false); setChatExpanded(false); onLayerClose();
   }
   const closeLayerRef = useRef(closeLayer);
@@ -172,13 +175,39 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
     document.addEventListener('keydown', keyboard, true);
     return () => { document.body.style.overflow = bodyOverflow; if (parent) parent.style.overflowY = parentOverflow ?? ''; document.removeEventListener('keydown', keyboard, true); restoringFocus.current = true; if (origin?.isConnected && !origin.closest('[inert], [hidden]')) origin.focus({ preventScroll: true }); else fallback?.focus({ preventScroll: true }); restoringFocus.current = false; };
   }, [layerOpen]);
+  useLayoutEffect(() => {
+    const element = assistantRoot.current, controls = element?.querySelector<HTMLElement>('[data-ai-controls]');
+    if (!element || !controls) return;
+    let frame = 0;
+    const measure = () => {
+      cancelAnimationFrame(frame);
+      const deadline = performance.now() + 1000;
+      let previous = '', stable = 0;
+      const sample = () => {
+        const viewport = window.visualViewport, top = viewport?.offsetTop ?? 0;
+        const bottom = Math.max(controls.getBoundingClientRect().bottom, ...[...controls.querySelectorAll<HTMLElement>('[data-visitor-conversation-controls], .platform-conversation-surface')].map(control => control.getBoundingClientRect().bottom));
+        element.style.setProperty('--assistant-controls-bottom', `${Math.max(76, bottom - top)}px`);
+        element.style.setProperty('--assistant-viewport-height', `${viewport?.height ?? innerHeight}px`);
+        element.style.setProperty('--assistant-viewport-top', `${top}px`);
+        // ResizeObserver cannot observe Motion's transform-only settling. Follow
+        // it briefly so the card never keeps a measurement from mid-transition.
+        const geometry = [bottom, top, viewport?.height ?? innerHeight].map(value => Math.round(value * 2)).join(':');
+        stable = geometry === previous ? stable + 1 : 0; previous = geometry;
+        if (stable < 6 && performance.now() < deadline) frame = requestAnimationFrame(sample);
+      };
+      frame = requestAnimationFrame(sample);
+    };
+    measure(); const observer = new ResizeObserver(measure); observer.observe(controls);
+    window.addEventListener('resize', measure); window.visualViewport?.addEventListener('resize', measure); window.visualViewport?.addEventListener('scroll', measure);
+    return () => { cancelAnimationFrame(frame); observer.disconnect(); window.removeEventListener('resize', measure); window.visualViewport?.removeEventListener('resize', measure); window.visualViewport?.removeEventListener('scroll', measure); };
+  }, [layerOpen, mode]);
   const voiceExhausted = state !== null && state.voiceRemaining === 0;
   const voiceBusy = liveVoice.active || voice.phase !== 'idle' && voice.phase !== 'error';
   const activeMode = voiceExhausted && !voiceBusy ? 'chat' : mode;
   const disabled = !state?.enabled;
   const chatDisabled = disabled && !websiteTasks?.available;
   const demo = !slug || !!state?.enabled && !state.live;
-  const reveal = { initial: { opacity: 0, y: reduce ? 0 : 10 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: reduce ? 0 : -6 }, transition: { duration: reduce ? 0 : 0.28, ease } };
+  const reveal = { initial: false as const, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: reduce ? 0 : -6 }, transition: { duration: reduce ? 0 : 0.28, ease } };
 
   useEffect(() => () => { clearTimeout(focusReturnTimer.current); cancelAnimationFrame(focusReturnFrame.current); }, []);
   function restoreControlFocus() {
@@ -216,11 +245,11 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
     element.style.height = `${Math.min(element.scrollHeight, 128)}px`;
   }, [text, activeMode]);
 
-  async function requestTurn(kind: 'chat' | 'voice' | 'greeting', value: string, signal: AbortSignal) {
+  async function requestTurn(kind: 'chat' | 'voice' | 'greeting', value: string, signal: AbortSignal, requestId?: string) {
     setAnswer('');
-    const traceId = crypto.randomUUID(), elapsed = visitorDiagnosticTimer();
+    const traceId = requestId ?? crypto.randomUUID(), elapsed = visitorDiagnosticTimer();
     visitorDiagnostic({ traceId, channel: 'browser', stage: 'backend', status: 'started', operation: kind === 'chat' ? 'chat' : 'voice' });
-    const history = historyRef.current.slice(-8).map(({ role, text }) => ({ role, text: text.slice(0, 2000) }));
+    const history = historyRef.current.snapshot(), historyRevision = historyRef.current.checkpoint();
     let failure: Extract<VisitorChatEvent, { type: 'error' }>['diagnostic'];
     if (kind !== 'greeting') setPreparingView(true);
     try {
@@ -256,8 +285,13 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
             let visible = false;
             const onVisible = () => { if (!visible && !signal.aborted) { visible = true; visitorDiagnostic({ traceId, channel: 'browser', stage: 'visual_result', status: 'observed', durationMs: elapsed() }); } };
             let status: 'applied' | 'failed' | 'cancelled' = 'failed';
-            if (event.target.kind === 'answer') { setAnswer(event.target.text); await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))); status = await workspaceView.current.confirm(signal); }
-            else if (event.target.kind === 'carousel') status = await workspaceView.current.navigate(event.target.action, event.target.id, undefined, signal);
+            if (event.target.kind === 'answer') { status = await workspaceView.current.answer(event.target.text, signal, event.target.relationship, event.target.placement); }
+            else if (event.target.kind === 'carousel') {
+              // A model-requested Back is the result of this transaction, not a
+              // cancellation of the empty transaction created to interpret it.
+              if (['back', 'forward'].includes(event.target.action)) workspaceView.current.finish(traceId);
+              status = await workspaceView.current.navigate(event.target.action, event.target.id, undefined, signal);
+            }
             else if (event.target.kind === 'task') status = await tasks?.show(event.target.view, signal, onVisible) ?? 'failed';
             else if (event.target.kind === 'workspace') status = await workspaceView.current.apply(event.target.batch, signal);
             else if (event.target.kind === 'explore') {
@@ -296,9 +330,9 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
             const status = await workspaceView.current.plan(result.catalogPlan ?? result.presentation!, signal);
             if (status !== 'applied') throw new Error('The view was not applied. Your workspace remains available.');
           }
-          if (!result.workspaceBatch && !result.catalogPlan && !result.presentation && !result.displaySatisfied) setAnswer(result.text);
+          if (!result.workspaceBatch && !result.catalogPlan && !result.presentation && !result.displaySatisfied) await workspaceView.current.answer(result.text, signal);
           else { onContentInvoke(); updateContext(getContext(), true); }
-          appendMessages([{ role: 'user', text: kind === 'chat' ? value : result.userText || 'Voice request' }, { role: 'assistant', text: result.text || 'Workspace updated.' }]);
+          appendMessages([{ role: 'user', text: kind === 'chat' ? value : result.userText || 'Voice request' }, { role: 'assistant', text: result.text || 'Workspace updated.' }], historyRevision, signal);
           visitorDiagnostic({ traceId, channel: 'browser', stage: 'backend', status: 'succeeded', durationMs: elapsed() });
           return result;
         }
@@ -309,7 +343,7 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
           }
           catch { onCatalogEvent?.({ type: 'presentation_rejected', kind: 'display' }); throw new Error('The site could not prepare that view. Your current view is still available.'); }
           onContentInvoke();
-          appendMessages([{ role: 'user', text: kind === 'chat' ? value : result.userText || 'Voice request' }, { role: 'assistant', text: result.text }]);
+          appendMessages([{ role: 'user', text: kind === 'chat' ? value : result.userText || 'Voice request' }, { role: 'assistant', text: result.text }], historyRevision, signal);
           visitorDiagnostic({ traceId, channel: 'browser', stage: 'backend', status: 'succeeded', durationMs: elapsed() });
           return result;
         }
@@ -319,7 +353,7 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
         acceptedPresentation.current = plan; setPresentation(plan); updateContext(getContext(), true); onViewChange(true); onContentInvoke();
         // Follow-up context stays internal; visitors see the actual site components.
         appendMessages([{ role: 'user', text: kind === 'chat' ? value : result.userText || 'Voice request' },
-          { role: 'assistant', text: presentationSummary(plan, content, media) }]);
+          { role: 'assistant', text: presentationSummary(plan, content, media) }], historyRevision, signal);
       }
       return result;
     } catch (error) {
@@ -345,7 +379,7 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
     // A spoken Home must not interrupt its own navigation acknowledgement.
     if (!signal) manualInteraction();
     pending.current?.abort(); pending.current = null; inFlight.current = false; setBusy(false); setChatProgress(''); setProvisionalAnswer(''); searchView.current?.reset();
-    historyRef.current = []; setAnswer(''); setText(''); setError(''); setSearchActivity(''); setChatExpanded(false);
+    historyRef.current.invalidatePending(); setAnswer(''); setText(''); setError(''); setSearchActivity(''); setChatExpanded(false);
     setPresentation(initialPresentation); acceptedPresentation.current = initialPresentation;
     setCatalogPlan(initialCatalogPlan ?? undefined); acceptedCatalogPlan.current = initialCatalogPlan ?? undefined;
     catalogState.current = catalog ? initialInteraction(catalog) : undefined;
@@ -355,14 +389,32 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
     const taskStatus = clear || !websiteTasks?.available || !tasks?.current() ? undefined : await tasks.home(signal);
     onContentReset?.();
     const status = taskStatus === 'applied' ? taskStatus : await (clear ? workspaceView.current?.clear(signal) : workspaceView.current?.home(signal)) ?? 'failed';
+    // A successful task reset can invoke its view during the receipt. Home must
+    // also leave the assistant layer after that view has finished applying.
+    if (!clear && !signal?.aborted) onLayerClose();
     updateContext(getContext(), true); return taskStatus && taskStatus !== 'applied' ? taskStatus : status;
   }
   useEffect(() => { if (homeRef) homeRef.current = () => { void home(); }; return () => { if (homeRef) homeRef.current = null; }; });
   async function sendChat(event?: FormEvent, question = text) {
+    event?.preventDefault(); const outgoing = question.trim(); if (!outgoing) return;
+    const historyAction = carouselCommand(outgoing)?.action;
+    const isBack = historyAction === 'back', isHistory = isBack || historyAction === 'forward';
+    const cancelledByInput = inputCancelledRequest.current; inputCancelledRequest.current = false;
+    if (isBack && cancelledByInput) { await workspaceView.current?.cancel(); setText(''); updateContext(getContext(), true); return; }
+    if (inFlight.current || liveVoice.working || workspaceView.current?.context().surface.pendingRequestId) {
+      manualInteraction(); await workspaceView.current?.cancel();
+      if (isBack) { setText(''); setBusy(false); inFlight.current = false; updateContext(getContext(), true); return; }
+    }
+    const requestId = crypto.randomUUID();
+    if (!isHistory && workspaceView.current && await workspaceView.current.begin(requestId) !== 'applied') return;
+    try { await performChat(undefined, question, requestId); }
+    finally { if (!isHistory) workspaceView.current?.finish(requestId); }
+  }
+  async function performChat(event?: FormEvent, question = text, requestId?: string) {
     event?.preventDefault();
     const outgoing = question.trim();
     if (!outgoing) return;
-    recordBrowserTestEvent('chat.submitted', { text: outgoing });
+    recordBrowserTestEvent('chat.submitted', { text: outgoing }, requestId);
     composerSubmitted.current = true; onContentInvoke(); setChatExpanded(false);
     // Clear before awaiting the card receipt: a visitor can already be typing
     // the next command while the previous card transition is being confirmed.
@@ -379,13 +431,14 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
     if (outgoing && websiteTasks?.available && tasks) {
       manualInteraction(); endVoice(); setChatExpanded(false); setBusy(true); setError(''); setAnswer(''); setText(''); onControlActivate();
       const controller = new AbortController(); pending.current = controller; inFlight.current = true;
+      const historyRevision = historyRef.current.checkpoint();
       try {
         const command = await tasks.command(outgoing, controller.signal);
         if (controller.signal.aborted) return;
         if (!command) { setText(outgoing); return; }
         if (command.handled) {
           if (command.message && !websiteTasks.view) setAnswer(command.message);
-          historyRef.current = [...historyRef.current, { role: 'user' as const, text: outgoing }, { role: 'assistant' as const, text: command.message ?? 'The carousel is confirmed.' }].slice(-8);
+          appendMessages([{ role: 'user', text: outgoing }, { role: 'assistant', text: command.message ?? 'The carousel is confirmed.' }], historyRevision, controller.signal);
           updateContext(getContext(), true); return;
         }
       } catch (error) {
@@ -438,7 +491,7 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
     inFlight.current = true; endVoice(); setBusy(true); setError(''); setText(''); onControlActivate();
     const controller = new AbortController(); pending.current = controller;
     try {
-      await requestTurn('chat', outgoing, controller.signal);
+      await requestTurn('chat', outgoing, controller.signal, requestId);
     }
     catch (error) {
       if (!controller.signal.aborted) { setText(outgoing); setError(error instanceof Error ? error.message : 'The view could not be prepared.'); }
@@ -458,22 +511,56 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
     // preserve the visible subject and spatial references supplied to voice.
     if (state.live && slug) {
       demoVoice.cancel();
-      const earlierHistory = historyRef.current.slice(-8);
-      beginGreeting(!earlierHistory.length);
-      const transcripts = new Map<string, { role: 'user' | 'assistant'; text: string; revision: number }>();
-      void liveVoice.start({ slug, prepare: async signal => { try { await tasks?.settle(); signal.throwIfAborted(); } catch (error) { throw new Error(error instanceof Error ? `Could not prepare the website: ${error.message}` : 'The visitor task session could not start. Try again.'); } }, context: getContext(), history: historyRef.current.slice(-8).map(({ role, text }) => ({ role, text: text.slice(0, 2000) })), getContext, onAvailability: setState,
-        onTranscript: event => {
-          if (event.role === 'user') cancelGreeting();
-          transcripts.set(event.id, event);
-          historyRef.current = [...earlierHistory, ...[...transcripts.values()].sort((a, b) => a.revision - b.revision || (a.role === b.role ? 0 : a.role === 'user' ? -1 : 1)).map(({ role, text }) => ({ role, text }))].slice(-8);
+      const connection = historyRef.current.beginVoice();
+      beginGreeting(!historyRef.current.snapshot().length);
+      let latestVoiceRequest = '';
+      let surfaceRequest: string | undefined;
+      let restoredInterruptedRequest = false;
+      void liveVoice.start({ slug, prepare: async signal => { try { if (workspaceView.current && await workspaceView.current.prepare(signal) !== 'applied') throw new Error('The saved information could not be prepared. Please try again.'); await tasks?.settle(); signal.throwIfAborted(); } catch (error) { throw new Error(error instanceof Error ? `Could not prepare the website: ${error.message}` : 'The visitor task session could not start. Try again.'); } }, context: getContext(), history: historyRef.current.snapshot(), getContext, onAvailability: setState,
+        onRequest: async (phase, revision, signal) => {
+          if (phase === 'prepare') {
+            if (['back', 'forward'].includes(carouselCommand(latestVoiceRequest)?.action ?? '')) return;
+            if (workspaceView.current && await workspaceView.current.prepare(signal) !== 'applied') throw new Error('The saved information could not be prepared.');
+            await tasks?.settle(); signal?.throwIfAborted();
+          }
+          // Preparation is acknowledged before the server creates this task.
+          else if (phase === 'start') {
+            if (['back', 'forward'].includes(carouselCommand(latestVoiceRequest)?.action ?? '')) return;
+            signal?.throwIfAborted(); const requestId = `voice:${revision}`, workspace = workspaceView.current; surfaceRequest = requestId;
+            const status = await workspace?.begin(requestId, false);
+            if (signal?.aborted) {
+              if (workspace?.context().surface.pendingRequestId === requestId) await workspace.cancel();
+              if (surfaceRequest === requestId) surfaceRequest = undefined;
+              signal.throwIfAborted();
+            }
+            if (workspace && status !== 'applied') throw new Error('The information surface could not start this request.');
+          }
+          else if (phase === 'cancel') {
+            if (!['back', 'forward'].includes(carouselCommand(latestVoiceRequest)?.action ?? '')) { restoredInterruptedRequest = !!workspaceView.current?.context().surface.pendingRequestId; await workspaceView.current?.cancel(); }
+            surfaceRequest = undefined;
+          }
+          else { if (surfaceRequest) workspaceView.current?.finish(surfaceRequest); surfaceRequest = undefined; restoredInterruptedRequest = false; }
         },
+        onTranscript: event => {
+          if (!historyRef.current.transcript(connection, event)) return;
+          cancelGreeting(); latestVoiceRequest = event.text;
+        },
+        onAnswer: event => { historyRef.current.answer(connection, event); },
         onGreetingProgress: text => greeting.current?.caption(text),
         onGreetingInterrupted: cancelGreeting,
         onAudioActivity: state => { greeting.current?.audio(state); if (state.outputActive) workspaceView.current?.narrate(); },
         onNavigate: async (event, signal, onVisible) => {
           cancelGreeting();
           const target = event.target;
-          if (target.kind === 'answer') { setAnswer(target.text); appendMessages([{ role: 'assistant', text: target.text }]); await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))); const status = await workspaceView.current?.confirm(signal) ?? 'unavailable'; updateContext(getContext(), true); return status; }
+          const goesBack = target.kind === 'back' || target.kind === 'carousel' && ['back', 'forward'].includes(target.action);
+          if (goesBack) {
+            if (surfaceRequest) workspaceView.current?.finish(surfaceRequest); surfaceRequest = undefined;
+            if (restoredInterruptedRequest && !(target.kind === 'carousel' && target.action === 'forward')) { restoredInterruptedRequest = false; return await workspaceView.current?.confirm(signal) ?? 'unavailable'; }
+          } else restoredInterruptedRequest = false;
+          if (target.kind === 'answer') {
+            const status = await workspaceView.current?.answer(target.text, signal, target.relationship, target.placement) ?? 'unavailable';
+            updateContext(getContext(), true); return status;
+          }
           if (target.kind === 'carousel') { const status = await workspaceView.current?.navigate(target.action, target.id, undefined, signal) ?? 'unavailable'; updateContext(getContext(), true); return status; }
           if (target.kind === 'task') { const status = await tasks?.show(target.view, signal, onVisible) ?? 'unavailable'; updateContext(getContext(), true); return status; }
           if (target.kind === 'home') return home(signal);
@@ -495,9 +582,7 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
           }
           if (['open', 'focus', 'expand', 'close', 'unfocus', 'spotlight', 'compare', 'back', 'collapse'].includes(target.kind)) {
             if (workspaceView.current) {
-              const context = workspaceView.current.context();
-              const back = (target.kind === 'back' || target.kind === 'collapse' && !target.id) && !context.workspace.focusedId && !context.scene?.modal ? tasks?.back(signal) : undefined;
-              const status = await (back ?? workspaceView.current.navigate(target.kind, 'id' in target ? target.id : undefined, 'ids' in target ? target.ids : undefined, signal));
+              const status = await workspaceView.current.navigate(target.kind, 'id' in target ? target.id : undefined, 'ids' in target ? target.ids : undefined, signal);
               updateContext(getContext(), true); return status;
             }
             if (!catalog) {
@@ -551,7 +636,7 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
     });
   }
   function switchMode(next: 'chat' | 'voice') {
-    manualInteraction(); endVoice(); inFlight.current = false; setBusy(false); setChatExpanded(false); setMode(next); setError(''); onControlActivate();
+    manualInteraction(); void workspaceView.current?.cancel(); endVoice(); inFlight.current = false; setBusy(false); setChatExpanded(false); setMode(next); setError(''); onControlActivate();
   }
   const suggestions = catalog ? [
     ...(media?.assets.length ? [{ label: 'Photos & albums', question: 'Show me your photos.', icon: ArrowUpRight }] : []),
@@ -568,7 +653,7 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
     : voiceExhausted && !voiceBusy && settings.mode !== 'chat' ? 'Voice has reached its daily limit. Continue by typing below.' : '');
 
   const modeControls = settings.mode !== 'chat' && <motion.div layout="position" className={styles.modes} data-visitor-conversation-controls="true" role="group" aria-label="Conversation mode" {...reveal}>
-        {(['voice', 'chat'] as const).map(option => <motion.button type="button" key={option} aria-pressed={activeMode === option} disabled={option === 'voice' && voiceExhausted}
+        {(['voice', 'chat'] as const).map(option => <motion.button type="button" key={option} tabIndex={0} aria-pressed={activeMode === option} disabled={option === 'voice' && voiceExhausted}
           title={option === 'voice' && voiceExhausted ? 'Daily voice limit reached' : undefined} onClick={() => switchMode(option)} whileTap={reduce ? undefined : { scale: 0.96 }}>
           {activeMode === option && <motion.span layoutId="selected-mode" className={styles.modeSelection} style={{ borderRadius: 30 }} transition={spring}/>}
           <span className={styles.modeLabel}>{option === 'voice' ? <AudioLines size={14}/> : <MessageCircle size={14}/>} {option === 'voice' ? 'Voice' : 'Chat'}</span>
@@ -597,27 +682,27 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
           </div>}>
           {availabilityLoading && <p role="status" className={styles.voiceNote}>Getting the assistant ready…</p>}
           {busy && <div className={styles.voiceNote} data-chat-progress><LoadingIndicator label={chatProgress || 'Working on your request…'}/></div>}
-          {busy && provisionalAnswer && <p className={styles.provisional} data-provisional-answer aria-busy="true">{provisionalAnswer}<small>Answer in progress</small></p>}
+          {busy && provisionalAnswer && <p className={styles.srOnly} data-provisional-answer aria-busy="true">{provisionalAnswer}<small>Answer in progress</small></p>}
           <form className={styles.composer} aria-busy={availabilityLoading || busy} onSubmit={event => void sendChat(event)}>
             <textarea ref={input} aria-label="What would you like to see?" placeholder={availabilityLoading ? 'Getting the assistant ready…' : presentation ? 'Go deeper, compare, or explore something else…' : 'Show me what you have in mind…'} rows={1} maxLength={2000} value={text} readOnly={availabilityLoading}
               onFocus={() => { if (restoringFocus.current || composerSubmitted.current) return; onControlActivate(); onContentInvoke(); if (!busy) setChatExpanded(true); }} onPointerDown={() => { composerSubmitted.current = false; onControlActivate(); onContentInvoke(); if (!busy) setChatExpanded(true); }}
-              onChange={event => { composerSubmitted.current = false; if (busy) { manualInteraction(); inFlight.current = false; setBusy(false); } setText(event.target.value); if (!busy) setChatExpanded(true); }} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }}/>
+              onChange={event => { composerSubmitted.current = false; onControlActivate(); onContentInvoke(); if (busy) { manualInteraction(); inputCancelledRequest.current = true; void workspaceView.current?.cancel(); inFlight.current = false; setBusy(false); } setText(event.target.value); if (!busy) setChatExpanded(true); }} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }}/>
             <motion.button className={styles.send} type={busy ? 'button' : 'submit'} aria-label={busy ? 'Stop request' : 'Show me'} title={busy ? 'Stop request' : 'Show me'} disabled={!busy && (!text.trim() || availabilityLoading || chatDisabled)}
-              onClick={event => { if (busy) { event.preventDefault(); pending.current?.abort(); } }} whileHover={reduce || !text.trim() && !busy ? undefined : { scale: 1.04 }} whileTap={reduce ? undefined : { scale: 0.93 }}>
+              onClick={event => { if (busy) { event.preventDefault(); pending.current?.abort(); void workspaceView.current?.cancel(); } }} whileHover={reduce || !text.trim() && !busy ? undefined : { scale: 1.04 }} whileTap={reduce ? undefined : { scale: 0.93 }}>
               <AnimatePresence mode="wait" initial={false}><motion.span key={busy ? 'stop' : 'send'} initial={{ opacity: 0, y: reduce ? 0 : 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: reduce ? 0 : -5 }} transition={{ duration: reduce ? 0 : 0.24 }}>{busy ? <Square size={14} fill="currentColor"/> : <ArrowUp size={18}/>}</motion.span></AnimatePresence>
             </motion.button>
           </form>
         </ConversationDock>}
       </AnimatePresence>
       {modeControls}
-      {liveVoice.working && <button type="button" className={styles.cancelWork} onClick={manualInteraction}>Cancel request</button>}
+      {liveVoice.working && <button type="button" className={styles.cancelWork} onClick={() => { manualInteraction(); void workspaceView.current?.cancel(); }}>Cancel request</button>}
       {layerOpen && <button type="button" className={styles.srOnly} onClick={closeLayer}>Return to website</button>}
       </div>
       <div className={styles.website} data-website-background inert={layerOpen}>{website}</div>
       <AnimatePresence initial={false}>{layerOpen && <motion.div className={styles.backdrop} data-ai-backdrop aria-hidden="true" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: reduce ? 0 : .3 }}
         onPointerDown={event => { backdropPress.current = { x: event.clientX, y: event.clientY }; }} onPointerUp={event => { const origin = backdropPress.current; backdropPress.current = null; if (origin && Math.hypot(origin.x - event.clientX, origin.y - event.clientY) < 8) { event.preventDefault(); closeLayer(); } }}/>}</AnimatePresence>
       <motion.div inert={!layerOpen} aria-hidden={!layerOpen} style={{ position: 'relative', zIndex: 42 }} initial={false} animate={layerOpen ? { opacity: 1, visibility: 'visible' } : { opacity: 0, visibility: 'hidden' }} transition={{ duration: reduce ? 0 : .3 }}>
-      <VisitorWorkspace onMediaAudible={endVoice} active={layerOpen} onDismiss={closeLayer} answer={answer || error || voice.error || (!websiteTasks?.view ? status : '')} pending={busy || liveVoice.working || !!searchActivity} handleRef={setWorkspaceHandle} content={content} catalog={catalog} media={media} onInteraction={manualInteraction} onContext={searchContextChanged} onInvoke={onContentInvoke} onPhotoView={onPhotoView}/>
+      <VisitorWorkspace onMediaAudible={endVoice} active={layerOpen} onDismiss={preserveConversation => preserveConversation ? onLayerClose() : closeLayer()} tenantId={slug ?? 'preview'} onRestore={restoredSurface} notice={error || voice.error || (!websiteTasks?.view ? status : '')} pending={busy || liveVoice.working || !!searchActivity} handleRef={setWorkspaceHandle} content={content} catalog={catalog} media={media} onInteraction={manualInteraction} onContext={searchContextChanged} onInvoke={onContentInvoke} onPhotoView={onPhotoView}/>
       {searchSettings.enabled && <SearchExplore handleRef={searchView} content={content} slug={slug} beforeSearch={target => workspaceView.current?.beforeSearch(target)} onResult={async (result, signal) => workspaceView.current?.showExternal(result, signal)} getExternalContext={() => workspaceView.current?.context().explore} onExternalCommand={command => workspaceView.current?.externalCommand(command) ?? false} onInteraction={() => { manualInteraction(); onContentInvoke(); }} onContext={searchContextChanged} onActivity={setSearchActivity} onPendingAnnotationChange={setPendingAnnotationId}/>}
       </motion.div>
     </motion.section>

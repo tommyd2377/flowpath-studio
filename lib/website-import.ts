@@ -2,6 +2,7 @@ import { htmlDocument, textBlocks, parseHtml } from './html-document';
 import 'server-only';
 import { createHash, randomUUID } from 'node:crypto';
 import { validateCatalog, type KnowledgeCatalog } from '@thevoice/platform-ui/contracts';
+import { effectiveWebsiteTemplate } from '@thevoice/platform-ui/site-design';
 import { extractWebsiteImages } from './website-image-discovery';
 import { AppError } from './errors';
 import { assertPublicWebsiteUrl, fetchWebsiteResource, type WebsiteTransport } from './website-fetch';
@@ -60,8 +61,9 @@ export function extractWebsitePage(html: string, url: string): ExtractedWebsiteP
     ...(/^#[\da-f]{6}$/i.test(accent ?? '') ? { accent } : {}), links, images: extractWebsiteImages(html, url) };
 }
 export function designWebsite(page: ExtractedWebsitePage, pages: number): WebsiteDesign {
+  const layout = pages > 8 ? 'compact' : 'editorial';
   return websiteDesignSchema.parse({ name: page.name, headline: page.headline, description: page.description,
-    accent: page.accent ?? '#72542e', contact: page.contact ?? '', hours: page.hours ?? '', style: { palette: 'parchment', layout: pages > 8 ? 'compact' : 'editorial', entry: 'website' } });
+    accent: page.accent ?? '#72542e', contact: page.contact ?? '', hours: page.hours ?? '', style: { palette: 'parchment', layout, template: effectiveWebsiteTemplate({ layout }), entry: 'website', customAccent: true } });
 }
 
 /** Pinned DNS and TLS validation on every hop; no cookies, scripts, forms or external hosts. */

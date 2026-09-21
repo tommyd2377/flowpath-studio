@@ -2,7 +2,7 @@
 
 /* External images load directly from their sources, without a server proxy. */
 /* eslint-disable @next/next/no-img-element */
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'motion/react';
 import { revealTransition, sequenceVariants, sequenceItemVariants } from './motion.js';
 import { Icon } from './components.js';
@@ -21,7 +21,18 @@ function mapUrl(map: NonNullable<ExternalSearchResult['map']>) {
   const bounds = [Math.max(-180, map.longitude - span), Math.max(-85, map.latitude - span / 2), Math.min(180, map.longitude + span), Math.min(85, map.latitude + span / 2)];
   return `https://www.openstreetmap.org/export/embed.html?${new URLSearchParams({ bbox: bounds.join(','), layer: 'mapnik' })}`;
 }
-function CitedAnswer({ result }: { result: ExternalSearchResult }) {
+function CitedAnswer({ result, formatted = false }: { result: ExternalSearchResult; formatted?: boolean }) {
+  if (formatted) return <>{[...result.answer.matchAll(/\S[\s\S]*?(?=\n\s*\n|$)/g)].map((match, block) => {
+    const heading = /^#{1,3} /.exec(match[0]), start = match.index! + (heading?.[0].length ?? 0), end = match.index! + match[0].length;
+    const parts: ReactNode[] = []; let cursor = start;
+    for (const [index, citation] of result.citations.entries()) {
+      if (citation.start < cursor || citation.start >= end || citation.end > end) continue;
+      parts.push(result.answer.slice(cursor, citation.start));
+      parts.push(<a key={index} href={citation.url} target="_blank" rel="noopener noreferrer" title={citation.title}>[{index + 1}]</a>); cursor = citation.end;
+    }
+    parts.push(result.answer.slice(cursor, end));
+    return heading ? <h3 key={block}>{parts}</h3> : <p className="platform-external-answer" key={block}>{parts}</p>;
+  })}</>;
   const parts: ReactNode[] = []; let cursor = 0;
   for (const [index, citation] of result.citations.entries()) {
     if (citation.start < cursor) continue;
@@ -89,21 +100,25 @@ export function ExternalSearchViewer({ result, selected, onClose, onHome }: { re
   return <AnimatePresence>{(image || source) && <ResultViewer key={selected} image={image} source={source} result={result} close={onClose} onHome={onHome}/>}</AnimatePresence>;
 }
 
-export function ExternalSearchResults({ result, kind, selected, onCommand, onInteraction, embedded = false, showViewer = true }: {
+export function ExternalSearchResults({ result, kind, selected, onCommand, onInteraction, embedded = false, showViewer = true, surface = false }: {
   result: ExternalSearchResult; kind: ExternalSearchResult['kind']; selected: string | null;
   onCommand: (command: ExternalSearchCommand) => void; onInteraction: () => void;
   embedded?: boolean;
   showViewer?: boolean;
+  surface?: boolean;
 }) {
   const reduce = useReducedMotion();
-  return <motion.section key={result.id} className="platform-external" aria-label="Search results" initial={reduce ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={revealTransition}>
+  const imageHelp = useId(), imageGrid = surface && kind === 'images' && result.images.length > 0;
+  return <motion.section key={result.id} className="platform-external" data-image-grid={imageGrid || undefined} data-item-count={imageGrid ? result.images.length : undefined} aria-label="Search results" initial={reduce || surface ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={revealTransition}>
     <div className="platform-external-results">
-      <div className="platform-external-resultHeading"><button type="button" onClick={() => { onInteraction(); onCommand({ kind: 'back' }); }}><Icon name="back" size={15}/>{embedded ? 'Remove web context' : 'Back'}</button><span>{result.demo ? 'Synthetic preview' : `From the web · ${new Date(result.fetchedAt).toLocaleDateString()}`}</span></div>
-      <h3>{result.query}</h3><CitedAnswer result={result}/>
-      {kind !== 'map' && (result.images.length ? <><p className="platform-external-help">Open an image by number or code, such as “expand image {Math.min(2, result.images.length)}” or “image {externalItemLabel(Math.min(1, result.images.length - 1))}”. Labels stay the same as the grid reflows.</p><motion.div className="platform-external-gallery" variants={sequenceVariants} initial={reduce ? false : 'hidden'} animate="visible">{result.images.map((image, index) => <motion.article key={image.id} variants={sequenceItemVariants} transition={reduce ? { duration: 0 } : undefined}>
+      {!surface && <div className="platform-external-resultHeading"><button type="button" onClick={() => { onInteraction(); onCommand({ kind: 'back' }); }}><Icon name="back" size={15}/>{embedded ? 'Remove web context' : 'Back'}</button><span>{result.demo ? 'Synthetic preview' : `From the web · ${new Date(result.fetchedAt).toLocaleDateString()}`}</span></div>}
+      {imageGrid ? <h3 className="platform-external-imageCount" aria-label={`${result.images.length} images for ${result.query}`}>{result.images.length} {result.images.length === 1 ? 'image' : 'images'}</h3>
+        : <>{(!surface || !/^#{1,3} /m.test(result.answer)) && kind !== 'map' && <h3>{result.query}</h3>}<CitedAnswer result={result} formatted={surface}/></>}
+      {kind !== 'map' && (result.images.length ? <><p id={imageHelp} className={imageGrid ? 'platform-sr-only' : 'platform-external-help'}>Open an image by number or code, such as “expand image {Math.min(2, result.images.length)}” or “image {externalItemLabel(Math.min(1, result.images.length - 1))}”. Labels stay the same as the grid reflows.</p><motion.div className="platform-external-gallery" role="group" aria-label="Web images" aria-describedby={imageHelp} variants={sequenceVariants} initial={reduce ? false : 'hidden'} animate="visible">{result.images.map((image, index) => <motion.article key={image.id} variants={sequenceItemVariants} transition={reduce ? { duration: 0 } : undefined}>
         <button type="button" data-external-item={image.id} data-external-label={externalItemLabel(index)} onClick={() => { onInteraction(); onCommand({ kind: 'open_image', id: image.id }); }} aria-label={`Open image ${index + 1}: ${image.caption} (${externalItemLabel(index)})`}><WebImage src={image.thumbnail} fallbackSrc={image.url} alt={image.caption}/><span className="platform-external-number">{index + 1} <b>{externalItemLabel(index)}</b></span></button>
         <p>{image.caption}</p><a href={image.sourceUrl} target="_blank" rel="noopener noreferrer" onClick={onInteraction}>{new URL(image.sourceUrl).hostname} <Icon name="arrow" size={12}/></a>
       </motion.article>)}</motion.div></> : kind === 'images' && <p>{result.answer || 'No displayable image results were returned. Try a more specific image search.'}</p>)}
+      {imageGrid && <CitedAnswer result={result} formatted/>}
       {kind === 'map' && result.map && <div className="platform-external-map">
         <h4>{result.map.label}</h4><div className="platform-external-mapControls" aria-label="Map controls">
           <button type="button" aria-label="Zoom in" disabled={result.map.zoom === 12} onClick={() => { onInteraction(); onCommand({ kind: 'zoom_in' }); }}><Icon name="plus" size={17}/></button>
@@ -114,7 +129,8 @@ export function ExternalSearchResults({ result, kind, selected, onCommand, onInt
           : <iframe title={`Interactive map: ${result.map.label}`} src={mapUrl(result.map)} loading="lazy" referrerPolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-same-origin allow-popups" onFocus={onInteraction}/>}
         <p className="platform-external-help">Approximate area overview, not a verified address. Drag the live map to pan. Overview zoom controls return to the named area. <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">© OpenStreetMap contributors</a></p>
       </div>}
-      {kind === 'web' && <><p className="platform-external-help">Choose a source card, or say “expand result 1”.</p><motion.div className="platform-external-sources" variants={sequenceVariants} initial={reduce ? false : 'hidden'} animate="visible">{result.sources.map((source, index) => {
+      {surface && <p className="platform-external-help">{result.demo ? 'Synthetic preview' : `External sources · ${new Date(result.fetchedAt).toLocaleDateString()}`}</p>}
+      {kind === 'web' && <>{!surface && <p className="platform-external-help">Choose a source card, or say “expand result 1”.</p>}<motion.div className="platform-external-sources" variants={sequenceVariants} initial={reduce || surface ? false : 'hidden'} animate="visible">{result.sources.map((source, index) => {
         const preview = result.images.find(image => image.sourceUrl === source.url);
         return <motion.article key={source.url} variants={sequenceItemVariants}><button type="button" data-external-item={`source-${index + 1}`} data-external-label={externalItemLabel(index)} aria-label={`Open result ${index + 1}: ${source.title} (${externalItemLabel(index)})`} onClick={() => { onInteraction(); onCommand({ kind: 'open_source', id: `source-${index + 1}` }); }}>
           {preview && <WebImage src={preview.thumbnail} alt={preview.caption}/>}

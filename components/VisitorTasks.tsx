@@ -2,8 +2,8 @@
 import { recordedVisitorFetch } from '@/lib/visitor-test-recording-client';
 import { recordBrowserTestEvent } from '@/lib/visitor-test-events';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useMemo, type ReactNode, type RefObject } from 'react';
-import { type Expression, type QueryPatch } from '@thevoice/platform-ui/query';
-import { TaskProgress, VisitorArtifacts, ActionReview, TaskResearch } from '@thevoice/platform-ui/task-components';
+import { type QueryPatch } from '@thevoice/platform-ui/query';
+import { VisitorArtifacts, ActionReview, TaskResearch, TaskComparison } from '@thevoice/platform-ui/task-components';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { MediaImage } from '@thevoice/platform-ui';
 import { mapEmbedUrl } from '@/lib/explore-model';
@@ -13,9 +13,9 @@ import { useTaskViewport } from '@/lib/use-task-viewport';
 import { diagnosticError, visitorDiagnostic, visitorDiagnosticTimer } from '@/lib/visitor-diagnostics';
 
 type DisplayStatus = 'applied' | 'cancelled' | 'failed';
-type TaskControls = { command: (text: string, signal: AbortSignal) => Promise<{ handled: boolean; message?: string } | undefined>; openOrdinal: (ordinal: number) => Promise<void>; setPending: (value: boolean) => void; reset: (signal?: AbortSignal) => Promise<DisplayStatus>; settle: () => Promise<void>; current: () => { sessionId: string; revision: number; generation: number } | undefined; show: (view: VisitorTaskView, signal?: AbortSignal, onVisible?: () => void) => Promise<'applied' | 'cancelled' | 'failed'>; interrupt: () => void; hide: () => void; home: (signal?: AbortSignal) => Promise<DisplayStatus>; back: (signal?: AbortSignal) => Promise<DisplayStatus> | undefined };
-const conditionLabels: Record<string, string> = { eq: 'is', contains: 'includes', lt: 'is below', lte: 'is at most', gt: 'is above', gte: 'is at least', any: 'includes any of', all: 'includes all of' };
-type WebsiteTaskState = { error: string; available: boolean; view: VisitorTaskView | null; busy: boolean; root: RefObject<HTMLElement | null>; header: ReactNode; foreground: ReactNode; after: ReactNode; execute: (capabilityId: string, input: unknown, manual?: boolean, signal?: AbortSignal) => Promise<unknown>; patch: (operations: QueryPatch['operations']) => void };
+type TaskExecute = (capabilityId: string, input: unknown, manual?: boolean, signal?: AbortSignal) => Promise<unknown>;
+type TaskControls = { snapshot: () => VisitorTaskView | null; restore: (bookmark: string, visible: boolean, signal?: AbortSignal) => Promise<DisplayStatus>; command: (text: string, signal: AbortSignal) => Promise<{ handled: boolean; message?: string } | undefined>; openOrdinal: (ordinal: number) => Promise<void>; setPending: (value: boolean) => void; reset: (signal?: AbortSignal) => Promise<DisplayStatus>; settle: () => Promise<void>; current: () => { sessionId: string; revision: number; generation: number } | undefined; show: (view: VisitorTaskView, signal?: AbortSignal, onVisible?: () => void) => Promise<'applied' | 'cancelled' | 'failed'>; interrupt: () => void; hide: () => void; home: (signal?: AbortSignal) => Promise<DisplayStatus>; back: (signal?: AbortSignal) => Promise<DisplayStatus> | undefined };
+type WebsiteTaskState = { attachRoot: (node: HTMLElement | null) => void; error: string; available: boolean; view: VisitorTaskView | null; busy: boolean; root: RefObject<HTMLElement | null>; render: (view: VisitorTaskView | null, execute: TaskExecute) => { header: ReactNode; foreground: ReactNode; after: ReactNode }; execute: TaskExecute; patch: (operations: QueryPatch['operations']) => void };
 const WebsiteTaskContext = createContext<WebsiteTaskState | null>(null);
 export const useWebsiteTasks = () => useContext(WebsiteTaskContext);
 const TaskContext = createContext<TaskControls | null>(null);
@@ -25,6 +25,7 @@ export function VisitorTasksProvider({ slug, children, onInteraction, homeRef, b
   const [conversationPending, setConversationPending] = useState(false);
   const returnRecord = useRef<string | null>(null);
   const confirmed = useRef<VisitorTaskView | null>(null);
+  const historical = useRef<VisitorTaskView | null>(null);
   const initialization = useRef<Promise<VisitorTaskView> | null>(null);
   const [open, setOpen] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const beforeShowRef = useRef(beforeShow), openRef = useRef(false);
@@ -56,9 +57,10 @@ export function VisitorTasksProvider({ slug, children, onInteraction, homeRef, b
     initialization.current ??= request({ action: 'init' }).then(result => visitorTaskViewSchema.parse(result.view)).catch(error => { initialization.current = null; throw error; });
     return initialization.current;
   }, [request]);
+  const attachRoot = useCallback((node: HTMLElement | null) => { root.current = node; }, []);
   const nextSceneRevision = useCallback(() => ++scene.current, []);
   const { pause: pauseViewport, accept: acceptViewport, settle: settleViewport, recordIds: viewportRecordIds } = useTaskViewport(root, open && active, nextSceneRevision, request);
-  useEffect(() => { if (!active) pauseViewport(); else if (openRef.current && confirmed.current) void acceptViewport(confirmed.current).catch(() => undefined); }, [active, pauseViewport, acceptViewport]);
+  useEffect(() => { if (!active) pauseViewport(); else if (openRef.current && confirmed.current && confirmed.current !== historical.current) void acceptViewport(confirmed.current).catch(() => undefined); }, [active, pauseViewport, acceptViewport]);
   const show = useCallback(async (next: VisitorTaskView, signal?: AbortSignal, onVisible?: () => void): Promise<'applied' | 'cancelled' | 'failed'> => {
     const parsed = visitorTaskViewSchema.safeParse(next); if (!parsed.success) return 'failed'; next = parsed.data;
     const version = generation.current;
@@ -92,22 +94,22 @@ export function VisitorTasksProvider({ slug, children, onInteraction, homeRef, b
       const tick = () => {
         if (signal?.aborted || version !== generation.current) return finish();
         root.current?.setAttribute('data-website-transition', 'pending');
-        const target = root.current?.matches('[data-ai-carousel]') ? root.current : surface(), details = target?.closest('details'); if (details) details.open = true;
-        const card = root.current?.matches('[data-ai-carousel]') ? root.current.querySelector<HTMLElement>('[data-carousel-card]') : target;
+        const target = surface(), details = target?.closest('details'); if (details) details.open = true;
+        const card = root.current?.matches('[data-ai-carousel]') ? root.current.querySelector<HTMLElement>('[aria-label="Current information"]') : target;
         const rect = card?.getBoundingClientRect();
         const nextPosition = rect ? `${Math.round(rect.left)}:${Math.round(rect.top)}:${Math.round(rect.width)}:${Math.round(rect.height)}` : ''; stable = nextPosition === position ? stable + 1 : 0; position = nextPosition;
         if (!root.current?.matches('[data-ai-carousel]') && (next.active || next.navigation === 'reset') && rect && (rect.top >= innerHeight || rect.bottom <= 0 || next.focus && rect.top < 0)) target?.scrollIntoView({ block: 'start', behavior: 'instant' });
-        if (stable > 2 && (!card || Number(getComputedStyle(card).opacity) >= .99) && (next.active ? target && root.current?.dataset.resultSet === next.result.resultSetId && (!root.current?.matches('[data-ai-carousel]') || root.current.querySelector<HTMLElement>('[data-carousel-card]')?.dataset.carouselCard === root.current.dataset.activeCard) && workspaceElementVisible(target) : root.current?.dataset.resultSet !== next.result.resultSetId)) { settled = true; root.current?.setAttribute('data-website-transition', 'settled'); return finish(); }
+        if (stable > 2 && (!root.current?.matches('[data-ai-carousel]') || root.current.dataset.workspaceTransition === 'settled') && (!card || Number(getComputedStyle(card).opacity) >= .99) && (next.active ? target && root.current?.dataset.resultSet === next.result.resultSetId && workspaceElementVisible(target) : root.current?.dataset.resultSet !== next.result.resultSetId)) { settled = true; root.current?.setAttribute('data-website-transition', 'settled'); return finish(); }
         frame = requestAnimationFrame(tick);
       };
       frame = requestAnimationFrame(() => { frame = requestAnimationFrame(tick); });
     });
     if (signal?.aborted || document.visibilityState !== 'visible' || generation.current !== version || next.active && root.current?.dataset.resultSet !== next.result.resultSetId) return restore('cancelled');
     if (!settled) return restore('failed');
-    const target = root.current?.matches('[data-ai-carousel]') ? root.current : surface();
+    const target = surface();
     if (next.active && next.focus && (!target || !workspaceElementVisible(target))) return restore('failed');
     if (!next.active && root.current?.dataset.resultSet === next.result.resultSetId) return restore('failed');
-    const recordIds = next.active ? viewportRecordIds() : [];
+    const recordIds = next.active ? viewportRecordIds(next) : [];
     onVisible?.();
     const receiptElapsed = visitorDiagnosticTimer();
     visitorDiagnostic({ traceId: next.operationId, channel: 'browser', stage: 'visual_result', status: 'observed' });
@@ -182,8 +184,36 @@ export function VisitorTasksProvider({ slug, children, onInteraction, homeRef, b
     await interruptWork.current;
     if (slug && !viewRef.current) { const initial = await initialize(); viewRef.current = initial; confirmed.current ??= initial; setView(initial); }
     await settleViewport();
-  }, [initialize, slug, settleViewport]);
-  const controls: TaskControls = useMemo(() => ({ command: async (text, signal) => await execute('query.command', { text }, false, signal) as { handled: boolean; message?: string } | undefined, openOrdinal: async ordinal => {
+    const current = viewRef.current;
+    if (slug && current?.active) {
+      const refreshed = await request({ action: 'refresh', sessionId: current.sessionId });
+      const fresh = visitorTaskViewSchema.parse(refreshed.view);
+      if (fresh.generation !== current.generation) { pauseViewport(); throw new Error('The task generation changed; restore the visible result before continuing.'); }
+    }
+  }, [initialize, slug, settleViewport, request, pauseViewport]);
+  const controls: TaskControls = useMemo(() => ({ snapshot: () => confirmed.current, restore: async (bookmark, visible, signal) => {
+    pauseViewport(); generation.current++; pending.current?.abort();
+    const version = generation.current;
+    await interruptWork.current;
+    // Interrupt may have resumed observations of the departing view.
+    pauseViewport();
+    const current = viewRef.current; if (!current) return 'applied';
+    try {
+      // A cancelled voice job may have advanced the server generation without
+      // displaying a new result. Refresh once; never retry a model operation.
+      const fresh = await request({ action: 'refresh', sessionId: current.sessionId }, signal);
+      if (signal?.aborted || generation.current !== version) return 'cancelled';
+      const authoritative = visitorTaskViewSchema.parse(fresh.view);
+      if (authoritative.sessionId !== current.sessionId || authoritative.generation < current.generation) return 'failed';
+      const result = await request({ action: 'restore', sessionId: current.sessionId, bookmark, generation: authoritative.generation }, signal);
+      if (signal?.aborted || generation.current !== version) return 'cancelled';
+      const restored = visitorTaskViewSchema.parse(result.view);
+      historical.current = restored;
+      viewRef.current = restored; confirmed.current = restored; setView(restored);
+      // The restored receipt is historical. A new query operation establishes a new scene.
+      openRef.current = visible; setOpen(visible); setError(''); setBusy(false); return 'applied';
+    } catch (error) { setError(error instanceof Error ? error.message : 'This saved result is no longer available.'); return 'failed'; }
+  }, command: async (text, signal) => await execute('query.command', { text }, false, signal) as { handled: boolean; message?: string } | undefined, openOrdinal: async ordinal => {
     try {
       await settle(); const version = generation.current, current = viewRef.current;
       if (!current?.active) return;
@@ -205,67 +235,49 @@ export function VisitorTasksProvider({ slug, children, onInteraction, homeRef, b
       const current = viewRef.current;
       if (!openRef.current || !current) return;
       return execute('view.back', { target: 'results' }, false, signal).then(data => data ? 'applied' : signal?.aborted ? 'cancelled' : 'failed');
-    } }), [execute, interrupt, show, settle, pauseViewport]);
+    } }), [execute, interrupt, show, settle, pauseViewport, request]);
   useEffect(() => () => pending.current?.abort(), []);
   useEffect(() => { if (!homeRef) return; homeRef.current = controls.home; return () => { homeRef.current = null; }; }, [homeRef, controls]);
   function patch(operations: QueryPatch['operations']) { if (view) void execute('query.patch', { queryId: view.query.queryId, baseRevision: view.query.revision, operations }); }
-  function criterionChips(node: Expression): ReactNode {
-    if ('children' in node) return node.children.length ? <span className="platform-criteria-group" key={node.id}>{node.children.length > 1 && <span>{node.kind === 'any' ? 'Any of:' : 'All of:'}</span>}{node.children.map(criterionChips)}</span> : null;
-    if (node.kind === 'not') return <span className="platform-criteria-group" key={node.id}>Except: {criterionChips(node.child)}</span>;
-    if (node.kind === 'relation') return <span className="platform-criteria-group" key={node.id}>Related items: {criterionChips(node.target)}</span>;
-    if (node.kind === 'search') return <span className="platform-criteria-chip" key={node.id}>Matching “{node.text}”</span>;
-    if (!view || node.kind !== 'field' && node.kind !== 'state') return null;
-    return <span className="platform-criteria-chip" key={node.id}>
-          {'fieldId' in node && (view.fields.find(field => field.id === node.fieldId)?.label ?? node.fieldId)} {'value' in node ? `${conditionLabels[node.op] ?? node.op} ${Array.isArray(node.value.value) ? node.value.value.join(', ') : typeof node.value.value === 'object' ? JSON.stringify(node.value.value) : String(node.value.value)}` : 'state' in node ? node.state : ''}
-        </span>;
+  // A retained composition renders controls and content from its own confirmed
+  // snapshot. Its caller binds actions to that same snapshot before execution.
+  function render(view: VisitorTaskView | null, execute: TaskExecute) {
+    const header = <>
+      {(busy || conversationPending) && <p aria-live="polite">Updating your cards…</p>}
+      {error && <p role="alert">{error} <button type="button" onClick={() => { if (view) void execute('query.activate', { queryId: view.query.queryId }); }}>Try again</button></p>}
+      {!view && <button type="button" className="platform-website-text-link" onClick={() => void execute('query.create', {})}>Explore published items</button>}
+      {view && <>
+          {view.clarification && <aside aria-label="Task clarification"><p>{view.clarification.question}</p>{view.clarification.options.length > 0 && <ul>{view.clarification.options.map(option => <li key={option}>{option}</li>)}</ul>}<p>Tell me what you would like to change in chat or voice.</p></aside>}
+          {!view.records.length && <p>No published items match yet. Ask me to remove a constraint, try a broader search, or show everything again.</p>}
+          {!!view.links?.length && <nav aria-label="Reviewed publisher links">{view.links.map(link => <a key={link.id} href={link.url} target="_blank" rel="noopener noreferrer" onClick={() => { interrupt(); onInteraction(); }}>{link.label}</a>)}</nav>}
+      </>}
+    </>;
+    const foreground = view && <>
+          {view.comparison && <TaskComparison comparison={view.comparison}/>}
+          <AnimatePresence initial={false} mode="wait">{view.detail && <motion.section key={view.detail.record.id} aria-label="Record detail" data-task-record={view.detail.record.id} initial={{ opacity: 0, y: reduced ? 0 : 8 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, height: 0, overflow: 'hidden' }} transition={{ duration: reduced ? 0 : .22, ease: [.22, 1, .36, 1] }}>
+            <h3>{view.detail.record.name}</h3>
+            {view.detail.record.media && <figure><MediaImage assetId={view.detail.record.media.assetId} size="display" fit="contain" interactive={false}/>{view.detail.record.media.role === 'example' && <figcaption>Illustrative example</figcaption>}</figure>}
+            {!view.detail.record.blocks.length && view.detail.record.summary && <p className="platform-website-detail-intro">{view.detail.record.summary}</p>}
+            {view.detail.record.blocks.map(block => block.kind === 'heading' ? <h4 key={block.id}>{block.text}</h4> : <p key={block.id}>{block.text}</p>)}
+            {!!view.detail.values.length && <dl>{view.detail.values.map(field => <div key={field.fieldId}><dt>{field.label}</dt><dd>{field.text}</dd></div>)}</dl>}
+            {view.detail.nextBlockOffset != null && <button className="button secondary" onClick={() => void execute('record.detail', { recordId: view.detail!.record.id, blockOffset: view.detail!.nextBlockOffset, fieldOffset: view.detail!.fieldOffset ?? 0 })}>Continue reading</button>}
+            {view.detail.nextFieldOffset != null && <button className="button secondary" onClick={() => void execute('record.detail', { recordId: view.detail!.record.id, blockOffset: view.detail!.blockOffset ?? 0, fieldOffset: view.detail!.nextFieldOffset })}>More published details</button>}
+          </motion.section>}</AnimatePresence>
+    </>;
+    const after = view && <>
+          {!view.detail && !view.comparison && (!view.focus || ['query', 'records', 'clarification', 'links'].includes(view.focus)) && Object.values(view.result.exclusions).some(count => count > 0) && <p className="platform-website-query-note" aria-label="Records needing information">{Object.values(view.result.exclusions).reduce((sum, count) => sum + count, 0)} {Object.values(view.result.exclusions).reduce((sum, count) => sum + count, 0) === 1 ? 'item lacks' : 'items lack'} confirmed information for these filters.</p>}
+          {!view.detail && !view.comparison && (view.result.items[0]?.ordinal ?? 1) > 1 && <button type="button" className="button secondary" disabled={busy} onClick={() => void execute('view.back', {})}>Previous page</button>}
+          {!view.detail && !view.comparison && view.result.nextCursor && <button type="button" className="button secondary" disabled={busy} onClick={() => void execute('query.page', { cursor: view.result.nextCursor })}>Next page</button>}
+          {!!view.selectedRecords.length && <aside aria-label="Selection tray"><h3>{view.selectedRecords.length} selected</h3>{view.selectedRecords.map(record => <span key={record.id}>{record.name} </span>)}<button type="button" className="button secondary" disabled={view.selectedRecords.length < 2 || view.selectedRecords.length > 6} onClick={() => void execute('selection.compare', {})}>Compare selection</button></aside>}
+          {!!view.selectedRecords.length && <div aria-label="Compose an artifact">{(['brief', 'reading-list', 'itinerary'] as const).map(kind => <button className="button secondary" key={kind} disabled={busy || view.selectedRecords.length > 24} onClick={() => void execute('artifact.compose', { kind, title: kind === 'brief' ? 'Project brief' : kind === 'reading-list' ? 'Reading list' : 'Itinerary' })}>Create {kind}</button>)}</div>}
+          {(view.artifactSummaries?.length ?? 0) > 1 && <label>Open artifact<select value={(view.artifacts[0] as { id: string } | undefined)?.id ?? ''} onChange={event => void execute('artifact.open', { id: event.target.value })}>{view.artifactSummaries?.map(artifact => <option key={artifact.id} value={artifact.id}>{artifact.title}{artifact.saved ? ' · saved' : ''}</option>)}</select></label>}
+          <VisitorArtifacts artifacts={view.artifacts} busy={busy} run={(capability, input) => void execute(capability, input)} exportArtifact={id => { void execute('artifact.export', { id }).then(result => { if (!result) return; const exported = result as { filename: string; markdown: string }, url = URL.createObjectURL(new Blob([exported.markdown], { type: 'text/markdown' })), anchor = document.createElement('a'); anchor.href = url; anchor.download = exported.filename; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }); }}/>
+          {view.demoActions && <ActionReview business={view.business} selected={view.selectedRecords} busy={busy} run={(capability, input) => void execute(capability, input)}/>}
+
+          {view.research && <TaskResearch key={view.research.id} result={view.research} onInteraction={() => { interrupt(); onInteraction(); }}/> }
+          {view.map && <section aria-label="Evidence map"><h3>{view.map.label}</h3><p>Approximate map area; this is not a precise property boundary or navigation instruction.</p>{view.map.demo ? <p>Synthetic map preview · {view.map.latitude}, {view.map.longitude}</p> : <iframe title={`Approximate map of ${view.map.label}`} src={mapEmbedUrl({ label: view.map.label, latitude: view.map.latitude, longitude: view.map.longitude, zoom: view.map.zoom })} loading="lazy" referrerPolicy="no-referrer" sandbox="allow-scripts"/>}{view.map.sources.map(source => <p key={source.url}><a href={source.url} target="_blank" rel="noopener noreferrer">{source.title}</a></p>)}</section>}
+    </>;
+    return { header, foreground, after };
   }
-  const header = <>
-    {(busy || conversationPending) && <p aria-live="polite">Updating your cards…</p>}
-    {error && <p role="alert">{error} <button type="button" onClick={() => { const current = viewRef.current; if (current) void execute('query.activate', { queryId: current.query.queryId }); }}>Try again</button></p>}
-    {!view && <button type="button" className="platform-website-text-link" onClick={() => void execute('query.create', {})}>Explore published items</button>}
-    {view && <>
-      <div className="platform-website-filter-heading" data-website-result-heading tabIndex={-1}>
-        <TaskProgress busy={false} label={`${view.result.count.value} matching ${view.result.count.value === 1 ? 'item' : 'items'}`}/>
-        <button type="button" className="platform-website-text-link" onClick={() => void execute('view.reset', {})}>Show everything again</button>
-      </div>
-
-        {view.clarification && <aside aria-label="Task clarification"><p>{view.clarification.question}</p>{view.clarification.options.length > 0 && <ul>{view.clarification.options.map(option => <li key={option}>{option}</li>)}</ul>}<p>Tell me what you would like to change in chat or voice.</p></aside>}
-
-        <div className="platform-criteria-chips" aria-label="Active criteria">
-          {view.breadcrumbs.length > 1 && <span className="platform-criteria-chip">{view.breadcrumbs.slice(1).map(crumb => crumb.name).join(' / ')}</span>}
-          {view.query.searchText && <span className="platform-criteria-chip">Matching “{view.query.searchText}”</span>}
-          {criterionChips(view.query.where)}
-          {view.query.order.map(term => <span className="platform-criteria-chip" key={term.fieldId}>{view.fields.find(field => field.id === term.fieldId)?.label ?? term.fieldId} · {term.direction === 'asc' ? 'Low to high' : 'High to low'}</span>)}
-        </div>
-        {Object.values(view.result.exclusions).some(count => count > 0) && <p className="platform-website-query-note" aria-label="Records needing information">{Object.values(view.result.exclusions).reduce((sum, count) => sum + count, 0)} {Object.values(view.result.exclusions).reduce((sum, count) => sum + count, 0) === 1 ? 'item lacks' : 'items lack'} confirmed information for these filters.</p>}
-        {!view.records.length && <p>No published items match yet. Ask me to remove a constraint, try a broader search, or show everything again.</p>}
-        {!!view.links?.length && <nav aria-label="Reviewed publisher links">{view.links.map(link => <a key={link.id} href={link.url} target="_blank" rel="noopener noreferrer" onClick={() => { interrupt(); onInteraction(); }}>{link.label}</a>)}</nav>}
-    </>}
-  </>;
-  const foreground = view && <>
-    {(view.detail || view.comparison) && <button type="button" className="platform-website-text-link" onClick={() => void execute('view.back', { target: 'results' })}>Back to results</button>}
-        {view.comparison && <section aria-label="Selection comparison"><h3>Comparison</h3><div className="platform-query-table"><table><thead><tr><th>Record</th>{view.comparison.fields.map(field => <th key={field.id}>{field.label}</th>)}</tr></thead><tbody>{view.comparison.rows.map(row => <tr key={row.id} data-task-record={row.id}><th>{row.name}</th>{row.values.map(field => <td key={field.fieldId}>{field.text}</td>)}</tr>)}</tbody></table></div></section>}
-        <AnimatePresence initial={false} mode="wait">{view.detail && <motion.section key={view.detail.record.id} aria-label="Record detail" data-task-record={view.detail.record.id} initial={{ opacity: 0, y: reduced ? 0 : 8 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, height: 0, overflow: 'hidden' }} transition={{ duration: reduced ? 0 : .22, ease: [.22, 1, .36, 1] }}>
-          <h3>{view.detail.record.name}</h3>
-          {view.detail.record.media && <figure><MediaImage assetId={view.detail.record.media.assetId} size="display" fit="contain" interactive={false}/>{view.detail.record.media.role === 'example' && <figcaption>Illustrative example</figcaption>}</figure>}
-          {!view.detail.record.blocks.length && view.detail.record.summary && <p className="platform-website-detail-intro">{view.detail.record.summary}</p>}
-          {view.detail.record.blocks.map(block => block.kind === 'heading' ? <h4 key={block.id}>{block.text}</h4> : <p key={block.id}>{block.text}</p>)}
-          {!!view.detail.values.length && <dl>{view.detail.values.map(field => <div key={field.fieldId}><dt>{field.label}</dt><dd>{field.text}</dd></div>)}</dl>}
-          {view.detail.nextBlockOffset != null && <button className="button secondary" onClick={() => void execute('record.detail', { recordId: view.detail!.record.id, blockOffset: view.detail!.nextBlockOffset, fieldOffset: view.detail!.fieldOffset ?? 0 })}>Continue reading</button>}
-          {view.detail.nextFieldOffset != null && <button className="button secondary" onClick={() => void execute('record.detail', { recordId: view.detail!.record.id, blockOffset: view.detail!.blockOffset ?? 0, fieldOffset: view.detail!.nextFieldOffset })}>More published details</button>}
-        </motion.section>}</AnimatePresence>
-  </>;
-  const after = view && <>
-        {!view.detail && !view.comparison && (view.result.items[0]?.ordinal ?? 1) > 1 && <button type="button" className="button secondary" disabled={busy} onClick={() => void execute('view.back', {})}>Previous page</button>}
-        {!view.detail && !view.comparison && view.result.nextCursor && <button type="button" className="button secondary" disabled={busy} onClick={() => void execute('query.page', { cursor: view.result.nextCursor })}>Next page</button>}
-        {!!view.selectedRecords.length && <aside aria-label="Selection tray"><h3>{view.selectedRecords.length} selected</h3>{view.selectedRecords.map(record => <span key={record.id}>{record.name} </span>)}<button type="button" className="button secondary" disabled={view.selectedRecords.length < 2 || view.selectedRecords.length > 6} onClick={() => void execute('selection.compare', {})}>Compare selection</button></aside>}
-        {!!view.selectedRecords.length && <div aria-label="Compose an artifact">{(['brief', 'reading-list', 'itinerary'] as const).map(kind => <button className="button secondary" key={kind} disabled={busy || view.selectedRecords.length > 24} onClick={() => void execute('artifact.compose', { kind, title: kind === 'brief' ? 'Project brief' : kind === 'reading-list' ? 'Reading list' : 'Itinerary' })}>Create {kind}</button>)}</div>}
-        {(view.artifactSummaries?.length ?? 0) > 1 && <label>Open artifact<select value={(view.artifacts[0] as { id: string } | undefined)?.id ?? ''} onChange={event => void execute('artifact.open', { id: event.target.value })}>{view.artifactSummaries?.map(artifact => <option key={artifact.id} value={artifact.id}>{artifact.title}{artifact.saved ? ' · saved' : ''}</option>)}</select></label>}
-        <VisitorArtifacts artifacts={view.artifacts} busy={busy} run={(capability, input) => void execute(capability, input)} exportArtifact={id => { void execute('artifact.export', { id }).then(result => { if (!result) return; const exported = result as { filename: string; markdown: string }, url = URL.createObjectURL(new Blob([exported.markdown], { type: 'text/markdown' })), anchor = document.createElement('a'); anchor.href = url; anchor.download = exported.filename; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }); }}/>
-        {view.demoActions && <ActionReview business={view.business} selected={view.selectedRecords} busy={busy} run={(capability, input) => void execute(capability, input)}/>}
-
-        {view.research && <TaskResearch key={view.research.id} result={view.research} onInteraction={() => { interrupt(); onInteraction(); }}/> }
-        {view.map && <section aria-label="Evidence map"><h3>{view.map.label}</h3><p>Approximate map area; this is not a precise property boundary or navigation instruction.</p>{view.map.demo ? <p>Synthetic map preview · {view.map.latitude}, {view.map.longitude}</p> : <iframe title={`Approximate map of ${view.map.label}`} src={mapEmbedUrl({ label: view.map.label, latitude: view.map.latitude, longitude: view.map.longitude, zoom: view.map.zoom })} loading="lazy" referrerPolicy="no-referrer" sandbox="allow-scripts"/>}{view.map.sources.map(source => <p key={source.url}><a href={source.url} target="_blank" rel="noopener noreferrer">{source.title}</a></p>)}</section>}
-  </>;
-  return <TaskContext.Provider value={controls}><WebsiteTaskContext.Provider value={{ error, available: !!slug, view: open ? view : null, busy: busy || conversationPending, root, header, foreground, after, execute, patch }}>{children}</WebsiteTaskContext.Provider></TaskContext.Provider>;
+  return <TaskContext.Provider value={controls}><WebsiteTaskContext.Provider value={{ attachRoot, error, available: !!slug, view: open ? view : null, busy: busy || conversationPending, root, render, execute, patch }}>{children}</WebsiteTaskContext.Provider></TaskContext.Provider>;
 }

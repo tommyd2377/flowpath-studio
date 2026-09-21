@@ -1,11 +1,14 @@
+import { reserveVisitorQaRequest } from './visitor-qa-budget';
 import { readVisitorResponse } from './visitor-response-stream';
 import { VISITOR_KNOWLEDGE_POLICY } from './visitor-knowledge-context';
 import type { VisitorResponseRequest } from './visitor-response-connection';
 import { safeTestRecorder, type TestRecorder } from './visitor-test-events';
+import { modelConnectionFailure, VisitorTaskConnectionError } from './visitor-task-error';
+import { ANSWER_COMPOSITION_GUIDANCE } from './visitor-answer-composition';
 
 export type VisitorTaskTool = { type: string; name: string; description: string; parameters: object };
 export type VisitorTaskUsage = { inputTokens?: number; outputTokens?: number; totalTokens?: number };
-export type ToolResult = { data: unknown; silent?: boolean; directText?: string; displaySatisfied?: boolean };
+export type ToolResult = { data: unknown; silent?: boolean; directText?: string; /** Set only after the requested visual result is acknowledged. */ displaySatisfied?: boolean };
 export type VisitorTaskOptions = {
   model: string; channel: 'chat' | 'voice';
   responseWordLimit?: number;
@@ -16,17 +19,21 @@ export type VisitorTaskOptions = {
   reasoningEffort?: 'none' | 'low';
   onAnswer?: (text: string, round: number) => void;
   record?: TestRecorder;
+  qaSlug?: string;
   activeImage?: () => Promise<{ label: string; image_url: string } | undefined>;
   onModelTiming?: (stage: 'model' | 'model_output', status: 'started' | 'succeeded' | 'failed' | 'observed', durationMs: number) => void;
 };
 const record = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
 
 /** One bounded agent job. No automatic retries, parallel tools or hidden continuation. */
-export async function runVisitorTask(options: VisitorTaskOptions): Promise<{ text: string; silent?: boolean; displaySatisfied?: boolean }> {
+export async function runVisitorTask(options: VisitorTaskOptions): Promise<{ text: string; silent?: boolean; displaySatisfied?: boolean; answerPlacement?: 'supporting' }> {
   const observe = safeTestRecorder(options.record);
   try {
   const request = options.fetch ?? fetch;
-  const input: unknown[] = [{ role: 'user', content: JSON.stringify(options.context) }];
+  const currentContext = () => typeof options.context === 'function' ? options.context() : options.context;
+  const input: unknown[] = [{ role: 'user', content: JSON.stringify(currentContext()) }];
+  let displaySatisfied: true | undefined;
+  const canPresentAnswer = options.tools.some(tool => tool.name === 'present_answer');
   const maxTools = options.maxToolRounds ?? 4;
   const wordLimit = options.responseWordLimit ?? (options.channel === 'voice' ? 75 : 200);
   if (!Number.isInteger(wordLimit) || wordLimit < 20 || wordLimit > 300) throw new Error('Invalid response length preference.');
@@ -37,15 +44,18 @@ export async function runVisitorTask(options: VisitorTaskOptions): Promise<{ tex
     options.signal.throwIfAborted();
     const instructions = typeof options.instructions === 'function' ? await options.instructions() : options.instructions;
     const image = await options.activeImage?.();
-    input[0] = { role: 'user', content: image ? [{ type: 'input_text', text: JSON.stringify(options.context) }, { type: 'input_text', text: image.label }, { type: 'input_image', image_url: image.image_url, detail: 'low' }] : JSON.stringify(options.context) };
+    input[0] = { role: 'user', content: image ? [{ type: 'input_text', text: JSON.stringify(currentContext()) }, { type: 'input_text', text: image.label }, { type: 'input_image', image_url: image.image_url, detail: 'low' }] : JSON.stringify(currentContext()) };
     options.signal.throwIfAborted();
     const started = performance.now();
     options.onModelTiming?.('model', 'started', 0);
     const body = { model: options.model, store: false, reasoning: { effort: options.reasoningEffort ?? 'low' },
-      instructions: `${VISITOR_KNOWLEDGE_POLICY}\n${instructions}\n${options.channel === 'voice' ? 'Transcripts may be incomplete or overlapping; use the latest user request and current application state. Return a grounded answer for spoken delivery.' : 'Use the latest typed request, conversation and current application state. Return a grounded answer for the website visitor.'} Aim for at most ${wordLimit} words, preserving necessary qualifications and explicit visitor requests for detail. Never claim unconfirmed actions.`,
+      // Model instructions: wrap each task round with shared evidence rules and channel-specific answer limits.
+      instructions: `${VISITOR_KNOWLEDGE_POLICY}\n${instructions}\n${canPresentAnswer ? `${ANSWER_COMPOSITION_GUIDANCE}\nDisplay for this request: ${displaySatisfied ? 'confirmed' : 'not yet confirmed'}. Tool steps remaining: ${maxTools - round}.\n` : ''}${options.channel === 'voice' ? 'Transcripts may be incomplete or overlapping; use the latest user request and current application state. Return a grounded answer for spoken delivery.' : 'Use the latest typed request, conversation and current application state. Return a grounded answer for the website visitor.'} Aim for at most ${wordLimit} words, preserving necessary qualifications and explicit visitor requests for detail. Never claim unconfirmed actions.`,
       include: ['reasoning.encrypted_content'],
       input, tools: round < maxTools ? options.tools.map(tool => ({ ...tool, strict: false })) : [],
-      tool_choice: round < maxTools ? 'auto' : 'none', parallel_tool_calls: false, max_output_tokens: round === 0 ? 1200 : 500,
+      // Tool follow-ups need room for both processing tokens and the qualified
+      // answer. Shrinking to 500 cut off valid replies after a confirmed view.
+      tool_choice: round < maxTools ? 'auto' : 'none', parallel_tool_calls: false, max_output_tokens: 1200,
     };
     observe({ type: 'model.request', data: { channel: options.channel, round, body } });
     let result: Record<string, unknown>, firstOutput = false, provisional = '';
@@ -62,16 +72,26 @@ export async function runVisitorTask(options: VisitorTaskOptions): Promise<{ tex
         if (!/^\s*[\[{]/.test(provisional)) options.onAnswer?.(provisional, round);
       }
     };
-    if (options.responseRequest) result = await options.responseRequest(body, options.signal, undefined, event);
-    else {
-      const response = await request('https://api.openai.com/v1/responses', {
-        method: 'POST', headers: { Authorization: `Bearer ${options.apiKey}`, 'Content-Type': 'application/json' },
-        redirect: 'error', signal: options.signal, body: JSON.stringify({ ...body, stream: true }),
-      });
-      if (!response.ok) throw Object.assign(new Error(response.status === 429 ? 'The conversation backend is busy. Try again shortly.'
-        : response.status >= 500 ? 'The conversation backend is temporarily unavailable.' : 'The conversation backend rejected the request.'), { status: response.status });
-      result = await readVisitorResponse(response, options.signal, event);
+    const qaBudget = await reserveVisitorQaRequest(body, { slug: options.qaSlug, record: observe });
+    options.signal.throwIfAborted();
+    try {
+      if (options.responseRequest) result = await options.responseRequest(body, options.signal, undefined, event);
+      else {
+        const response = await request('https://api.openai.com/v1/responses', {
+          method: 'POST', headers: { Authorization: `Bearer ${options.apiKey}`, 'Content-Type': 'application/json' },
+          redirect: 'error', signal: options.signal, body: JSON.stringify({ ...body, stream: true }),
+        });
+        if (!response.ok) throw Object.assign(new Error(response.status === 429 ? 'The conversation backend is busy. Try again shortly.'
+          : response.status >= 500 ? 'The conversation backend is temporarily unavailable.' : 'The conversation backend rejected the request.'), { status: response.status });
+        result = await readVisitorResponse(response, options.signal, event);
+      }
+    } catch (error) {
+      options.signal.throwIfAborted();
+      options.onModelTiming?.('model', 'failed', performance.now() - started);
+      if (modelConnectionFailure(error)) throw new VisitorTaskConnectionError(error);
+      throw error;
     }
+    await qaBudget?.settle(result);
     observe({ type: 'model.response', data: { channel: options.channel, round, durationMs: performance.now() - started, result } });
     options.onModelTiming?.('model', result.status === 'completed' ? 'succeeded' : 'failed', performance.now() - started);
     const usage = record(result.usage), measured: VisitorTaskUsage = {};
@@ -89,7 +109,9 @@ export async function runVisitorTask(options: VisitorTaskOptions): Promise<{ tex
       const text = output.filter(item => item.type === 'message').flatMap(item => Array.isArray(item.content) ? item.content.map(record) : [])
         .filter(part => part.type === 'output_text' && typeof part.text === 'string').map(part => part.text).join('');
       if (!text.trim()) throw new Error('The conversation backend returned no answer.');
-      return { text: text.slice(0, 2000) };
+      // Ordinary final text may contain a calculation or other essential answer,
+      // even after a tool displayed records. Keep it visible without a new panel.
+      return { text: text.slice(0, 2000), displaySatisfied, ...(displaySatisfied ? { answerPlacement: 'supporting' as const } : {}) };
     }
     if (calls.length !== 1 || round === maxTools) throw new Error('The conversation backend exceeded its tool limit.');
     const call = calls[0];
@@ -100,8 +122,9 @@ export async function runVisitorTask(options: VisitorTaskOptions): Promise<{ tex
     const tool = await options.execute(call.name, call.arguments, options.signal);
     observe({ type: 'tool.result', data: { round, callId: call.call_id, name: call.name, result: tool, durationMs: performance.now() - toolStarted } });
     options.signal.throwIfAborted();
-    if (tool.silent) return { text: '', silent: true };
-    if (tool.directText?.trim()) return { text: tool.directText.slice(0, 2000), displaySatisfied: tool.displaySatisfied };
+    if (tool.displaySatisfied === true) displaySatisfied = true;
+    if (tool.silent) return { text: '', silent: true, displaySatisfied };
+    if (tool.directText?.trim()) return { text: tool.directText.slice(0, 2000), displaySatisfied };
     input.push(...output, { type: 'function_call_output', call_id: call.call_id, output: JSON.stringify(tool.data) });
   }
   throw new Error('The conversation backend exceeded its limit.');

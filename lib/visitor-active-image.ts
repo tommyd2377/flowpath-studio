@@ -15,7 +15,7 @@ export async function activeCarouselImage(slug: string, context: VisitorContext,
   // Be conservative: an unfamiliar question may still depend on the photo.
   if (request && !/\b(image|photo|picture|look|looking|see|visible|color|colour|appearance|depict|describe|this|that|it|foreground|background)\b/i.test(request)
     && /\b(hours?|contact|phone|email|address|polic(?:y|ies)|prices?|cost|availability|booking|appointments?|shipping|returns?|refunds?|delivery)\b/i.test(request)) return undefined;
-  const carousel = context.carousel, card = carousel?.cards.find(card => card.id === carousel.activeId);
+  const carousel = context.carousel, card = context.surface?.regions.find(region => region.visible && region.kind === 'photo') ?? carousel?.cards.find(card => card.id === carousel.activeId);
   if (!carousel?.open || card?.kind !== 'photo' || !media) return undefined;
   let asset = media.assets.find(asset => card.referenceIds.some(id => id === asset.id || id === `photo:${media.id}:${asset.id}`));
   if (!asset && context.taskSession) {
@@ -53,5 +53,6 @@ export async function activeCarouselImage(slug: string, context: VisitorContext,
   }
   await authorize(); signal.throwIfAborted();
   if (traceId) visitorDiagnostic({ traceId, channel: 'server', stage: 'image_prepare', status: 'succeeded', cacheHit, images: image ? 1 : 0, durationMs: performance.now() - started });
+  // Model image input: distinguish current photo pixels from identity, published descriptions and business facts.
   return image ? { label: `Actual current photo ${asset.id}. Published description: ${asset.caption || asset.alt}. Describe visible appearance; do not infer identity, ingredients, price, availability or capabilities from appearance.`, image_url: image.image_url } : undefined;
 }

@@ -72,7 +72,14 @@ test('actual owner review/apply/publish routes feed the same bounded mocked chat
       assert.equal(JSON.parse((await bridge.instructions()).split('\n').at(-1)!).scene, null, `${channel} must not receive stale visible ordinals while the viewport moves`);
       const blocked = await bridge.execute(JSON.stringify({ capabilityId: 'presentation.show', input: { handleId: 'retrieval', outputType: 'records' } }), new AbortController().signal, async () => { assert.fail('A bounded retrieval must not become a second results section.'); });
       assert.equal(blocked.data.status, 'unavailable');
-      await bridge.execute(JSON.stringify({ capabilityId: 'query.command', input: { text: 'Only reading minutes at least 6' } }), new AbortController().signal, async view => {
+      assert.ok(!bridge.tool.parameters.properties.capabilityId.enum.includes('query.command'));
+      const beforeRejectedCommand = await context.store.read(bridge.sessionId, context.publication);
+      const rejectedCommand = await bridge.execute(JSON.stringify({ capabilityId: 'query.command', input: { text: 'Show articles with their reading minutes' } }), new AbortController().signal, async () => { assert.fail('Raw prose must not become a displayed keyword filter.'); });
+      assert.equal(rejectedCommand.data.status, 'unavailable');
+      assert.deepEqual(await context.store.read(bridge.sessionId, context.publication), beforeRejectedCommand);
+      const localCommand = await bridge.command('Only reading minutes at least 6');
+      assert.equal(localCommand?.capabilityId, 'query.patch');
+      await bridge.execute(JSON.stringify(localCommand), new AbortController().signal, async view => {
         assert.equal(view.result.count.value, 2);
         await acknowledgeTaskDisplay(context.store, view.sessionId, context.publication, { operationId: view.operationId!, queryId: view.query.queryId, queryRevision: view.query.revision, resultSetId: view.result.resultSetId, sceneRevision: 3, recordIds: view.records.map(record => record.id) });
       });
@@ -93,7 +100,9 @@ test('actual owner review/apply/publish routes feed the same bounded mocked chat
       const control = createVisitorRealtimeControl({ taskSlug: site.slug, callId: 'voice_task_fixture', apiKey: 'synthetic', content: { ...context.site.content, visitorSpeaksFirst: true },
         initialAvailability: availability, signal: new AbortController().signal, reserveTurn: async () => availability, assertCurrent: async () => {},
         socketFactory: () => socket as unknown as VisitorControlSocket, onFatal: fail,
-        emit: event => { if (event.type === 'navigation') resolveNavigation(event); if (event.type === 'backend_idle') resolveDone(); if (event.type === 'task_error') fail(event.message); },
+        emit: event => { if (event.type === 'navigation') resolveNavigation(event); if (event.type === 'backend_idle') resolveDone(); if (event.type === 'task_error') fail(event.message);
+          if (event.type === 'response_started') void control.applyControl({ seq: 1, interactionRevision: event.interactionRevision, viewRevision: event.revision, ready: true,
+            context: control.recordingSnapshot().context, preparationAck: { revision: event.revision, status: 'applied' } }).catch(error => fail(String(error))); },
         fetch: async () => Response.json({ status: 'completed', output: ++calls === 1 ? [liveTool('visitor_task', { capabilityId: 'record.detail', input: { recordId: 'record-00001' } })] : [liveAnswer('Published details.')] }),
       });
       try {
@@ -104,7 +113,7 @@ test('actual owner review/apply/publish routes feed the same bounded mocked chat
         const view = event.target.view;
         assert.equal(socket.sent.some(value => value.content === 'Opened.'), false);
         await acknowledgeTaskDisplay(context.store, view.sessionId, context.publication, { operationId: view.operationId!, queryId: view.query.queryId, queryRevision: view.query.revision, resultSetId: view.result.resultSetId, sceneRevision: 1, recordIds: [view.detail!.record.id] });
-        await control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: event.id, status: 'applied' } });
+        await control.applyControl({ seq: 2, interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: event.id, status: 'applied' } });
         await done;
         assert.equal(calls, compound ? 2 : 1, 'Only simple confirmed navigation skips the closing model call');
         assert.ok(socket.sent.some(value => value.content === (compound ? 'Published details.' : 'Opened.')));

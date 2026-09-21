@@ -55,6 +55,7 @@ export function conversationWordLimit(content: ConversationContent, channel: 'vo
   const length = conversationSettings(content).verbosity;
   return (channel === 'voice' ? { minimal: 25, brief: 75, balanced: 120, detailed: 180 } : { minimal: 45, brief: 120, balanced: 200, detailed: 300 })[length];
 }
+// Model instructions: select the greeting or conversation language from published preferences.
 export function conversationLanguage(content: ConversationContent, greeting = false) {
   const language = conversationSettings(content).language;
   return language === 'auto' ? greeting ? 'Use the language of the supplied welcome text; if it is ambiguous, use English.' : 'Follow the language the visitor uses; switch if they request it.'

@@ -48,6 +48,7 @@ export function presentationJsonSchema(content: SiteContent, media?: MediaLibrar
   return schema;
 }
 
+// Model instructions: select published source references and layouts for the retained presentation path.
 export const presentationInstructions = `Choose the published sources that answer the visitor's request and arrange them as a visual site view. Use detail for one item, cards for several related items, comparison for two or more items requested side by side. Use gallery only for published photo/album/photos sources; use the photos source only for a request for all photos, otherwise choose matching photo or album IDs. Never mix photo sources into other layouts. Respect the approved photo connections: example means illustrative, never proof of the exact offering or location. Do not infer photo positions from the order of these source records; for an ordinal photo request without a named subject, use unavailable. Select at most six sources, with no duplicates. Use history to resolve follow-ups such as "the second one" or "show that again". If the requested information is not published, set status to unavailable and select contact if available, otherwise overview. Never treat similar information as proof of a missing price, date, booking, or availability. Do not generate business facts or a chat response. Only select sources and a layout.`;
 
 export function presentationSummary(plan: SitePresentation, content: SiteContent, media?: MediaLibrary | null) {

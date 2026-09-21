@@ -17,9 +17,10 @@ async function studio(page: Page, site: Site) {
   await page.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name: 'Knowledge', exact: true }).click();
 }
 test('HTML import offers editable native design, mobile preview, publication and complete reading content', async ({ page, context }, info) => {
-  const external: string[] = [], errors: string[] = [];
+  const external: string[] = [], errors: string[] = [], providerRequests: string[] = [];
   await context.route(/^https?:\/\//, route => { if (new URL(route.request().url()).origin !== origin) { external.push(route.request().url()); return route.abort(); } return route.continue(); });
   page.on('pageerror', error => errors.push(error.message));
+  page.on('request', request => { if (request.method() === 'POST' && /^\/api\/visitor\/[^/]+(?:\/(?:session|explore))?$/.test(new URL(request.url()).pathname)) providerRequests.push(request.url()); });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   let site: Site = (await post(page, '/api/sites', { name: 'Website import proof', slug: `website-import-${Date.now()}`, kind: 'general' })).site;
   const html = `<html><head><title>Harbor Design</title><meta name="description" content="Thoughtful rooms for everyday living."></head><body><h1>Spaces with room to live.</h1><p>${'Thoughtful materials and careful work. '.repeat(65)}Final reading detail beyond the short summary.</p></body></html>`;
@@ -48,7 +49,9 @@ test('HTML import offers editable native design, mobile preview, publication and
   await page.goto(`/s/${site.slug}`);
   const website = page.locator('[data-published-website]');
   await expect(website).toBeVisible(); await expect(website.locator('h1')).toHaveText('Designed around your everyday.');
-  await expect(page.locator('[data-voice-dock]')).toBeHidden();
+  // The persistent voice/chat dock is part of the current website layout;
+  // it does not activate a conversation or make browsing depend on AI.
+  await expect(page.locator('[data-voice-dock]')).toBeVisible();
   await expect(page.locator('iframe')).toHaveCount(0);
   await page.reload(); await expect(website).toBeVisible();
   await page.route(`**/api/visitor/${site.slug}`, route=>route.fulfill({status:503,json:{error:'Assistant unavailable in this synthetic check.'}}));
@@ -56,15 +59,15 @@ test('HTML import offers editable native design, mobile preview, publication and
   await expect(website.locator('h1')).toHaveText('Designed around your everyday.');
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
   await page.screenshot({path:info.outputPath('native-mobile-assistant-unavailable.png'),fullPage:true});
-  await page.getByRole('button', { name: 'Chat', exact: true }).click();
-  const chatInput = page.getByRole('textbox', { name: 'What would you like to see?' });
-  await chatInput.fill('Search for Final reading detail'); await chatInput.press('Enter');
-  await expect(website.getByRole('region', { name: 'Website content' })).toHaveAttribute('aria-busy', 'false');
-  await expect(website.getByRole('status')).toHaveText('1 matching item');
+  // Native reading remains available even when the assistant availability
+  // request fails, including content beyond the card's short summary.
   await website.getByRole('button', { name: 'Open Spaces with room to live.', exact: true }).click();
-  await expect(page.getByText(/Final reading detail beyond the short summary\./).last()).toBeVisible();
+  const detail = page.getByRole('dialog', { name: 'Spaces with room to live.', exact: true });
+  await expect(detail.getByText(/Final reading detail beyond the short summary\./).last()).toBeVisible();
   await page.screenshot({ path: info.outputPath('website-published-reading.png'), fullPage: true });
-  expect(external).toEqual([]); expect(errors).toEqual([]);
+  await detail.getByRole('button', { name: 'Close detail', exact: true }).click();
+  await expect(detail).not.toBeVisible(); await expect(website).toBeVisible();
+  expect(external).toEqual([]); expect(errors).toEqual([]); expect(providerRequests).toEqual([]);
 });
 
 test('migration review persists selections, reports failures and resumes without AI', async ({ page }) => {

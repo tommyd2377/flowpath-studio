@@ -21,12 +21,36 @@ async function ask(page: Page, text: string) {
 for (const mobile of [false, true]) test(`records real local chat navigation, problem markers and a durable searchable export${mobile ? ' on mobile' : ''}`, async ({ page }, info) => {
   if (mobile) { await page.setViewportSize({ width: 390, height: 844 }); await page.emulateMedia({ reducedMotion: 'reduce' }); }
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error' && /hydrat/i.test(message.text())) errors.push(message.text()); });
   await carouselFixture(page, true);
   const before = await (await api(page, { action: 'list' })).json();
   const id = await start(page); await recorder(page).locator('summary').click();
   await ask(page, 'Show me your photos');
-  await expect(page.locator('[data-ai-carousel]')).toContainText('9 matching items');
-  await expect(page.locator('[data-ai-carousel]')).toHaveAttribute('aria-busy', 'false');
+  const surface = page.locator('[data-information-surface]');
+  await expect(surface).toContainText('9 matching items');
+  await expect(surface).toHaveAttribute('aria-busy', 'false');
+  await expect(surface).toHaveAttribute('data-workspace-transition', 'settled');
+  const displayed = await surface.evaluate(node => {
+    const reading = node.querySelector('[data-workspace-scroll]')!.getBoundingClientRect();
+    return {
+      stateId: node.getAttribute('data-surface-state'),
+      regions: [...node.querySelectorAll<HTMLElement>('[data-surface-region]')].map(region => ({ id: region.dataset.surfaceRegion, role: region.dataset.role })),
+      records: [...new Set([...node.querySelectorAll<HTMLElement>('[data-task-record]')].filter(record => {
+        const box = record.getBoundingClientRect();
+        return box.width > 0 && box.height > 0 && box.bottom > Math.max(0, reading.top) && box.top < Math.min(innerHeight, reading.bottom) && box.right > Math.max(0, reading.left) && box.left < Math.min(innerWidth, reading.right);
+      }).map(record => record.dataset.taskRecord))],
+    };
+  });
+  // Geometry settles before the debounced viewport receipt is sent. Keep
+  // capture active until that receipt is actually recorded; stopping earlier
+  // cannot capture an event that has not happened yet.
+  await expect.poll(async () => {
+    const { events } = await (await api(page, { action: 'read', id })).json() as { events: TestEvent[] };
+    const receipt = events.filter(event => event.type === 'http.request')
+      .map(event => (event.data as { body?: { action?: string; ready?: boolean; recordIds?: string[] } }).body)
+      .findLast(body => body?.action === 'ack' || body?.action === 'scene' && body.ready);
+    return [...(receipt?.recordIds ?? [])].sort();
+  }).toEqual([...displayed.records].sort());
   await recorder(page).locator('summary').click();
   await recorder(page).getByLabel('Problem note (optional)').fill('Check the photograph selection');
   await recorder(page).getByRole('button', { name: 'Mark a problem' }).click();
@@ -36,7 +60,20 @@ for (const mobile of [false, true]) test(`records real local chat navigation, pr
   const events: TestEvent[] = (await (await api(page, { action: 'read', id })).json()).events;
   expect(events.some(event => event.type === 'chat.submitted')).toBe(true);
   expect(events.some(event => event.type === 'task.result')).toBe(true);
-  expect(events.some(event => event.type === 'screen.observed')).toBe(true);
+  const observed = events.filter(event => event.type === 'surface.observed').map(event => event.data as { stateId: string; requestId: string; pending?: string; regions: { id: string; role: string }[] }).findLast(event => event.stateId === displayed.stateId);
+  expect(observed?.regions).toEqual(displayed.regions);
+  expect(observed?.pending).toBeUndefined();
+  expect(events.some(event => event.type === 'surface.request.committed' && (event.data as { stateId: string; requestId: string }).stateId === displayed.stateId && (event.data as { requestId: string }).requestId === observed?.requestId)).toBe(true);
+  // Query surfaces confirm through the task ACK; workspace surfaces use
+  // surface.confirmed. Assert the actual recorded visible records, not just
+  // that an event with an old screen-event name exists.
+  const receipts = events.filter(event => event.type === 'http.request').map(event => event.data as { body?: { action?: string; operationId?: string; ready?: boolean; recordIds?: string[] } });
+  const acknowledgement = receipts.findLast(event => event.body?.action === 'ack')?.body;
+  expect(acknowledgement?.recordIds?.length).toBeGreaterThan(0);
+  // Responsive layout can settle after the initial ACK. Its subsequent ready
+  // scene receipt must describe what is actually visible in the settled view.
+  const receipt = receipts.findLast(event => event.body?.operationId === acknowledgement?.operationId && (event.body?.action === 'ack' || event.body?.action === 'scene' && event.body.ready))?.body;
+  expect([...(receipt?.recordIds ?? [])].sort()).toEqual([...displayed.records].sort());
   expect(events.filter(event => event.type === 'problem.marked')).toHaveLength(1);
   expect(events.at(-1)?.type).toBe('recording.stopped');
   expect((await (await api(page, { action: 'list' })).json()).sessions.length).toBe(before.sessions.length + 1);

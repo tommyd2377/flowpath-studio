@@ -3,7 +3,7 @@ import { visitorWorkLabel } from './visitor-progress';
 import { recordedVisitorFetch, registerRecordingVoice } from '@/lib/visitor-test-recording-client';
 import { recordBrowserTestEvent } from '@/lib/visitor-test-events';
 
-import { createStartupAudioGuard, needsStartupAudioGuard, monitorLiveAudio, waitForIce } from './gpt-live/browser';
+import { createStartupAudioGuard, monitorLiveAudio, waitForIce } from './gpt-live/browser';
 import { createLiveIdleTimer, DEFAULT_LIVE_IDLE_TIMEOUT_MS, liveIdleMessage } from './gpt-live/idle';
 import type { LiveAudioState } from './gpt-live/protocol';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -12,6 +12,7 @@ import type { VisitorAvailability } from './visitor-model';
 import type { VisitorContext, VisitorHistory, VisitorControlCapability, VisitorControlUpdate } from './visitor-realtime-context';
 import { readVisitorRealtimeEvents, visitorAvailabilitySchema, VISITOR_SESSION_MS, type VisitorRealtimeEvent } from './visitor-realtime';
 import { visitorDiagnostic, diagnosticError, type VisitorDiagnostic } from './visitor-diagnostics';
+import { prepareVisitorVoiceRequest } from './visitor-request-preparation';
 
 type Options = {
   prepare?: (signal: AbortSignal) => Promise<void>;
@@ -19,11 +20,14 @@ type Options = {
   onAvailability: (value: VisitorAvailability) => void;
   onPlan: (event: Extract<VisitorRealtimeEvent, { type: 'plan' }>, signal: AbortSignal) => void | Promise<void>;
   onTranscript: (event: Extract<VisitorRealtimeEvent, { type: 'transcript' }>) => void;
+  onAnswer?: (event: Extract<VisitorRealtimeEvent, { type: 'answer_completed' }>) => void;
+  onRequest?: (phase: 'prepare' | 'start' | 'finish' | 'cancel', revision: number, signal?: AbortSignal) => void | Promise<void>;
   onGreetingProgress?: (text: string) => void;
   onGreetingInterrupted?: () => void;
   onAudioActivity?: (state: LiveAudioState) => void;
   onNavigate: (event: Extract<VisitorRealtimeEvent, { type: 'navigation' }>, signal: AbortSignal, onVisible: () => void) => Promise<'applied' | 'unavailable' | 'failed' | 'cancelled'>;
 };
+
 type Session = {
   traceId: string; startedAt: number; diagnosticStage: VisitorDiagnostic['stage'];
   controller: AbortController; peer?: RTCPeerConnection; stream?: MediaStream; context?: AudioContext; audio?: HTMLAudioElement;
@@ -37,7 +41,7 @@ type Session = {
   snapshot: VisitorContext; lastSent: string; sending: boolean; dirty: boolean;
   sent: Map<number, { interactionRevision: number; ready: boolean; time: number }>; transcripts: Map<string, string>;
   navigation?: AbortController; navigationAck?: VisitorControlUpdate['navigationAck']; planAck?: VisitorControlUpdate['planAck'];
-  protectOpening?: boolean;
+  preparation?: AbortController; preparationRevision?: number; preparationAck?: VisitorControlUpdate['preparationAck'];
   startup?: ReturnType<typeof createStartupAudioGuard>; stopMonitor?: () => void; audioState?: LiveAudioState; resumeAfterQuiet?: boolean; resumeAfterRevision?: number;
   idle?: ReturnType<typeof createLiveIdleTimer>;
   finish?: () => void; unregisterRecording?: () => void;
@@ -65,7 +69,7 @@ export function useVisitorSession() {
       // Ask the server to finalize while media stays negotiated. Mute immediately.
       session.startup?.setInputEnabled(false);
       if (session.audio) session.audio.muted = true;
-      session.end(); session.navigation?.abort(); session.unregisterRecording?.();
+      session.end(); session.navigation?.abort(); session.preparation?.abort(); session.unregisterRecording?.();
       const timeout = setTimeout(() => session.finish?.(), 6500);
       let released = false;
       session.finish = () => {
@@ -106,7 +110,7 @@ export function useVisitorSession() {
   }, []);
   const manualInterrupt = useCallback(() => {
     const session = current.current; if (!session) return;
-    setInputReady(false); setActivity(''); setWorking(false); session.interactionRevision++; session.navigation?.abort();
+    setInputReady(false); setActivity(''); setWorking(false); session.interactionRevision++; session.navigation?.abort(); session.preparation?.abort(); session.preparationAck = undefined;
     // Keep the peer open; pause input until the owner accepts the manual context.
     session.startup?.setInputEnabled(false); session.resumeAfterQuiet = true;
     setUpdating(true); setPhase('connecting');
@@ -200,11 +204,10 @@ export function useVisitorSession() {
       session.dirty = false;
       try {
         session.snapshot = options.getContext();
-        const payload = { audio: session.audioState, interactionRevision: session.interactionRevision, viewRevision: session.viewRevision, ready: session.readySent || ready(), context: session.snapshot, ...(session.navigationAck ? { navigationAck: session.navigationAck } : {}), ...(session.planAck ? { planAck: session.planAck } : {}) };
+        const payload = { audio: session.audioState, interactionRevision: session.interactionRevision, viewRevision: session.viewRevision, ready: session.readySent || ready(), context: session.snapshot, ...(session.navigationAck ? { navigationAck: session.navigationAck } : {}), ...(session.planAck ? { planAck: session.planAck } : {}), ...(session.preparationAck ? { preparationAck: session.preparationAck } : {}) };
         const serialized = JSON.stringify(payload);
         if (serialized === session.lastSent) return;
         if (session.seq >= 299) throw new Error('This conversation has reached its view-update limit. You can continue by typing.');
-        if (payload.ready && !session.readySent && session.protectOpening) session.startup?.start();
         const seq = ++session.seq; session.lastSent = serialized; session.sending = true; session.lastPostedAt = Date.now(); session.readySent = payload.ready;
         session.sent.set(seq, { interactionRevision: payload.interactionRevision, ready: payload.ready, time: Date.now() }); armAckDeadline();
         const response = await recordedVisitorFetch(`/api/visitor/${encodeURIComponent(options.slug)}/session/control`, {
@@ -248,7 +251,9 @@ export function useVisitorSession() {
       if (!alive()) { stream.getTracks().forEach(track => track.stop()); return; }
       session.controller.signal.throwIfAborted(); setStartupStage('Connecting voice…');
       session.stream = stream;
-      session.startup = createStartupAudioGuard({ stream, enabled: needsStartupAudioGuard(navigator) });
+      // Keep capture/AEC and owner-ACK gating, but never mute input for the
+      // greeting: visitors must be able to interrupt on mobile as on desktop.
+      session.startup = createStartupAudioGuard({ stream, enabled: false });
       session.inputReadyTimer = setInterval(observeInput, 50);
       session.startup.setInputEnabled(false);
       for (const track of stream.getAudioTracks()) track.onended = () => fail(session, 'Microphone access ended. Tap the wave to start again.');
@@ -317,7 +322,7 @@ export function useVisitorSession() {
         if (!alive()) { if (event.type === 'ended' || event.type === 'error') session.finish?.(); return; }
           if (event.type === 'session') {
           if (session.sdpReady) throw new Error('The voice connection returned a duplicate session.');
-          options.onAvailability(event.availability); session.control = event.control; session.protectOpening = event.protectOpening;
+          options.onAvailability(event.availability); session.control = event.control;
           session.unregisterRecording = registerRecordingVoice(options.slug, event.control);
           session.idle?.setTimeoutMs(event.idleTimeoutMs ?? DEFAULT_LIVE_IDLE_TIMEOUT_MS);
           const remaining = Math.min(VISITOR_SESSION_MS, event.expiresAt - Date.now());
@@ -350,6 +355,7 @@ export function useVisitorSession() {
         else if (event.type === 'transcript') {
           // An accepted user utterance remains history even if they then browse.
           if (session.transcripts.get(event.id) === event.text || event.role === 'assistant' && event.interactionRevision !== session.interactionRevision) return;
+          if (event.role === 'user') options.onGreetingInterrupted?.();
           session.transcripts.set(event.id, event.text); options.onTranscript(event);
         } else if (event.type === 'greeting_progress') {
           if (event.revision === 0 && session.revision === 0 && event.interactionRevision === session.interactionRevision) options.onGreetingProgress?.(event.text);
@@ -357,6 +363,9 @@ export function useVisitorSession() {
           if (event.revision === session.revision && event.interactionRevision === session.interactionRevision && session.thinking) setActivity(visitorWorkLabel[event.stage]);
         } else if (event.type === 'result_ready') {
           if (event.revision === session.revision && event.interactionRevision === session.interactionRevision) session.resultReady = true;
+        } else if (event.type === 'answer_completed') {
+          // Accepted backend text is dialogue context, not an acoustic transcript.
+          if (event.revision === session.revision && event.interactionRevision === session.interactionRevision) options.onAnswer?.(event);
         } else if (event.type === 'activity') {
           if (event.revision === session.revision && event.interactionRevision === session.interactionRevision) setActivity(event.activity === 'images' ? 'Finding images…' : event.activity === 'map' ? 'Preparing the map…' : 'Searching the web…');
         } else if (event.type === 'speech_started') {
@@ -365,14 +374,18 @@ export function useVisitorSession() {
           session.revision = Math.max(session.revision, event.revision); session.navigation?.abort(); setMessage('');
           session.userSpeaking = true; session.speaking = false; session.playingId = undefined; restingPhase();
         } else if (event.type === 'speech_stopped') { if (session.appliedInteractionRevision !== session.interactionRevision) return; session.userSpeaking = false; restingPhase(); }
-        else if (event.type === 'backend_idle') { if (event.interactionRevision === session.interactionRevision && event.revision === session.revision) { session.thinking = false; setWorking(false); setActivity(''); restingPhase(); } }
+        else if (event.type === 'backend_idle') { if (event.interactionRevision === session.interactionRevision && event.revision === session.revision) { await options.onRequest?.('finish', event.revision); session.thinking = false; setWorking(false); setActivity(''); restingPhase(); } }
         else if (event.type === 'task_error') {
           if (event.interactionRevision !== session.interactionRevision || event.revision !== session.revision) return;
+          session.preparation?.abort(); session.preparationAck = undefined;
+          await options.onRequest?.('finish', event.revision);
           setActivity(''); setWorking(false); setMessage(event.message); session.thinking = false; restingPhase();
           visitorDiagnostic({ traceId: session.traceId, channel: 'browser', stage: 'backend', status: 'failed', sessionElapsedMs: performance.now() - session.startedAt, revision: session.revision, interactionRevision: session.interactionRevision, ...diagnosticError(new Error(event.message)) });
         }
         else if (event.type === 'response_cancelled') {
           if (event.interactionRevision !== session.interactionRevision || event.revision <= session.revision) return;
+          session.preparation?.abort(); session.preparationAck = undefined;
+          await options.onRequest?.('cancel', event.revision);
           session.revision = event.revision; session.navigation?.abort();
           session.navigationAck = undefined; session.planAck = undefined;
           setActivity(''); setWorking(false); setMessage(''); session.thinking = false; session.speaking = false; session.playingId = undefined; session.taskStartedAt = undefined;
@@ -383,9 +396,19 @@ export function useVisitorSession() {
           visitorDiagnostic({ traceId: session.traceId, channel: 'browser', stage: 'backend', status: 'cancelled', reason: 'stale', revision: session.revision, interactionRevision: session.interactionRevision });
         } else if (event.type === 'response_started') {
           if (event.interactionRevision !== session.interactionRevision || event.revision < session.revision) return;
+          if (session.preparationRevision === event.revision) return;
           if (event.revision > session.revision) session.navigation?.abort();
           if (event.revision > session.revision) { session.taskStartedAt = performance.now(); session.taskAudioReported = false; session.resultReady = false; session.resultAudioReported = false; }
           setActivity(''); setWorking(true); setMessage(''); session.revision = event.revision; session.thinking = true; restingPhase();
+          session.preparation?.abort(); const preparation = new AbortController(); session.preparation = preparation;
+          session.preparationRevision = event.revision; session.preparationAck = undefined;
+          // Keep the event reader and microphone responsive while task restoration finishes.
+          prepareVisitorVoiceRequest({ signal: preparation.signal,
+            current: () => alive() && session.revision === event.revision && session.interactionRevision === event.interactionRevision,
+            prepare: () => options.onRequest?.('prepare', event.revision, preparation.signal),
+            begin: () => options.onRequest?.('start', event.revision, preparation.signal),
+            acknowledge: status => { session.snapshot = options.getContext(); session.preparationAck = { revision: event.revision, status }; schedule(0); },
+          });
         } else if (event.type === 'playback_started') {
           if (event.interactionRevision !== session.interactionRevision || session.resumeAfterQuiet) return;
           audio.muted = false; session.playingId = event.responseId; session.speaking = true; restingPhase();

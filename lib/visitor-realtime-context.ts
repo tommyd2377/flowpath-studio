@@ -19,6 +19,7 @@ export const visitorControlSchema = z.object({
   viewRevision: z.number().int().min(0).max(1000).default(0),
   navigationAck: z.object({ id: z.string().min(1).max(200), status: z.enum(['applied', 'failed', 'cancelled', 'unavailable']) }).strict().optional(),
   planAck: z.object({ revision: z.number().int().min(0).max(1000), status: z.enum(['applied', 'failed', 'cancelled']) }).strict().optional(),
+  preparationAck: z.object({ revision: z.number().int().min(1).max(1000), status: z.enum(['applied', 'failed', 'cancelled']) }).strict().optional(),
   audio: z.object({ inputActive: z.boolean(), outputActive: z.boolean() }).strict().optional(),
   ready: z.boolean(), end: z.boolean().optional(), context: visitorContextSchema,
 }).strict();
@@ -27,7 +28,7 @@ export const visitorControlCapabilitySchema = z.object({ id: z.string().uuid(), 
 export type VisitorControlCapability = z.infer<typeof visitorControlCapabilitySchema>;
 export const visitorNavigationSchema = z.discriminatedUnion('kind', [
   carouselNavigationSchema.extend({ kind: z.literal('carousel') }).strict(),
-  z.object({ kind: z.literal('answer'), text: z.string().max(2000) }).strict(),
+  z.object({ kind: z.literal('answer'), text: z.string().max(8000), relationship: z.enum(['related', 'new-subject']).optional(), placement: z.literal('supporting').optional() }).strict(),
   z.object({ kind: z.literal('task'), view: visitorTaskViewSchema }).strict(),
   z.object({ kind: z.literal('workspace'), batch: workspaceBatchSchema }).strict(),
   z.object({ kind: z.literal('explore'), result: exploreResultSchema.optional(), command: exploreCommandSchema.optional() }).strict().refine(value => Boolean(value.result) !== Boolean(value.command), 'Supply one search view or command.'),
@@ -41,9 +42,20 @@ export const visitorNavigationSchema = z.discriminatedUnion('kind', [
 ]);
 
 /** Screen data is a bounded hint, never an authority for facts or actions. */
-export function validateVisitorContext(value: unknown, content: SiteContent, catalog?: KnowledgeCatalog, media?: MediaLibrary): VisitorContext {
+export function validateVisitorContext(value: unknown, content: SiteContent, catalog?: KnowledgeCatalog, media?: MediaLibrary, tenantId?: string): VisitorContext {
   try {
     const context = visitorContextSchema.parse(value ?? {});
+    if (context.surface) {
+      const authority = publishedWorkspace(content, catalog, media, context.externalResults);
+      if (context.surface.publicationId !== authority.publicationId || tenantId && context.surface.tenantId !== tenantId) throw new Error();
+      if (context.surface.regions.filter(region => region.role === 'primary').length !== 1 || new Set(context.surface.regions.map(region => region.id)).size !== context.surface.regions.length) throw new Error();
+      for (const region of context.surface.regions) {
+        const known = region.referenceIds.flatMap(id => authority.records.filter(record => record.reference.id === id || referenceKey(record.reference) === id));
+        if (known.length) region.title = known.map(record => record.name).join(' / ').slice(0, 200);
+        if (region.referenceIds.length && !known.length && !context.taskSession) throw new Error();
+      }
+      delete context.screen; delete context.expandedSourceIds;
+    }
     if (context.carousel) {
       const authority = publishedWorkspace(content, catalog, media, context.externalResults);
       for (const card of [...context.carousel.cards, ...context.carousel.recentCards ?? []]) {

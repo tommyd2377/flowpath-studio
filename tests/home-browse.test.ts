@@ -42,13 +42,13 @@ test('new model IDs for identical cards resolve to the existing instance within 
   assert.equal(result.aliases?.['generated-again'], 'first');
   assert.throws(() => applyWorkspaceBatch(state, workspaceBatch(state, [{ kind: 'add', object: { ...first, references: [{ ...first.references[0], id: 'white' }] } }]), authority), /different content/);
 });
-test('website navigation deduplicates overlapping collections and groups equal names without merging facts', () => {
+test('website navigation deduplicates overlapping references and preserves distinct same-name offerings', () => {
   const graph = structuredClone(catalog);
   graph.entities.push({ ...graph.entities.find(entity => entity.id === 'blue')!, id: 'another-blue', attributes: { price: 900 }, summary: 'A different published account.' });
   graph.collections.push({ id: 'overlap', name: 'Overlapping selection', entityIds: ['blue', 'another-blue', 'white'] });
   const authority = publishedWorkspace(content, graph, media), before = JSON.stringify(graph);
   const sections = websiteSections(authority, content, graph, media), entries = sections.flatMap(section => section.entries);
-  assert.equal(entries.filter(entry => entry.name === 'Blue Bowl').length, 1);
+  assert.equal(entries.filter(entry => entry.name === 'Blue Bowl').length, 2);
   assert.equal(entries.some(entry => entry.id.startsWith('fact:')), false);
   assert.equal(new Set(entries.map(entry => entry.id)).size, entries.length);
   const plan = explicitWorkspaceOpen('Open Blue Bowl', emptyWorkspace(authority.publicationId), authority, graph)!;

@@ -1,4 +1,5 @@
 import 'server-only';
+import type { TestRecorder } from './visitor-test-events';
 import { AppError } from './errors';
 import { visitorAccess } from './visitor-store';
 import { demoExploreResult, exploreSettings, mapForQuery, type AnnotationTarget, type ExploreKind } from './explore-model';
@@ -10,9 +11,10 @@ import { searchExplore } from './explore-provider';
 import { assertNoStripeTestPaidAi } from './billing-ai-guard';
 import { recordPlatformEvent } from './platform-events';
 import { visitorDiagnostic, diagnosticError } from './visitor-diagnostics';
+import { retainVisitorResearch } from './visitor-research-cache';
 
 /** Both HTTP and voice use the same transactional search allowance and publication checks. */
-export async function authorizedExplore(slug: string, input: { query: string; kind: ExploreKind; requestId: string; parentTraceId?: string; annotationTarget?: AnnotationTarget }, signal: AbortSignal, expectedPublication?: string) {
+export async function authorizedExplore(slug: string, input: { query: string; kind: ExploreKind; requestId: string; parentTraceId?: string; annotationTarget?: AnnotationTarget }, signal: AbortSignal, expectedPublication?: string, record?: TestRecorder) {
   const startedAt = performance.now();
   visitorDiagnostic({ traceId: input.requestId, parentTraceId: input.parentTraceId, channel: 'server', stage: 'search', status: 'started', operation: input.kind });
   try {
@@ -41,7 +43,7 @@ export async function authorizedExplore(slug: string, input: { query: string; ki
   try {
     if (usesProvider) await recordPlatformEvent(reserved.siteId, { ...observed, type: 'provider_usage', status: 'reserved' }).catch(() => undefined);
     const found = reserved.availability.live ? await searchExplore(input.query, input.kind, settings, signal, {
-      subject,
+      subject, record, qaSlug: slug,
       onProgress: stage => visitorDiagnostic({ traceId: input.requestId, parentTraceId: input.parentTraceId, channel: 'server', stage: stage === 'sources_ready' ? 'search_provider_done' : 'search', status: 'observed', operation: input.kind, durationMs: performance.now() - startedAt }),
       onUsage: usage => { void recordPlatformEvent(reserved.siteId, { ...observed, type: 'provider_usage', status: usage ? 'confirmed' : 'unknown', ...(usage ? { usage } : {}) }).catch(() => undefined); },
     }) : demoExploreResult(input.query, input.kind);
@@ -49,6 +51,7 @@ export async function authorizedExplore(slug: string, input: { query: string; ki
     const current = await visitorAccess(slug);
     if (JSON.stringify(current.content) !== snapshot || current.siteId !== preview.siteId) throw new AppError('This site changed while searching. Reload to continue.', 409);
     if (signal.aborted) throw new AppError('Search cancelled.', 499);
+    retainVisitorResearch(slug, snapshot, result);
     visitorDiagnostic({ traceId: input.requestId, parentTraceId: input.parentTraceId, channel: 'server', stage: 'search', status: 'succeeded', operation: input.kind, durationMs: performance.now() - startedAt, images: result.images.length, sources: result.sources.length });
     return { result, searchRemaining: current.availability.searchRemaining };
   } catch (error) {

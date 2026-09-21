@@ -35,8 +35,17 @@ export async function prepareCarouselVoice(page: Page, welcome = false) {
   await page.addInitScript(() => {
     const availability = { enabled: true, mode: 'both', live: true, chatRemaining: 25, voiceRemaining: 5, resetsAt: '' };
     let sink: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let preparation: { revision: number; interactionRevision: number; queued: unknown[] } | undefined;
     const state: Harness = { controls: [], requests: [], chats: [], inputActive: false, outputActive: false, outgoing: [], audioMuted: false, ack: true, failControl: false, deferConnection: false, deferTrack: false, neverResolvePlay: false, connect() {}, attach() {}, revision: 0, calls: 0, closed: 0, aborted: 0, tracks: [], deferPermission: false, releasePermission() {}, offers: [],
-      emit(event) { const frame = event as { type: string; revision?: number; interactionRevision?: number }; if (frame.revision !== undefined) state.revision = Math.max(state.revision, frame.revision); sink?.enqueue(new TextEncoder().encode(`${JSON.stringify(['response_started', 'plan', 'playback_started', 'transcript', 'navigation'].includes(frame.type) ? { interactionRevision: 0, ...frame } : frame)}\n`)); },
+      emit(event) {
+        const frame = event as { type: string; revision?: number; interactionRevision?: number };
+        if (frame.revision !== undefined) state.revision = Math.max(state.revision, frame.revision);
+        if (frame.type === 'response_started') preparation = { revision: frame.revision!, interactionRevision: frame.interactionRevision ?? 0, queued: [] };
+        else if (['ended', 'error', 'response_cancelled'].includes(frame.type)) preparation = undefined;
+        else if (preparation && frame.revision === preparation.revision && (frame.interactionRevision ?? 0) === preparation.interactionRevision
+          && ['navigation', 'plan', 'backend_idle', 'answer_completed', 'result_ready'].includes(frame.type)) { preparation.queued.push(event); return; }
+        sink?.enqueue(new TextEncoder().encode(`${JSON.stringify(['response_started', 'plan', 'playback_started', 'transcript', 'navigation'].includes(frame.type) ? { interactionRevision: 0, ...frame } : frame)}\n`));
+      },
       disconnect() { sink?.close(); sink = undefined; } };
     window.__visitorVoice = state;
     class Track { clone() { const clone = new Track(); state.outgoing.push(clone); return clone; } enabled = true; stopped = false; onended: (() => void) | null = null; stop() { this.stopped = true; } }
@@ -65,6 +74,7 @@ export async function prepareCarouselVoice(page: Page, welcome = false) {
       const path = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url;
       if (/\/api\/visitor\/[^/]+$/.test(path) && !init?.method) return Response.json({ availability });
       if (/\/api\/visitor\/[^/]+\/session$/.test(path)) {
+        preparation = undefined;
         state.calls++; state.requests.push(JSON.parse(String(init?.body))); state.offers.push(JSON.parse(String(init?.body)).sdp);
         const body = new ReadableStream<Uint8Array>({ start(controller) { sink = controller; }, cancel() { state.aborted++; sink = undefined; } });
         state.emit({ type: 'session', sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n', availability, expiresAt: Date.now() + 120000, control: { id: '00000000-0000-4000-8000-000000000001', token: 'a'.repeat(43) } });
@@ -75,6 +85,14 @@ export async function prepareCarouselVoice(page: Page, welcome = false) {
         const { update } = JSON.parse(String(init?.body)); state.controls.push(update); if (update.end) queueMicrotask(() => state.emit({ type: 'ended', message: 'Ended.' }));
         if (state.failControl) return Response.json({ error: 'Synthetic control failure' }, { status: 503 });
         if (state.ack && !update.end) state.emit({ type: 'control_applied', seq: update.seq, interactionRevision: update.interactionRevision, revision: state.revision, ready: update.ready });
+        if (update.end || preparation && update.interactionRevision > preparation.interactionRevision) preparation = undefined;
+        // Mirror the owner: restored task state is confirmed before display work.
+        if (state.ack && preparation && update.ready && update.preparationAck?.revision === preparation.revision
+          && update.interactionRevision === preparation.interactionRevision) {
+          const pending = preparation; preparation = undefined;
+          if (update.preparationAck.status === 'applied') pending.queued.forEach(event => state.emit(event));
+          else state.emit({ type: 'task_error', revision: pending.revision, interactionRevision: pending.interactionRevision, message: 'The current information could not be prepared.' });
+        }
         return new Response(null, { status: 204 });
       }
       if (/\/api\/visitor\/[^/]+$/.test(path) && init?.method === 'POST') {

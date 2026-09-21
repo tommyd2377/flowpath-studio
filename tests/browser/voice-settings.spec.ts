@@ -52,6 +52,18 @@ test('The Voice saves independent choices, keeps drafts private and previews all
     await expect(choice).toHaveAttribute('aria-pressed', 'true');
     const expected = siteStyle({ ...site.draft, visitor: { ...site.draft.visitor!, conversation: { color: id as VoiceColor } } })['--voice-accent'];
     await expect(preview.locator('canvas[data-wave-color]')).toHaveAttribute('data-wave-color', expected);
+    // Every publisher-selected hue retains the original transparent tails.
+    await expect.poll(() => preview.locator('canvas[data-wave-color]').evaluate((canvas: HTMLCanvasElement) => {
+      const context = canvas.getContext('2d')!;
+      const peak = (fraction: number) => {
+        const pixels = context.getImageData(Math.round((canvas.width - 1) * fraction), 0, 1, canvas.height).data;
+        let alpha = 0;
+        for (let i = 3; i < pixels.length; i += 4) alpha = Math.max(alpha, pixels[i]);
+        return alpha;
+      };
+      const center = peak(.5);
+      return center > 80 && peak(0) < center * .1 && peak(1) < center * .1 && peak(.13) > peak(0) + 10 && peak(.87) > peak(1) + 10;
+    }), `${id} waveform fades gradually at both ends`).toBe(true);
     expect(await preview.evaluate(el => getComputedStyle(el).getPropertyValue('--platform-accent'))).toBe(palette);
     await preview.getByRole('button', { name: 'Chat', exact: true }).click();
     await expect(preview.locator('.site-wave')).toHaveCount(0);
@@ -120,4 +132,37 @@ test('The Voice saves independent choices, keeps drafts private and previews all
   await expect(page.getByRole('combobox', { name: 'How visitors interact' })).toHaveValue('off');
   await expect(page.getByRole('button', { name: 'Ocean voice color', exact: true })).toHaveAttribute('aria-pressed', 'true');
   expect(errors).toEqual([]); expect(external).toEqual([]); expect(voiceCalls).toEqual([]);
+});
+
+test('Voice and Chat controls stay centered on the divider without an outer bubble', async ({ page, context }, info) => {
+  const voiceCalls: string[] = [];
+  await context.route(/^https?:\/\//, route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
+  page.on('request', request => { if (/\/api\/visitor\/.*\/session$/.test(request.url())) voiceCalls.push(request.url()); });
+  let site: Site = (await post(page, '/api/sites', { name: 'Conversation dock fixture', slug: `conversation-dock-${Date.now()}`, kind: 'general' })).site;
+  site = (await post(page, `/api/sites/${site.id}`, { action: 'save', revision: site.revision, content: { ...site.draft,
+    sections: Array.from({ length: 6 }, (_, index) => ({ id: `topic-${index}`, title: `Published topic ${index + 1}`, body: 'Synthetic published information for checking the controls while browsing a full page. '.repeat(4) })),
+    visitor: { ...site.draft.visitor, mode: 'both', conversation: { ...site.draft.visitor?.conversation, color: 'jade' } }, style: { ...site.draft.style, entry: 'website' } } })).site;
+  site = (await post(page, `/api/sites/${site.id}`, { action: 'publish', revision: site.revision })).site;
+  await page.goto(`/s/${site.slug}`);
+  const controls = page.getByRole('group', { name: 'Conversation mode' });
+  for (const width of [345, 1440]) {
+    await page.setViewportSize({ width, height: 931 });
+    for (const mode of ['Voice', 'Chat', 'Voice']) {
+      await controls.getByRole('button', { name: mode, exact: true }).click();
+      await expect(controls.getByRole('button', { name: mode, exact: true })).toHaveAttribute('aria-pressed', 'true');
+      await expect(controls).toHaveCSS('border-top-width', '0px'); await expect(controls).toHaveCSS('box-shadow', 'none');
+      await expect(controls).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+      await expect.poll(() => controls.evaluate(element => {
+        const bounds = element.getBoundingClientRect(), divider = element.closest('[data-ai-controls]')!.getBoundingClientRect().bottom;
+        return Math.abs(bounds.y + bounds.height / 2 - divider);
+      })).toBeLessThan(1);
+      expect((await controls.getByRole('button', { name: mode, exact: true }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      await page.screenshot({ path: info.outputPath(`conversation-${mode.toLowerCase()}-${width}.png`) });
+    }
+    const before = await controls.boundingBox();
+    await page.mouse.wheel(0, 500); await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(0);
+    await expect.poll(async () => Math.abs((await controls.boundingBox())!.y - before!.y)).toBeLessThan(1);
+    await page.evaluate(() => scrollTo(0, 0));
+  }
+  expect(voiceCalls).toEqual([]);
 });

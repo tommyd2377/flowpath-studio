@@ -1,5 +1,7 @@
 # Template visual evidence
 
+These are the September 16 baseline captures. See the [September 18 website refinement](../website-design/README.md) for current desktop/mobile compositions, motion evidence and verification.
+
 Captured from the production build in isolated Chromium on 2026-09-16. All business information, contacts, prices and illustrations are synthetic. These are unedited screenshots of actual rendered components, not design mockups. Full-page desktop captures use 1440 × 1000 viewports; mobile captures use 390 × 844. Studio frames exercise the embedded mobile layout on a desktop viewport. Sparse layouts also exercise 320px width.
 
 ## Nine content/template combinations

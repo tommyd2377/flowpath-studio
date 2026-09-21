@@ -12,6 +12,20 @@ const album = authority.records.find(record => record.reference.kind === 'album'
 const object = objectInput(album);
 const proposal = { batch: { sceneRevision: null, operations: [{ kind: 'add', object }, { kind: 'focus', instanceId: object.instanceId }] }, clarification: '' };
 
+test('the task photo collection opens the same approved assets through workspace tools', () => {
+  const photos = authority.records.find(record => record.reference.kind === 'collection' && record.reference.id === 'published-photos')!;
+  const gallery = objectInput(photos);
+  assert.equal(gallery.component, 'gallery');
+  assert.deepEqual(photos.members?.map(ref => ref.id), semanticMediaFixture.assets.map(asset => asset.id));
+  const apply = (references = gallery.references) => applyWorkspaceBatch(state, workspaceBatch(state, [{ kind: 'add', object: { ...gallery, references } }]), authority);
+  assert.equal(apply().state.objects[0].component, 'gallery');
+  assert.throws(() => apply([{ ...photos.reference, revisionId: 'unpublished' }]));
+  const changed = publishedWorkspace(content, semanticFixture, { ...semanticMediaFixture, id: 'different-media-revision' });
+  assert.throws(() => applyWorkspaceBatch(state, workspaceBatch(state, [{ kind: 'add', object: gallery }]), changed), /publication changed/);
+  const collision = publishedWorkspace(content, { ...semanticFixture, collections: [...semanticFixture.collections, { ...structuredClone(semanticFixture.collections[0]), id: 'published-photos' }] }, semanticMediaFixture);
+  assert.equal(collision.records.find(record => record.reference.id === 'media-published-photos-1')?.component, 'gallery');
+});
+
 test('photo tools leave publication and request bookkeeping to the server', () => {
   const schema = JSON.stringify(workspaceToolJsonSchema());
   for (const field of ['schemaVersion', 'requestId', 'publicationId', 'baseRevision']) assert.equal(schema.includes(`"${field}"`), false, field);
@@ -42,4 +56,20 @@ test('server-bound photo operations still reject changed views and unapproved me
     assert.throws(() => parseWorkspaceToolReply(invalid, state, authority));
   }
   assert.throws(() => parseWorkspaceToolReply({ ...proposal, batch: { ...proposal.batch, baseRevision: 0 } }, state, authority), 'Partial legacy identity cannot bypass validation');
+});
+
+test('strict tool nulls omit only optional chart fields across object operations', () => {
+  for (const kind of ['add', 'replace'] as const) {
+    const item = { ...object, metric: null };
+    const operation = kind === 'add' ? { kind, object: item, origin: null } : { kind, objects: [item] };
+    const raw = { batch: { sceneRevision: null, operations: [operation] }, clarification: '' };
+    const original = structuredClone(raw);
+    const batch = parseWorkspaceToolReply(raw, state, authority).batch!;
+    assert.equal(applyWorkspaceBatch(state, batch, authority).state.objects[0].metric, undefined);
+    assert.deepEqual(raw, original, 'Provider observations remain intact');
+  }
+  for (const invalid of [{ ...object, metric: 'unapproved' }, { ...object, references: null }, { ...object, unexpected: null }]) {
+    assert.throws(() => parseWorkspaceToolReply({ batch: { operations: [{ kind: 'add', object: invalid }] }, clarification: '' }, state, authority));
+  }
+  assert.throws(() => parseWorkspaceToolReply({ batch: { operations: [{ kind: 'reset', objects: [{ ...object, metric: null }] }] }, clarification: '' }, state, authority), /Reset must be empty/);
 });

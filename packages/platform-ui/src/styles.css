@@ -1,3 +1,10 @@
+@import './website.css';
+
+/* Feather only the backdrop. Content, scrollbars and focus outlines stay above
+   this static, non-interactive paint layer without filters or masks. */
+.platform-information-frame { position: relative; isolation: isolate; }
+.platform-information-frame::before { content: ''; position: absolute; inset: 12px; z-index: -1; pointer-events: none; border-radius: inherit; background: var(--platform-bg, #171c16); box-shadow: 0 0 20px 12px var(--platform-bg, #171c16); }
+
 .platform-container { container: platform-explorer / inline-size; width: 100%; min-width: 0; max-width: 1360px; margin: 0 auto; }
 .platform-explorer {
   --platform-accent: #c6af86;
@@ -783,3 +790,32 @@
   .platform-website[data-template] .platform-website-count { margin-top: 0; }
 }
 @media (prefers-reduced-motion: reduce) { .platform-website[data-template] * { scroll-behavior: auto; } }
+
+/* Published quantitative information: shared, accessible bars with exact values. */
+.platform-published-chart { margin: 0; }
+.platform-published-chart figcaption { font: 500 1.25rem/1.4 var(--platform-heading-font, Georgia, serif); margin-bottom: 1.25rem; }
+.platform-published-chart button { display: grid; grid-template-columns: 1fr auto; gap: .6rem 1rem; width: 100%; min-height: 64px; padding: .85rem 0; text-align: left; border: 0; border-bottom: 1px solid var(--platform-border, #8884); background: transparent; color: var(--platform-text); cursor: pointer; font: inherit; }
+.platform-published-chart button[aria-pressed=true] { background: color-mix(in srgb, var(--platform-accent, #859c78) 10%, transparent); }
+.platform-chart-track { grid-column: 1 / -1; height: 6px; background: var(--platform-border, #8884); border-radius: 3px; overflow: hidden; }
+.platform-chart-track > span { display: block; height: 100%; border-radius: inherit; background: var(--platform-accent, #859c78); }
+.platform-published-chart small { display: block; margin-top: 1rem; color: var(--platform-muted); }
+
+/* Typed task comparisons adapt to their actual surface width, including support columns. */
+.platform-task-comparison { container: task-comparison / inline-size; }
+.platform-task-comparison .platform-task-comparison-count { margin: 0 24px 16px 0; color: var(--platform-muted); font-size: 12px; line-height: 1.5; }
+.platform-task-comparison-table { overflow-x: auto; }
+.platform-task-comparison table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.platform-task-comparison th, .platform-task-comparison td { text-align: left; vertical-align: top; padding: 14px; border-bottom: 1px solid var(--platform-border, #8884); font-size: 15px; font-weight: 400; line-height: 1.6; }
+.platform-task-comparison thead th { font-family: var(--platform-heading-font); font-size: 18px; font-weight: var(--platform-heading-weight, 500); }
+.platform-task-comparison thead th:first-child, .platform-task-comparison tbody th { width: 140px; font-family: inherit; font-size: 12px; color: var(--platform-muted); }
+.platform-task-comparison-records { display: none; }
+@container task-comparison (max-width: 640px) {
+  .platform-task-comparison-table { display: none; }
+  .platform-task-comparison-records { display: grid; gap: 24px; }
+  .platform-task-comparison-records article { min-width: 0; }
+  .platform-task-comparison-records article h3 { margin: 0 0 12px; font-size: 20px; }
+  .platform-task-comparison-records dl { margin: 0; }
+  .platform-task-comparison-records dl > div { display: grid; grid-template-columns: minmax(80px, .65fr) minmax(0, 1.35fr); gap: 12px; border-top: 1px solid var(--platform-border, #8884); padding: 10px 0; }
+  .platform-task-comparison-records dt { font-size: 12px; line-height: 1.6; color: var(--platform-muted); }
+  .platform-task-comparison-records dd { margin: 0; font-size: 15px; line-height: 1.6; overflow-wrap: anywhere; }
+}

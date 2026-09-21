@@ -1,6 +1,6 @@
 /** Passive observations only. Never feed recordings back into model or UI state. */
 export type TestObservation = { type: string; data: unknown; traceId?: string; turn?: number; truncated?: boolean; redacted?: boolean };
-export type TestRecorder = (event: TestObservation) => void;
+export type TestRecorder = ((event: TestObservation) => void) & { readonly recordingId?: string };
 export type TestEvent = TestObservation & {
   at: number; monotonicMs: number; source: 'browser' | 'server'; sequence: number;
   truncated?: boolean; redacted?: boolean;
@@ -11,9 +11,10 @@ export const RECORDING_EVENT_BYTES = 240_000;
 const noop: TestRecorder = () => {};
 
 /** An observer can never throw into the application it observes. */
-export function safeTestRecorder(observer?: TestRecorder): TestRecorder {
+export function safeTestRecorder(observer?: TestRecorder, recordingId?: () => string | undefined): TestRecorder {
   if (!observer || observer === noop || process.env.NODE_ENV === 'production') return noop;
-  return event => { try { observer(sanitizeTestObservation(event)); } catch {} };
+  const wrapped: TestRecorder = event => { try { observer(sanitizeTestObservation(event)); } catch {} };
+  return Object.defineProperty(wrapped, 'recordingId', { get: recordingId ?? (() => observer.recordingId) });
 }
 
 // Installed only by the local recorder controls. Server paths use explicit,
@@ -63,7 +64,9 @@ export function sanitizeTestObservation(event: TestObservation) {
     if (typeof value !== 'object') return '[omitted]';
     if (seen.has(value)) return '[circular]';
     seen.add(value);
-    if (value instanceof Error) return copy({ name: value.name, message: value.message, stack: value.stack }, depth + 1);
+    if (value instanceof Error) return copy({ name: value.name, message: value.message, stack: value.stack,
+      ...(typeof (value as Error & { code?: unknown }).code === 'string' ? { code: (value as Error & { code?: string }).code } : {}),
+      ...(value.cause !== undefined ? { cause: value.cause } : {}) }, depth + 1);
     if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) { redacted = true; return '[binary omitted]'; }
     if (Array.isArray(value)) {
       if (value.length > 1024) truncated = true;
@@ -72,9 +75,10 @@ export function sanitizeTestObservation(event: TestObservation) {
       return result;
     }
     const entries = Object.entries(value);
+    const audioEvent = 'type' in value && typeof value.type === 'string' && /(?:^|\.)(?:input_|output_)?audio\.(?:append|delta|done)$/.test(value.type);
     if (entries.length > 512) truncated = true;
     return Object.fromEntries(entries.slice(0, 512).map(([key, item]) => {
-      if (secret.test(key) || key === 'audio' && typeof item === 'string') { redacted = true; return [key, '[redacted]']; }
+      if (secret.test(key) || (key === 'audio' || audioEvent && key === 'delta') && typeof item === 'string') { redacted = true; return [key, '[redacted]']; }
       return [text(key), copy(item, depth + 1)];
     }));
   }

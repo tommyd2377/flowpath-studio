@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-const customizationSchema = z.enum(['palette', 'typography', 'textSize', 'spacing', 'customAccent']);
-/** Additive settings: an absent template keeps the saved legacy presentation. */
+const customizationSchema = z.enum(['palette', 'typography', 'textSize', 'spacing', 'customAccent', 'websiteMotion']);
+/** Additive settings: absent templates remain valid and resolve at render time. */
 export const siteDesignSchema = z.object({
   layout: z.enum(['balanced', 'editorial', 'compact']),
   palette: z.enum(['midnight', 'forest', 'parchment', 'linen', 'ink', 'cloud', 'sage', 'cobalt', 'coral', 'orchid', 'sunshine']),
@@ -12,11 +12,25 @@ export const siteDesignSchema = z.object({
   typography: z.enum(['literary', 'modern', 'humanist']).optional(),
   textSize: z.enum(['standard', 'larger']).optional(),
   spacing: z.enum(['compact', 'comfortable', 'spacious']).optional(),
+  websiteMotion: z.enum(['off', 'subtle', 'expressive']).optional(),
   customAccent: z.boolean().optional(),
-  customized: z.array(customizationSchema).max(5).optional(),
+  customized: z.array(customizationSchema).max(6).optional(),
 }).strict();
 export type SiteDesign = z.infer<typeof siteDesignSchema>;
 export type WebsiteTemplate = NonNullable<SiteDesign['template']>;
+/** Upgrade the website renderer without changing saved branding or assistant tokens. */
+export function effectiveWebsiteTemplate(style?: Pick<SiteDesign, 'template' | 'layout'>): WebsiteTemplate {
+  return style?.template ?? (style?.layout === 'editorial' ? 'editorial' : 'clarity');
+}
+/** Presentation hints from approved field labels; never infer a value or capability. */
+export function websiteValueRole(field: { label: string; aliases?: string[] }): 'price' | 'price-terms' | undefined {
+  const names = [field.label, ...(field.aliases ?? [])].map(name => name.trim());
+  if (names.some(name => /^(?:(?:price|pricing|size|rate|fee|cost)[\s/]+)+(?:terms|conditions|qualifications)$/i.test(name))) return 'price-terms';
+  if (names.some(name => /^(?:(?:listed|starting|base|unit|hourly|daily|monthly|annual)\s+)?(?:price|rate|fee|cost)(?:\s*\([^)]*\)|\s*\[[^\]]*\])?$/i.test(name))) return 'price';
+  return undefined;
+}
+/** Optional for old publications; never changes assistant motion. */
+export type WebsiteMotion = NonNullable<SiteDesign['websiteMotion']>;
 
 export const SITE_PALETTES = {
   midnight: { label: 'Midnight', background: '#151a24', surface: '#202938', text: '#f2f5fb', muted: '#b6c4d8', line: '#52617a', accent: '#acbeff' },
@@ -55,15 +69,15 @@ export const FONT_PAIRINGS = {
 } as const;
 
 export const WEBSITE_TEMPLATES: Record<WebsiteTemplate, { name: string; description: string; defaults: SiteDesign }> = {
-  editorial: { name: 'Editorial', description: 'Warm typography, quiet details, room for your story.', defaults: { version: 1, template: 'editorial', layout: 'editorial', palette: 'linen', paletteVersion: 2, typography: 'literary', textSize: 'standard', spacing: 'spacious', customAccent: false } },
-  showcase: { name: 'Showcase', description: 'Confident headlines, generous images, distinctive collections.', defaults: { version: 1, template: 'showcase', layout: 'balanced', palette: 'ink', paletteVersion: 2, typography: 'modern', textSize: 'standard', spacing: 'comfortable', customAccent: false } },
-  clarity: { name: 'Clarity', description: 'An inviting introduction and a clear path to every detail.', defaults: { version: 1, template: 'clarity', layout: 'compact', palette: 'cloud', paletteVersion: 2, typography: 'humanist', textSize: 'standard', spacing: 'comfortable', customAccent: false } },
+  editorial: { name: 'Editorial', description: 'Warm typography, quiet details, room for your story.', defaults: { version: 1, template: 'editorial', layout: 'editorial', palette: 'linen', paletteVersion: 2, typography: 'literary', textSize: 'standard', spacing: 'spacious', customAccent: false, websiteMotion: 'subtle' } },
+  showcase: { name: 'Showcase', description: 'Confident headlines, generous images, distinctive collections.', defaults: { version: 1, template: 'showcase', layout: 'balanced', palette: 'ink', paletteVersion: 2, typography: 'modern', textSize: 'standard', spacing: 'comfortable', customAccent: false, websiteMotion: 'subtle' } },
+  clarity: { name: 'Clarity', description: 'An inviting introduction and a clear path to every detail.', defaults: { version: 1, template: 'clarity', layout: 'compact', palette: 'cloud', paletteVersion: 2, typography: 'humanist', textSize: 'standard', spacing: 'comfortable', customAccent: false, websiteMotion: 'subtle' } },
 };
 
 export function selectWebsiteTemplate(style: SiteDesign | undefined, template: WebsiteTemplate): SiteDesign {
   if (style?.template === template) return { ...style };
   const next = { ...WEBSITE_TEMPLATES[template].defaults, entry: style?.entry ?? 'website' };
-  if (!style?.template) return next;
+  if (!style?.template) return style?.websiteMotion ? { ...next, websiteMotion: style.websiteMotion, customized: ['websiteMotion'] } : next;
   const previous = WEBSITE_TEMPLATES[style.template].defaults;
   // Explicit choices travel with the publisher; untouched defaults follow the template.
   const customized = customizationSchema.options.filter(key => style.customized?.includes(key) || style[key] !== undefined && style[key] !== previous[key]);

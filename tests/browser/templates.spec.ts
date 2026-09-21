@@ -1,48 +1,12 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
-import sharp from 'sharp';
 import { templateFixtures } from '../../fixtures/template-sites';
 import { CURATED_PALETTES, SITE_PALETTES, WEBSITE_TEMPLATES } from '@thevoice/platform-ui/site-design';
 import type { Site } from '../../lib/site-model';
 import { textPdf } from '../knowledge-fixtures';
 import { websiteTaskFixture } from '../../fixtures/visitor-tasks';
 
-const origin = 'http://127.0.0.1:3225';
-async function post(page: Page, path: string, data: unknown) {
-  const response = await page.request.post(path, { headers: { Origin: origin }, data });
-  const body = await response.json(); expect(response.ok(), JSON.stringify(body)).toBe(true); return body;
-}
-async function read(page: Page, id: string): Promise<Site> { return (await (await page.request.get(`/api/sites/${id}`)).json()).site; }
-async function studio(page: Page, site: Site, panel = 'Branding') {
-  await page.goto('/'); const picker = page.getByRole('combobox', { name: 'Current site', exact: true }); await expect(picker).toBeEnabled();
-  if (await picker.inputValue() !== site.id) await picker.selectOption(site.id);
-  await page.getByRole('navigation', { name: 'Workspace', exact: true }).getByRole('button', { name: panel, exact: true }).click();
-}
-async function createFixture(page: Page, index: number) {
-  const fixture = templateFixtures[index];
-  let site: Site = (await post(page, '/api/sites', { name: fixture.content.name, slug: `template-${fixture.id}-${Date.now()}`, kind: 'general' })).site;
-  const upload = async (name: string, contentType: string, bytes: Buffer) => {
-    const response = await page.request.post(`/api/sites/${site.id}/files`, { headers: { Origin: origin, 'Content-Type': contentType, 'X-File-Name': name, 'X-Site-Revision': String(site.revision) }, data: bytes });
-    const body = await response.json(); expect(response.ok(), JSON.stringify(body)).toBe(true); site = body.site; return body.fileId as string;
-  };
-  const seed = await upload('synthetic.txt', 'text/plain', Buffer.from('Name: Synthetic starting point\nKind: item\nSummary: Replaced by the fixture in review.'));
-  let state = await post(page, `/api/sites/${site.id}/knowledge`, { action: 'analyze', revision: site.revision, fileId: seed, requestId: randomUUID() });
-  let candidate = state.candidates.at(-1);
-  state = await post(page, `/api/sites/${site.id}/knowledge`, { action: 'revise', revision: site.revision, candidateId: candidate.id, catalog: { ...fixture.catalog, id: candidate.catalog.id } }); candidate = state.candidates.at(-1);
-  site = (await post(page, `/api/sites/${site.id}/knowledge`, { action: 'apply', revision: site.revision, candidateId: candidate.id, candidateRevisionId: candidate.catalog.id })).site;
-  if (index !== 2) {
-    // Original synthetic still-life illustrations; no stock photos or external requests.
-    const images: string[] = [];
-    for (let i = 0; i < 2; i++) {
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1100"><defs><linearGradient id="g" x2="1" y2="1"><stop stop-color="${i ? '#abb9ae' : '#d2c0a6'}"/><stop offset="1" stop-color="${i ? '#455e52' : '#998570'}"/></linearGradient><filter id="s"><feGaussianBlur stdDeviation="25"/></filter></defs><rect width="1400" height="1100" fill="url(#g)"/><ellipse cx="720" cy="830" rx="440" ry="85" fill="#202319" opacity=".2" filter="url(#s)"/><path d="M270 530 Q700 330 1140 540 L1010 790 Q700 920 380 790Z" fill="#eae2d2"/><ellipse cx="705" cy="525" rx="435" ry="160" fill="#f5efe5"/><ellipse cx="705" cy="520" rx="370" ry="115" fill="#b9aa8e"/><path d="M380 510 Q650 260 920 580 Q1000 460 1080 460 Q830 670 380 510" fill="#687953"/><circle cx="750" cy="510" r="65" fill="#b98450"/><circle cx="570" cy="535" r="48" fill="#c99355"/></svg>`;
-      images.push(await upload(`synthetic-study-${i}.png`, 'image/png', await sharp(Buffer.from(svg)).png().toBuffer()));
-    }
-    site = (await post(page, `/api/sites/${site.id}/media`, { revision: site.revision, library: { schemaVersion: 1, id: randomUUID(), assets: images.map((id, i) => ({ id, width: 1400, height: 1100, caption: `A study in form ${i + 1}`, alt: 'Synthetic still-life illustration', credit: 'Original synthetic test illustration' })), albums: [{ id: 'studies', title: 'A closer look', description: 'Illustrative studies for this synthetic website.', assetIds: images }], associations: images.map((assetId, i) => ({ id: `site-${i}`, assetId, targetType: 'site', primary: i === 0, role: 'example' })) } })).site;
-  }
-  site = (await post(page, `/api/sites/${site.id}`, { action: 'save', revision: site.revision, content: { ...site.draft, ...fixture.content, visitor: { ...site.draft.visitor, enabled: false }, opening: { ...site.draft.opening, copyMode: 'personalized' }, style: { ...WEBSITE_TEMPLATES.editorial.defaults, entry: 'website' } } })).site;
-  return site;
-}
-
+import { createFixture, origin, post, read, studio } from './website-fixtures';
 for (const [index, fixture] of templateFixtures.entries()) test(`${fixture.id}: all templates on desktop, mobile and embedded preview`, async ({ page, context }, info) => {
   test.setTimeout(180_000);
   const errors: string[] = [], external: string[] = []; page.on('pageerror', error => errors.push(error.message));
@@ -231,7 +195,7 @@ test('sparse content, larger type and a hundred long labels remain usable in eve
   }
 });
 
-test('assistant cards share template tokens and stable published references, close and reopen without changing the website', async ({ page }, info) => {
+test('assistant information shares template tokens and stable published references, closes and reopens without changing the website', async ({ page }, info) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   let site = await createFixture(page, 0);
   site = (await post(page, `/api/sites/${site.id}`, { action: 'save', revision: site.revision, content: { ...site.draft, visitor: { ...site.draft.visitor, enabled: true, mode: 'chat' }, style: { ...WEBSITE_TEMPLATES.editorial.defaults, entry: 'website' } } })).site;
@@ -243,11 +207,14 @@ test('assistant cards share template tokens and stable published references, clo
   if (!await input.isVisible()) await page.getByRole('button', { name: 'Chat', exact: true }).click();
   await input.fill('Show me your photos'); await input.press('Enter');
   await expect(carousel).toContainText('2 matching items'); await expect(carousel).toHaveAttribute('aria-busy', 'false');
-  await expect(carousel.locator('[data-carousel-card] img')).toBeVisible();
+  await expect(carousel.locator('[data-surface-region] img').first()).toBeVisible();
   expect(await carousel.evaluate(element => getComputedStyle(element).getPropertyValue('--platform-heading-font'))).toContain('Newsreader');
   const websiteBackground = await page.locator('[data-site-template]').evaluate(element => getComputedStyle(element).backgroundColor);
   await expect(page.locator('.platform-conversation-dock')).toHaveCSS('background-color', websiteBackground);
-  await carousel.getByRole('button', { name: 'Next card', exact: true }).click(); const active = await carousel.getAttribute('data-active-card');
+  await carousel.getByRole('button', { name: /Read details/ }).last().click();
+  await expect(carousel.getByRole('region', { name: 'Record detail' })).toBeVisible();
+  await expect(carousel).toHaveAttribute('aria-busy', 'false');
+  const active = await carousel.getAttribute('data-active-card');
   await page.screenshot({ path: info.outputPath('editorial-assistant.png') });
   await page.keyboard.press('Escape'); await expect(carousel).toBeHidden(); expect(await website.innerText()).toBe(before);
   await input.click(); await expect(carousel).toHaveAttribute('data-active-card', active!);

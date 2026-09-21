@@ -2,6 +2,8 @@
 
 Implemented in Studio for assignment 2 (September 2026). This replaces the visitor's single active presentation with a bounded set of independently addressable objects. The independent FlowPath app and shared GPT-Live transport core are unchanged. See the [acceptance ledger and offline demo](adaptive-workspace-acceptance.md) for verification and limitations.
 
+The visitor assistant now uses the [evolving information surface](information-surface.md). Its composition, answer-state history and media continuity supersede the visitor carousel/focus-return behavior described in this older shared-workspace document. Shared workspace primitives still serve the lab and retained consumers.
+
 ## Identity and state
 
 `packages/platform-ui/src/workspace.ts` is the framework-independent contract and pure reducer. A registered **component** (`information`, `detail`, `photo`, `map`, `collection`, `gallery`, `comparison`, `actions`, `external`) is a rendering vocabulary entry, not an object ID. A **reference** is `{kind, id, revisionId}` identifying current published content or an accepted, session-only external result. An **instanceId** identifies one object in the visitor's session; two objects may use the same component and even the same published reference.

@@ -3,6 +3,7 @@ import { referenceKey, workspaceReferenceSchema, type WorkspaceAuthority, type W
 import type { KnowledgeCatalog } from '@thevoice/platform-ui/contracts';
 
 const inputSchema = z.object({ query: z.string().max(2000), reference: workspaceReferenceSchema.nullable(), offset: z.number().int().min(0).max(100000) }).strict();
+// Model tool: describe bounded published-text search and exact-reference pagination without changing the view.
 export const publishedContentTool = {
   type: 'function', name: 'read_published_content',
   description: 'Read or search the full published website text without changing the screen or searching the web. For a site question, use its words as query, reference:null, offset:0. To read a particular source fully, use its returned reference, query:"", and offset:0, then nextOffset as needed. Results are excerpts, not an exhaustive offering list unless complete. Structured facts and their qualifications remain authoritative.',

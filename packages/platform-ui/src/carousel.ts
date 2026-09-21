@@ -34,13 +34,14 @@ export function moveCarousel(state: CarouselPosition, ids: string[], target: str
   return { ...state, previousId: state.activeId, activeId: target, expanded: false, revision: state.revision + 1, positions: { ...state.positions, [state.key]: target } };
 }
 /** Identical finalized navigation words in chat and voice use this command contract. */
-export function carouselCommand(text: string): { action: 'next' | 'previous' | 'expand' | 'collapse' | 'dismiss' | 'open' | 'back' | 'start_over' | 'home'; ordinal?: number } | null {
+export function carouselCommand(text: string): { action: 'next' | 'previous' | 'expand' | 'collapse' | 'dismiss' | 'open' | 'back' | 'forward' | 'start_over' | 'home'; ordinal?: number } | null {
   const normalized = text.trim().toLowerCase().replace(/[.!?]+$/, '');
   if (/^(?:(?:show|go to)(?: me)? (?:the )?)?next(?: (?:one|card|photo|item|video))?$/.test(normalized)) return { action: 'next' };
   if (/^(?:(?:show|go to)(?: me)? (?:the )?)?(?:previous|prior)(?: (?:one|card|photo|item|video))?$/.test(normalized)) return { action: 'previous' };
   if (/^(?:expand|make (?:it|this) (?:bigger|larger)|open this(?: card| one)?)$/.test(normalized)) return { action: 'expand' };
   if (/^(?:collapse|make (?:it|this) smaller)$/.test(normalized)) return { action: 'collapse' };
-  if (/^(?:go )?back$/.test(normalized)) return { action: 'back' };
+  if (/^(?:go )?back(?: to (?:those |the )?results)?$/.test(normalized)) return { action: 'back' };
+  if (/^(?:go |move )?forward(?: (?:again|to (?:the )?next (?:answer|state)))?$/.test(normalized)) return { action: 'forward' };
   if (/^(?:start over|start again)$/.test(normalized)) return { action: 'start_over' };
   if (/^(?:website home|home)$/.test(normalized)) return { action: 'home' };
   if (/^(?:back to (?:the )?website|close (?:the )?assistant|return to (?:the )?website|leave (?:the )?assistant)$/.test(normalized)) return { action: 'dismiss' };

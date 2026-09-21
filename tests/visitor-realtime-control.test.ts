@@ -19,13 +19,15 @@ import { CONVERSATION_PRESETS } from '../lib/voice-settings';
 const availability = { enabled: true, mode: 'voice' as const, live: true, chatRemaining: 25, voiceRemaining: 4, resetsAt: '' };
 export async function liveVisitorSetup(output: unknown[] = [liveAnswer()], overrides: Partial<VisitorRealtimeControlOptions> = {}) {
   const socket = new FakeLiveSocket(), events: VisitorRealtimeEvent[] = [], failures: string[] = [], requests: Record<string, unknown>[] = [];
-  let reserved = 0;
+  let reserved = 0, sequence = 0;
+  const nextSequence = () => ++sequence;
   const control = createVisitorRealtimeControl({ callId: 'live_fixture', apiKey: 'synthetic', content: { ...sampleContent('general'), visitorSpeaksFirst: true },
     initialAvailability: availability, signal: new AbortController().signal, reserveTurn: async () => { reserved++; return availability; }, assertCurrent: async () => {},
-    emit: event => events.push(event), onFatal: message => failures.push(message), socketFactory: () => socket as unknown as VisitorControlSocket,
+    emit: event => { events.push(event); if (event.type === 'response_started') void control.applyControl({ seq: nextSequence(), interactionRevision: event.interactionRevision, viewRevision: event.revision,
+      ready: true, context: control.recordingSnapshot().context, preparationAck: { revision: event.revision, status: 'applied' } }).catch(error => failures.push(String(error))); }, onFatal: message => failures.push(message), socketFactory: () => socket as unknown as VisitorControlSocket,
     fetch: async (_url, init) => { requests.push(JSON.parse(String(init?.body))); return Response.json({ status: 'completed', output: requests.length === 1 ? output : [liveAnswer()] }); }, ...overrides });
   socket.open(); await control.ready;
-  return { socket, events, failures, requests, control, reserved: () => reserved };
+  return { socket, events, failures, requests, control, nextSequence, reserved: () => reserved };
 }
 
 test('voice reads full published prose without a display request or external search', async t => {
@@ -52,7 +54,7 @@ for (const kind of ['source', 'photo', 'collection', 'fact'] as const) test(`wor
   t.after(() => h.control.close()); h.control.start(); h.socket.user(`Open ${record.name}`); await flushLive();
   const event = h.events.find(event => event.type === 'navigation'); assert.ok(event);
   assert.deepEqual(event.target, { kind: 'open', id: `${kind}:${record.reference.id}` });
-  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: { workspace }, navigationAck: { id: event.id, status: 'applied' } });
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true, context: { workspace }, navigationAck: { id: event.id, status: 'applied' } });
   await flushLive(); assert.equal(h.requests.length, 1, 'A simple confirmed open needs no closing model call');
 });
 test('voice photo proposals use server-owned batch identity and wait for the gallery receipt', async t => {
@@ -60,6 +62,7 @@ test('voice photo proposals use server-owned batch identity and wait for the gal
   const authority = publishedWorkspace(content, semanticFixture, semanticMediaFixture), workspace = emptyWorkspace(authority.publicationId);
   const album = authority.records.find(record => record.reference.kind === 'album')!, object = objectInput(album);
   const proposal = { batch: { sceneRevision: null, operations: [{ kind: 'add', object }, { kind: 'focus', instanceId: object.instanceId }] }, clarification: '' };
+  const carousel = { version: 1 as const, open: true, revision: 1, cards: [{ id: object.instanceId, kind: 'information' as const, title: album.name, referenceIds: [album.reference.id] }], activeId: object.instanceId, previousId: null, lastNarratedId: null, expanded: false, reading: { scrollTop: 0, blockId: null }, media: null };
   const h = await liveVisitorSetup([liveTool('update_workspace', proposal)], { content, catalog: semanticFixture, media: semanticMediaFixture, context: { workspace } });
   t.after(() => h.control.close()); h.control.start(); h.socket.user('Show me your photos.'); await flushLive();
   const event = h.events.find(event => event.type === 'navigation'); assert.ok(event && event.target.kind === 'workspace');
@@ -70,8 +73,12 @@ test('voice photo proposals use server-owned batch identity and wait for the gal
   assert.equal(h.requests.length, 1, 'No completion is generated before the client applies the photos');
   const tool = (h.requests[0].tools as { name: string; parameters: unknown }[]).find(tool => tool.name === 'update_workspace')!;
   assert.equal(JSON.stringify(tool.parameters).includes('"publicationId"'), false);
-  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: { workspace: applied }, navigationAck: { id: event.id, status: 'applied' } });
-  await flushLive(); assert.equal(h.requests.length, 2); assert.deepEqual(h.failures, []);
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true, context: { workspace: applied, carousel }, navigationAck: { id: event.id, status: 'applied' } });
+  await flushLive(); assert.equal(h.requests.length, 2);
+  const answer = h.events.find(event => event.type === 'navigation' && event.target.kind === 'answer');
+  assert.ok(answer && answer.type === 'navigation' && answer.target.kind === 'answer'); assert.equal(answer.target.placement, 'supporting', 'Closing text must not replace the confirmed photo grid');
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true, context: { workspace: applied, carousel }, navigationAck: { id: answer.id, status: 'applied' } });
+  await flushLive(); assert.deepEqual(h.failures, []);
 });
 
 test('workspace voice receives publisher purpose and web guidance, and forwards an authorized card annotation', async t => {
@@ -90,7 +97,7 @@ test('workspace voice receives publisher purpose and web guidance, and forwards 
   const event = h.events.find(event => event.type === 'navigation'); assert.ok(event && event.target.kind === 'explore');
   assert.deepEqual(event.target.result?.annotationTarget, target); assert.equal(searches, 1);
   assert.equal(h.requests.length, 1, 'No spoken success before browser acknowledgement');
-  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: { workspace }, navigationAck: { id: event.id, status: 'applied' } });
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true, context: { workspace }, navigationAck: { id: event.id, status: 'applied' } });
   await flushLive(); assert.equal(h.requests.length, 2); assert.ok((h.requests[1].tools as { name: string }[]).some((tool) => tool.name === 'navigate_view'), 'Acknowledged results allow the next task step');
 });
 
@@ -100,7 +107,7 @@ test('every saved Studio voice tier selects Live and a new publisher defaults to
 test('no greeting or paid backend starts until browser readiness is applied', async t => {
   const h = await liveVisitorSetup([], { content: sampleContent('general') }); t.after(() => h.control.close());
   assert.equal(h.socket.sent.length, 0); assert.equal(h.requests.length, 0);
-  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: {} });
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true, context: {} });
   assert.ok(h.socket.sent.some(x => x.type === 'session.commentary.append')); assert.equal(h.requests.length, 0);
 });
 
@@ -137,6 +144,38 @@ test('visitor-first and resumed conversations never send greeting visual cues', 
     assert.equal(h.events.some(event => event.type === 'greeting_progress'), false);
   }
 });
+for (const points of [false, true]) test(`opening yields once to a multi-sentence request${points ? ' with greeting points' : ''}`, async t => {
+  const content = { ...sampleContent('general'), ...(points ? { greetingPoints: [{ kind: 'custom' as const, text: 'Explore the neighborhood.' }, null, null] } : {}) };
+  const h = await liveVisitorSetup([liveAnswer('Published contact information.')], { content }); t.after(() => h.control.close());
+  h.control.start();
+  const opening = h.socket.sent.filter(event => event.type === 'session.instructions.append').map(event => event.content).join('\n');
+  assert.match(opening, /keep listening/); assert.match(opening, /stop and never resume/);
+  const before = h.socket.sent.length;
+  for (const [delta, start_ms, end_ms] of [["What's your", 100, 500], [' phone number?', 600, 900], [' Say it digit by digit.', 1600, 2600]] as const) {
+    h.socket.frame({ type: 'session.input_transcript.delta', delta, start_ms, end_ms });
+    h.socket.frame({ type: 'session.output_transcript.delta', delta: 'Obsolete introduction.', start_ms, end_ms });
+  }
+  const updates = h.socket.sent.slice(before);
+  assert.equal(updates.length, 1, 'One yield, not an instruction or cancellation per fragment');
+  assert.match(String(updates[0].content), /End the introduction now and never resume/);
+  assert.match(String(updates[0].content), /complete request, including pauses and multiple sentences/);
+  assert.equal(h.events.some(event => event.type === 'greeting_progress' || event.type === 'response_cancelled'), false);
+  assert.equal(h.requests.length, 0, 'Fragments do not guess a completed turn or trigger paid work');
+  h.socket.frame({ type: 'session.delegation.created', offset_ms: 2600, delegation: { id: 'first_question', target: 'client' } });
+  await flushLive();
+  assert.equal(h.requests.length, 1);
+  const input = JSON.parse((h.requests[0].input as { content: string }[])[0].content);
+  assert.equal(input.latestRequest, "What's your phone number? Say it digit by digit.");
+  assert.equal(h.socket.sent.filter(event => String(event.content).includes('End the introduction now')).length, 1);
+});
+test('speech received before browser readiness suppresses the opening instead of talking over it', async t => {
+  const h = await liveVisitorSetup([], { content: sampleContent('general') }); t.after(() => h.control.close());
+  h.socket.frame({ type: 'session.input_transcript.delta', delta: 'Tell me about your services.', start_ms: 0, end_ms: 1000 });
+  h.control.start();
+  assert.equal(h.socket.sent.some(event => event.type === 'session.commentary.append'), false);
+  assert.equal(h.socket.sent.some(event => String(event.content).includes('Greet briefly')), false);
+  assert.equal(h.requests.length, 0);
+});
 test('resumed dialogue is reference context and only the fresh request reaches the backend', async t => {
   const history = [{ role: 'user' as const, text: 'Earlier unfinished request.' }];
   const h = await liveVisitorSetup([], { history }); t.after(() => h.control.close()); h.control.start();
@@ -149,6 +188,53 @@ test('resumed dialogue is reference context and only the fresh request reaches t
   assert.equal(input.latestRequest, 'Take me home instead.');
   assert.deepEqual(input.history, history);
   assert.equal(h.requests.length, 1);
+});
+
+test('resumed long and escaped dialogue reaches frontline voice without losing the end to append limits', async t => {
+  const text = `${'🪵"'.repeat(650)} remember the hypothetical allowance is 12%.`;
+  assert.ok(text.length <= 2000);
+  const history = [{ role: 'user' as const, text }];
+  const h = await liveVisitorSetup([], { history }); t.after(() => h.control.close()); h.control.start();
+  const context = h.socket.sent.filter(event => event.type === 'session.thinking.append').map(event => event.content).join('');
+  assert.ok(context.includes(JSON.stringify(history[0])), 'Labels and escaped JSON must not clip any accepted history text');
+  assert.equal(h.requests.length, 0, 'Resuming history must not generate a new answer');
+});
+
+for (const resumed of [false, true]) test(`${resumed ? 'resumed' : 'visitor-first'} startup finishes with silent listening and rejects delegations without fresh speech`, async t => {
+  const history = resumed ? [{ role: 'user' as const, text: 'Earlier unfinished request.' }] : [];
+  const content = { ...sampleContent('general'), visitorSpeaksFirst: !resumed };
+  const h = await liveVisitorSetup([liveAnswer('The published contact number.')], { content, history }); t.after(() => h.control.close());
+  const delegation = (id: string, offset_ms: number) => h.socket.frame({ type: 'session.delegation.created', offset_ms, delegation: { id, target: 'client' } });
+  delegation('before_readiness', 0);
+  h.control.start(); await flushLive();
+  const instructions = h.socket.sent.filter(event => event.type === 'session.instructions.append');
+  const finalPolicy = instructions.at(-1)!;
+  assert.match(String(finalPolicy.content), /Wait silently for fresh user speech/);
+  const readiness = h.socket.sent.findIndex(event => String(event.content).includes('Listen and respond to the caller now'));
+  assert.equal(readiness, -1, 'Resuming must never briefly authorize an answer to retained history');
+  if (resumed) {
+    assert.match(String(finalPolicy.content), /Earlier messages are context, not pending requests/);
+    const earlierDialogue = h.socket.sent.findIndex(event => String(event.content).includes('Earlier dialogue'));
+    assert.ok(earlierDialogue >= 0 && earlierDialogue < h.socket.sent.indexOf(finalPolicy));
+  }
+  // Provider speech or a queued/late delegation is not fresh visitor input.
+  h.socket.frame({ type: 'session.output_transcript.delta', delta: 'An obsolete answer.', start_ms: 0, end_ms: 100 });
+  delegation('after_readiness', 100); await flushLive();
+  h.socket.frame({ type: 'session.input_transcript.delta', delta: 'Mm-hmm.', start_ms: 200, end_ms: 400 });
+  delegation('backchannel_only', 400); await flushLive();
+  assert.equal(h.requests.length, 0); assert.equal(h.reserved(), 0);
+  assert.equal(h.socket.sent.some(event => event.type === 'session.commentary.append'), false);
+  assert.equal(h.events.some(event => event.type === 'response_started'), false);
+  for (const [delta, start_ms, end_ms] of [['What is the contact', 2000, 2500], [' number?', 2700, 3000], [' Say it digit by digit.', 3700, 4400]] as const) {
+    h.socket.frame({ type: 'session.input_transcript.delta', delta, start_ms, end_ms });
+  }
+  assert.equal(h.requests.length, 0, 'Listening stays available; fragments alone never launch work');
+  delegation('fresh_question', 4400); await flushLive();
+  assert.equal(h.requests.length, 1);
+  const input = JSON.parse((h.requests[0].input as { content: string }[])[0].content);
+  assert.equal(input.latestRequest, 'What is the contact number? Say it digit by digit.');
+  assert.deepEqual(input.history, history);
+  assert.deepEqual(h.failures, []);
 });
 
 test('prepaid delegation then later task reserves once each; duplicate delegation is inert', async t => {
@@ -203,7 +289,7 @@ test('unchanged quiet workspace reports cannot postpone the server inactivity de
   h.control.start();
   for (let seq = 1; seq <= 5; seq++) {
     t.mock.timers.tick(10_000);
-    await h.control.applyControl({ seq, interactionRevision: 0, viewRevision: 0, ready: true, context: {}, audio: { inputActive: false, outputActive: false } });
+    await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true, context: {}, audio: { inputActive: false, outputActive: false } });
     assert.deepEqual(h.failures, []);
   }
   t.mock.timers.tick(10_000); await flushLive();
@@ -214,7 +300,7 @@ test('valid published plan waits for view acknowledgement before backend continu
   const h = await liveVisitorSetup([liveTool('present_site', { layout: 'detail', sources: ['overview'], status: 'ready' })]); t.after(() => h.control.close()); h.control.start();
   h.socket.user('Show overview'); await flushLive();
   const plan = h.events.find(x => x.type === 'plan'); assert.ok(plan); assert.equal(h.requests.length, 1);
-  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: plan.revision, ready: true, context: {} }); await flushLive();
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: plan.revision, ready: true, context: {} }); await flushLive();
   assert.equal(h.requests.length, 2); assert.ok((h.requests[1].tools as { name: string }[]).some((tool) => tool.name === 'navigate_view'), 'Acknowledged results allow the next task step'); assert.deepEqual(h.failures, []);
 });
 test('backend failures emit a bounded task error while keeping the voice session open', async t => {
@@ -228,14 +314,14 @@ test('voice can clear all panels through one acknowledged navigation action', as
   t.after(() => h.control.close()); h.control.start(); h.socket.user('Close all the panels.'); await flushLive();
   const event = h.events.find(event => event.type === 'navigation'); assert.ok(event);
   assert.deepEqual(event.target, { kind: 'clear' }); assert.equal(h.requests.length, 1);
-  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: event.id, status: 'applied' } });
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: event.id, status: 'applied' } });
   await flushLive(); assert.equal(h.requests.length, 1); assert.deepEqual(h.failures, []);
 });
 for (const status of ['failed', 'unavailable', 'cancelled'] as const) test(`simple navigation cannot claim success after browser ${status}`, async t => {
   const h = await liveVisitorSetup([liveTool('navigate_view', { kind: 'home', id: null, ids: null })]);
   t.after(() => h.control.close()); h.control.start(); h.socket.user('Take me home.'); await flushLive();
   const event = h.events.find(event => event.type === 'navigation'); assert.ok(event);
-  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: event.id, status } }); await flushLive();
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: event.id, status } }); await flushLive();
   assert.equal(h.requests.length, 1);
   assert.equal(h.socket.sent.some(value => value.content === 'You’re back at the opening.'), false);
   assert.ok(h.socket.sent.some(value => value.content === 'The browser could not confirm that change.'));
@@ -248,9 +334,40 @@ test('manual navigation aborts backend generation and rejects a late plan', asyn
   let finish!: (response: Response) => void; let signal!: AbortSignal;
   const h = await liveVisitorSetup([], { fetch: async (_url, init) => { signal = init!.signal!; return new Promise(resolve => { finish = resolve; }); } });
   t.after(() => h.control.close()); h.control.start(); h.socket.user('Old view'); await flushLive();
-  await h.control.applyControl({ seq: 1, interactionRevision: 1, viewRevision: 0, ready: true, context: {} }); assert.equal(signal.aborted, true);
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 1, viewRevision: 0, ready: true, context: {} }); assert.equal(signal.aborted, true);
   finish(Response.json({ status: 'completed', output: [liveTool('present_site', { layout: 'detail', sources: ['overview'], status: 'ready' })] })); await flushLive();
   assert.ok(!h.events.some(x => x.type === 'plan')); assert.ok(!h.socket.sent.some(x => x.type === 'session.commentary.append'));
+});
+for (const kind of ['web', 'images', 'map'] as const) test(`fresh ${kind} requests remain available after gallery interactions without automatic retries`, async t => {
+  const content = publicationContent({ ...sampleContent('general'), visitorSpeaksFirst: true, explore: { ...DEFAULT_EXPLORE_SETTINGS, enabled: true, images: true, maps: true } });
+  const authority = publishedWorkspace(content, semanticFixture, semanticMediaFixture);
+  const initial = emptyWorkspace(authority.publicationId), album = objectInput(authority.records.find(record => record.reference.kind === 'album')!);
+  const workspace = applyWorkspaceBatch(initial, workspaceBatch(initial, [{ kind: 'add', object: album }]), authority).state;
+  let searches = 0;
+  const h = await liveVisitorSetup([liveTool('search_explore', { kind, id: null, query: 'Independent studio examples' })], {
+    content, catalog: semanticFixture, media: semanticMediaFixture, context: { workspace },
+    search: async (query, actualKind) => { searches++; assert.equal(actualKind, kind); return demoExploreResult(query, actualKind); },
+  });
+  t.after(() => h.control.close()); h.control.start();
+  for (let seq = 1; seq <= 4; seq++) await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: seq, viewRevision: 0, ready: true, context: { workspace } });
+  h.socket.frame({ type: 'session.delegation.created', delegation: { id: 'old-request', target: 'client' } });
+  h.socket.frame({ type: 'session.input_transcript.delta', delta: 'Mm-hmm.', start_ms: 100, end_ms: 300 });
+  await flushLive(); assert.equal(h.requests.length, 0);
+  assert.equal(h.socket.sent.some(event => String(event.content).includes('Fresh visitor speech')), false);
+  for (const [delta, start_ms, end_ms] of [['Find ', 2000, 2300], [`external ${kind} `, 2400, 2800], ['for independent studios.', 3200, 3800]] as const) {
+    h.socket.frame({ type: 'session.input_transcript.delta', delta, start_ms, end_ms });
+  }
+  assert.equal(h.socket.sent.filter(event => event.type === 'session.instructions.append' && String(event.content).includes('Fresh visitor speech')).length, 1);
+  assert.equal(h.requests.length, 0, 'captions and recovery instructions do not execute an action');
+  h.socket.frame({ type: 'session.delegation.created', delegation: { id: 'fresh-request', target: 'client' } }); await flushLive();
+  assert.equal(searches, 1); assert.equal(h.requests.length, 1);
+  const input = JSON.parse((h.requests[0].input as { content: string }[])[0].content);
+  assert.equal(input.latestRequest, `Find external ${kind} for independent studios.`);
+  const navigation = h.events.find(event => event.type === 'navigation'); assert.ok(navigation && navigation.target.kind === 'explore');
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 4, viewRevision: 0, ready: true, context: { workspace }, navigationAck: { id: navigation.id, status: 'applied' } }); await flushLive();
+  const completedCalls = h.requests.length;
+  h.socket.frame({ type: 'session.delegation.created', delegation: { id: 'duplicate-request', target: 'client' } }); await flushLive();
+  assert.equal(h.requests.length, completedCalls); assert.equal(searches, 1); assert.deepEqual(h.failures, []);
 });
 for (const instruction of ['Take me home.', 'Go back to the main screen.', 'Cancel that.', 'Show the contact information instead.']) test(`new spoken instruction cancels pending work before another delegation: ${instruction}`, async t => {
   let finish!: (response: Response) => void; let signal!: AbortSignal;
@@ -318,7 +435,7 @@ test('the voice owner uses the streamed connection and waits for Home confirmati
   backend.frame({ type: 'response.completed', response: { id: 'resp_home', status: 'completed', output: [liveTool('navigate_view', { kind: 'home', id: null, ids: null })] } });
   await flushLive(); const nav = h.events.find(event => event.type === 'navigation'); assert.ok(nav);
   assert.equal(h.socket.sent.some(event => event.content === 'You’re back at the opening.'), false);
-  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: nav.id, status: 'applied' } }); await flushLive();
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: nav.id, status: 'applied' } }); await flushLive();
   assert.equal(backend.sent.length, 1); assert.ok(h.socket.sent.some(event => event.content === 'You’re back at the opening.'));
   await h.control.close(); assert.equal(backend.readyState, 3);
 });
@@ -326,11 +443,11 @@ test('manual Home cancels immediately before a slow publication check and fences
   let finish!: (response: Response) => void; let signal!: AbortSignal;
   let authorize!: () => void, checks = 0, calls = 0;
   const h = await liveVisitorSetup([], {
-    assertCurrent: async () => { if (++checks === 2) await new Promise<void>(resolve => { authorize = resolve; }); },
+    assertCurrent: async () => { if (++checks === 3) await new Promise<void>(resolve => { authorize = resolve; }); },
     fetch: async (_url, init) => { calls++; signal = init!.signal!; return new Promise(resolve => { finish = resolve; }); },
   });
   t.after(() => h.control.close()); h.control.start(); h.socket.user('Old request'); await flushLive();
-  const applying = h.control.applyControl({ seq: 1, interactionRevision: 1, viewRevision: 0, ready: true, context: {} });
+  const applying = h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 1, viewRevision: 0, ready: true, context: {} });
   assert.equal(signal.aborted, true, 'Cancellation must not wait for a store read');
   finish(Response.json({ status: 'completed', output: [liveAnswer('Late result')] })); await flushLive();
   authorize(); await applying;
@@ -358,24 +475,24 @@ test('an old navigation timer and ACK cannot settle a newer request', async t =>
   h.socket.user('Second view', 'second_view'); await flushLive();
   const second = h.events.filter(event => event.type === 'navigation').at(-1)!; assert.notEqual(second.id, first.id);
   t.mock.timers.tick(7000); await flushLive();
-  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: first.id, status: 'applied' } });
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: first.id, status: 'applied' } });
   await flushLive(); assert.equal(requests.length, 2, 'The new navigation still needs its own ACK');
-  await h.control.applyControl({ seq: 2, interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: second.id, status: 'applied' } });
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: second.id, status: 'applied' } });
   await flushLive(); assert.equal(requests.length, 3);
   assert.ok(h.socket.sent.filter(event => event.type === 'session.commentary.append' && event.content !== 'I’m working on that.').every(event => event.delegation_id === 'second_view'));
 });
 test('a queued manual change cancels work while an earlier context check is still waiting', async t => {
   let finish!: (response: Response) => void, release!: () => void; let checks = 0, signal!: AbortSignal;
   const h = await liveVisitorSetup([], {
-    assertCurrent: async () => { if (++checks === 2) await new Promise<void>(resolve => { release = resolve; }); },
+    assertCurrent: async () => { if (++checks === 3) await new Promise<void>(resolve => { release = resolve; }); },
     fetch: async (_url, init) => { signal = init!.signal!; return new Promise(resolve => { finish = resolve; }); },
   });
   t.after(() => h.control.close()); h.control.start(); h.socket.user('Old request'); await flushLive();
-  const older = h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: {} });
-  const manual = { seq: 2, interactionRevision: 1, viewRevision: 0, ready: true, context: {} };
+  const older = h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true, context: {} });
+  const manual = { seq: h.nextSequence(), interactionRevision: 1, viewRevision: 0, ready: true, context: {} };
   h.control.observeControl(manual); assert.equal(signal.aborted, true);
   release(); await older; await h.control.applyControl(manual);
-  assert.deepEqual(h.events.filter(event => event.type === 'control_applied').map(event => event.seq), [2]);
+  assert.deepEqual(h.events.filter(event => event.type === 'control_applied').map(event => event.seq), [1, manual.seq]);
   finish(Response.json({ status: 'completed', output: [liveAnswer('Obsolete answer')] })); await flushLive();
   assert.ok(!h.socket.sent.some(event => event.type === 'session.commentary.append'));
 });
@@ -396,7 +513,7 @@ test('a correction can delegate Home while an abort-ignoring search finishes lat
   const home = h.events.find(event => event.type === 'navigation'); assert.ok(home); assert.deepEqual(home.target, { kind: 'home' });
   finish(demoExploreResult('Museum photographs', 'images')); await flushLive();
   assert.equal(h.events.filter(event => event.type === 'navigation').length, 1, 'Late search cannot display or displace Home');
-  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: home.id, status: 'applied' } }); await flushLive();
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: home.id, status: 'applied' } }); await flushLive();
   assert.equal(requests, 3); assert.deepEqual(h.failures, []);
   assert.ok(h.socket.sent.filter(event => event.type === 'session.commentary.append').every(event => event.delegation_id === 'home_request'));
 });
@@ -405,7 +522,7 @@ test('catalog navigation uses published IDs and waits for actual browser result'
   const target = catalog.entities[0].id;
   const h = await liveVisitorSetup([liveTool('navigate_view', { kind: 'open', id: target, ids: null })], { catalog }); t.after(() => h.control.close()); h.control.start(); h.socket.user('Open the first item'); await flushLive();
   const navigation = h.events.find(x => x.type === 'navigation'); assert.ok(navigation); assert.equal(h.requests.length, 1);
-  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: navigation.id, status: 'unavailable' } }); await flushLive();
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: navigation.id, status: 'unavailable' } }); await flushLive();
   assert.equal(h.requests.length, 2); assert.match(JSON.stringify(h.requests[1].input), /not completed/);
 });
 test('catalog plans keep the focused entity in the voice view context', async t => {
@@ -415,7 +532,7 @@ test('catalog plans keep the focused entity in the voice view context', async t 
   const h = await liveVisitorSetup([liveTool('present_site', { status: 'ready', plan })], { catalog }); t.after(() => h.control.close()); h.control.start(); h.socket.user('Open the first item'); await flushLive();
   const event = h.events.find(value => value.type === 'plan'); assert.ok(event && event.type === 'plan' && event.catalogPlan);
   const state = { ...initialInteraction(catalog), entityIds: [target], focusedId: target, focusedRef: { kind: 'entity' as const, id: target }, focusOrigin: null };
-  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: event.revision, ready: true, context: { catalogState: state } }); await flushLive();
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: event.revision, ready: true, context: { catalogState: state } }); await flushLive();
   const output = JSON.parse(String((h.requests[1].input as { output?: string }[]).at(-1)?.output));
   assert.deepEqual(output.catalog.state.focusedRef, { kind: 'entity', id: target });
   assert.equal(output.catalog.state.focusedId, target);
@@ -446,7 +563,7 @@ for (const kind of ['open', 'focus', 'expand', 'collapse', 'close'] as const) te
   assert.deepEqual(event.target, { kind, id: panel.instanceId });
   assert.equal(h.requests.length, 1, 'Wait for browser confirmation before continuing');
   const next = applyWorkspaceBatch(workspace, workspaceBatch(workspace, [{ kind: kind === 'open' ? 'focus' : kind, instanceId: panel.instanceId }]), workspaceAuthority).state;
-  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true,
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true,
     context: { workspace: next, scene: observedWorkspace(next) }, navigationAck: { id: event.id, status: 'applied' } });
   await flushLive();
   const output = JSON.parse(String((h.requests[1].input as { output?: string }[]).at(-1)?.output));
@@ -466,7 +583,7 @@ test('voice can return to the workspace without clearing retained panels', async
   const event = h.events.find(event => event.type === 'navigation'); assert.ok(event);
   assert.deepEqual(event.target, { kind: 'unfocus' });
   const next = applyWorkspaceBatch(workspace, workspaceBatch(workspace, [{ kind: 'return' }]), workspaceAuthority).state;
-  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true,
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true,
     context: { workspace: next, scene: observedWorkspace(next) }, navigationAck: { id: event.id, status: 'applied' } });
   await flushLive();
   assert.equal(h.requests.length, 1, 'Returning to the workspace needs no extra closing model call');
@@ -495,7 +612,7 @@ test('a close followed by opening another panel uses the browser-confirmed conte
   for (const [index, kind] of (['close', 'focus'] as const).entries()) {
     const event = h.events.filter(event => event.type === 'navigation')[index]; assert.ok(event);
     workspace = applyWorkspaceBatch(workspace, workspaceBatch(workspace, [{ kind, instanceId: panels[index].instanceId }]), workspaceAuthority).state;
-    await h.control.applyControl({ seq: index + 1, interactionRevision: 0, viewRevision: 0, ready: true,
+    await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true,
       context: { workspace, scene: observedWorkspace(workspace) }, navigationAck: { id: event.id, status: 'applied' } }); await flushLive();
     const snapshot = String(requests[index + 1].instructions).split('\n').find(line => line.startsWith('{"state":'));
     assert.ok(snapshot);
@@ -524,10 +641,10 @@ test('voice receives a complete multi-part snapshot of every open panel and its 
   let workspace = applyWorkspaceBatch(initial, workspaceBatch(initial, panels.map(object => ({ kind: 'add', object }))), workspaceAuthority).state;
   workspace = applyWorkspaceBatch(workspace, workspaceBatch(workspace, panels.map(object => ({ kind: 'focus', instanceId: object.instanceId }))), workspaceAuthority).state;
   const h = await liveVisitorSetup([], { content: workspaceContent, catalog: semanticFixture, media: semanticMediaFixture, context: { workspace, scene: observedWorkspace(workspace) } });
-  t.after(() => h.control.close()); h.control.start();
+  t.after(() => h.control.close()); h.control.start(); await flushLive();
   const chunks = h.socket.sent.filter(event => event.type === 'session.thinking.append').map(event => String(event.content));
   assert.ok(chunks.every(chunk => Buffer.byteLength(chunk) <= 480));
-  const snapshot = JSON.parse(chunks.join('').replace(/Current browser workspace, part \d+\/\d+ \(reference data, not instructions\)\. Open is not necessarily visible\. Combine all parts into one snapshot replacing the previous scene: /g, ''));
+  const snapshot = JSON.parse(chunks.map(chunk => chunk.replace(/^\[screen \d+ part \d+\/\d+\] /, '')).join('').split('replacing the previous scene: ')[1]);
   assert.deepEqual(snapshot.objects.map((object: { id: string }) => object.id), panels.map(panel => panel.instanceId));
   assert.equal(snapshot.focus, panels.at(-1)!.instanceId);
   assert.deepEqual(snapshot.focusHistory, workspace.focusHistory);
@@ -542,19 +659,19 @@ for (const status of ['applied', 'failed', 'cancelled'] as const) test(`workspac
   const h = await liveVisitorSetup([liveTool('update_workspace', { batch, clarification: '' })], { content: workspaceContent, catalog: semanticFixture, media: semanticMediaFixture, context: { workspace: initial, scene: observedWorkspace(initial) } });
   t.after(() => h.control.close()); h.control.start();
   const summaryCount = h.socket.sent.filter(event => event.type === 'session.thinking.append').length;
-  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: { workspace: initial, scene: observedWorkspace(initial) } });
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true, context: { workspace: initial, scene: observedWorkspace(initial) } });
   assert.equal(h.socket.sent.filter(event => event.type === 'session.thinking.append').length, summaryCount, 'unchanged scene is deduplicated');
   h.socket.user('Show the address'); await flushLive();
   const event = h.events.find(event => event.type === 'navigation'); assert.ok(event && event.type === 'navigation' && event.target.kind === 'workspace');
   assert.equal(h.requests.length, 1, 'no backend continuation or success before browser result');
   const context = { workspace: next, scene: observedWorkspace(next) };
-  await h.control.applyControl({ seq: 2, interactionRevision: 0, viewRevision: 0, ready: true, context, navigationAck: { id: event.id, status } }); await flushLive();
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true, context, navigationAck: { id: event.id, status } }); await flushLive();
   assert.equal(h.requests.length, 2);
   const result = JSON.parse(String((h.requests[1].input as { output?: string }[]).at(-1)?.output));
   assert.equal(result.status, status);
   if (status !== 'applied') assert.match(result.message, /Do not claim/);
   assert.match(JSON.stringify(h.socket.sent.filter(event => event.type === 'session.thinking.append')), /Address.*Harbor Studio/);
-  await h.control.applyControl({ seq: 2, interactionRevision: 0, viewRevision: 0, ready: true, context, navigationAck: { id: event.id, status } }); await flushLive();
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true, context, navigationAck: { id: event.id, status } }); await flushLive();
   assert.equal(h.requests.length, 2);
 });
 test('manual interaction cancels pending workspace delegation before late browser success', async t => {
@@ -564,8 +681,8 @@ test('manual interaction cancels pending workspace delegation before late browse
   const h = await liveVisitorSetup([liveTool('update_workspace', { batch, clarification: '' })], { content: workspaceContent, catalog: semanticFixture, media: semanticMediaFixture, context });
   t.after(() => h.control.close()); h.control.start(); h.socket.user('Show email'); await flushLive();
   const event = h.events.find(event => event.type === 'navigation'); assert.ok(event && event.type === 'navigation');
-  await h.control.applyControl({ seq: 1, interactionRevision: 1, viewRevision: 0, ready: true, context }); await flushLive();
-  await h.control.applyControl({ seq: 2, interactionRevision: 1, viewRevision: 0, ready: true, context, navigationAck: { id: event.id, status: 'applied' } }); await flushLive();
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 1, viewRevision: 0, ready: true, context }); await flushLive();
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 1, viewRevision: 0, ready: true, context, navigationAck: { id: event.id, status: 'applied' } }); await flushLive();
   assert.equal(h.requests.length, 1, 'cancelled work does not continue or retry');
 });
 
@@ -575,7 +692,7 @@ test('opening a prefixed published entity supplies its details to the voice answ
   const h = await liveVisitorSetup([liveTool('navigate_view', { kind: 'open', id: entity.id, ids: null })], { catalog });
   t.after(() => h.control.close()); h.control.start(); h.socket.user(`Open ${entity.name} and tell me about it`); await flushLive();
   const navigation = h.events.find(event => event.type === 'navigation'); assert.ok(navigation);
-  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: navigation.id, status: 'applied' } }); await flushLive();
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true, context: {}, navigationAck: { id: navigation.id, status: 'applied' } }); await flushLive();
   assert.match(JSON.stringify(h.requests[1].input), new RegExp(entity.id));
   assert.match(JSON.stringify(h.requests[1].input), new RegExp(entity.name));
 });
@@ -593,6 +710,23 @@ test('voice explanation gets focused identity and general knowledge rules withou
   assert.equal(h.events.filter(event => event.type === 'navigation').length, 0);
 });
 
+test('disabled search still permits a general explanation without offering unavailable tools', async t => {
+  const content = publicationContent({ ...sampleContent('general'), visitorSpeaksFirst: true, explore: { ...DEFAULT_EXPLORE_SETTINGS, enabled: false } });
+  let searches = 0;
+  const h = await liveVisitorSetup([liveAnswer('Clay particles pack more closely as water leaves and the ceramic body sinters.')], { content,
+    search: async () => { searches++; throw new Error('Disabled search must not run.'); } });
+  t.after(() => h.control.close()); h.control.start(); h.socket.user('Why do ceramics shrink in a kiln?'); await flushLive();
+  assert.equal(h.requests.length, 1);
+  const guide = String(h.requests[0].instructions);
+  assert.match(guide, /answer other general questions the visitor asks/);
+  assert.match(guide, /External search is disabled\. Use published information and reliable general knowledge/);
+  assert.doesNotMatch(guide, /Briefly distinguish it as general background/);
+  assert.equal((h.requests[0].tools as { name: string }[]).some(tool => tool.name === 'search_explore'), false);
+  assert.equal(searches, 0);
+  assert.equal(h.events.some(event => event.type === 'navigation' || event.type === 'plan' || event.type === 'task_error'), false);
+  assert.deepEqual(h.failures, []);
+});
+
 test('voice reuses only server-obtained web evidence accepted in the current context', async t => {
   const content = publicationContent({ ...sampleContent('general'), visitorSpeaksFirst: true, explore: { ...DEFAULT_EXPLORE_SETTINGS, enabled: true } });
   const result = { ...demoExploreResult('public history', 'web'), answer: 'SERVER_EVIDENCE_MARKER' };
@@ -601,10 +735,10 @@ test('voice reuses only server-obtained web evidence accepted in the current con
   t.after(() => h.control.close()); h.control.start(); h.socket.user('Search the web for public history'); await flushLive();
   const event = h.events.find(event => event.type === 'navigation'); assert.ok(event);
   const external = exploreContextForResult(result);
-  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: { externalResults: [external] }, navigationAck: { id: event.id, status: 'applied' } }); await flushLive();
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true, context: { externalResults: [external] }, navigationAck: { id: event.id, status: 'applied' } }); await flushLive();
   h.socket.user('Explain more about that', 'second'); await flushLive();
   assert.match(String(h.requests.at(-1)?.instructions), /SERVER_EVIDENCE_MARKER/); assert.equal(searches, 1);
-  await h.control.applyControl({ seq: 2, interactionRevision: 1, viewRevision: 0, ready: true, context: { externalResults: [{ ...external, resultId: 'unknown-result' }] } });
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 1, viewRevision: 0, ready: true, context: { externalResults: [{ ...external, resultId: 'unknown-result' }] } });
   h.socket.user('Explain this other result', 'third'); await flushLive();
   assert.ok(!String(h.requests.at(-1)?.instructions).includes('SERVER_EVIDENCE_MARKER'));
 });
@@ -622,7 +756,7 @@ test('carousel navigation waits for the exact card receipt and skips a redundant
   assert.equal(navigation.target.action, 'next'); assert.equal(h.requests.length, 0);
   assert.equal(h.socket.sent.some(event => event.type === 'session.commentary.append'), false);
   const committed = { ...carousel, revision: 2, activeId: cards[1].id, previousId: cards[0].id };
-  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 1, ready: true, context: { workspace, carousel: committed }, navigationAck: { id: navigation.id, status: 'applied' } }); await flushLive();
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 1, ready: true, context: { workspace, carousel: committed }, navigationAck: { id: navigation.id, status: 'applied' } }); await flushLive();
   assert.equal(h.events.some(event => event.type === 'navigation' && event.target.kind === 'answer'), false);
   assert.ok(h.socket.sent.some(event => event.type === 'session.commentary.append' && String(event.content).includes(records[1].name)));
   h.socket.user('What am I looking at?', 'next-question'); await flushLive();
@@ -641,7 +775,7 @@ test('a cited single lookup delivers facts before display and skips the closing 
   const navigation = h.events.find(event => event.type === 'navigation'); assert.ok(navigation);
   assert.ok(h.socket.sent.some(event => event.type === 'session.commentary.append' && event.content === result.answer));
   assert.equal(h.events.some(event => event.type === 'backend_idle'), false, 'An early fact is not terminal completion');
-  await h.control.applyControl({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: { externalResults: [exploreContextForResult(result)] }, navigationAck: { id: navigation.id, status: 'applied' } }); await flushLive();
+  await h.control.applyControl({ seq: h.nextSequence(), interactionRevision: 0, viewRevision: 0, ready: true, context: { externalResults: [exploreContextForResult(result)] }, navigationAck: { id: navigation.id, status: 'applied' } }); await flushLive();
   assert.equal(searches, 1); assert.equal(h.requests.length, 1);
   assert.equal(h.socket.sent.filter(event => event.type === 'session.commentary.append' && event.content === result.answer).length, 1);
   assert.ok(h.events.some(event => event.type === 'backend_idle'));

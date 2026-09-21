@@ -1,5 +1,7 @@
 # Templates, Branding and source lifecycle
 
+For the September 18 typography, composition, website motion control and scrolling refinement, see [regular website design and motion](website-design-and-motion.md) and the [current screenshot gallery](screenshots/website-design/README.md). The original captures below remain a historical baseline.
+
 Implemented in the current working checkout on 2026-09-16. This extends the existing knowledge, media, website and assistant architecture. It does not introduce another knowledge store or a second browsing catalog. Existing uncommitted work was the baseline; deployment and live paid testing were outside this implementation.
 
 The baseline already included the current assistant layer and related voice/media work. Changes observed during this task in `lib/visitor-active-image.ts`, `tests/browser/ai-carousel.spec.ts`, `tests/media-storage.test.ts` and `docs/voice-chat-speed-implementation-2026-09-16.md` were preserved; they are not claimed as part of this template implementation.
@@ -11,7 +13,7 @@ The baseline already included the current assistant layer and related voice/medi
 3. Upload related files in **Files**. In **Knowledge**, choose the main source and expand **Include related files in this review** to select up to five others. Choose **Interpret related sources**. For a public website, use the existing **Import a website** flow and review selected pages and photos.
 4. Review the per-file report, impact summary, source excerpts, possible duplicates, conflicting values and retained corrections. Resolve pending assertions and save corrections. If a batch is incomplete, explicitly acknowledge its failed-file report before **Apply to draft**. Apply never publishes.
 5. For updates, upload a replacement. The same normalized filename updates its previous source; for a renamed file choose **Replace [source]** and review it individually. To withdraw old information, use **Manage contributing sources → Review removal**, inspect the proposal, then Apply. Deleting an original file in Files is a separate operation.
-6. Review the saved draft in desktop and mobile modes and choose **Publish**. Existing sites need **no migration or reimport** to use these templates: select a template, save and publish when ready. Until then their saved style and publication remain in use.
+6. Review the saved draft in desktop and mobile modes and choose **Publish**. Existing sites need **no migration or reimport**: the regular website now uses the refined renderer even when an older snapshot has no template selection, preserving saved colors and content. Explicit template/style changes still require Save draft and Publish.
 
 ## Three original design directions
 
@@ -41,6 +43,7 @@ The portable `@thevoice/platform-ui/site-design` export owns `siteDesignSchema`,
   "typography": "literary",
   "textSize": "standard",
   "spacing": "spacious",
+  "websiteMotion": "subtle",
   "customAccent": false,
   "entry": "website",
   "customized": ["spacing"]
@@ -54,9 +57,10 @@ The portable `@thevoice/platform-ui/site-design` export owns `siteDesignSchema`,
 - `typography`: literary / modern / humanist (shown as **Familiar**).
 - `textSize`: standard / larger; larger scales relevant text by 1.125.
 - `spacing`: compact / comfortable / spacious, with spacing multipliers 0.75 / 1 / 1.3.
+- `websiteMotion`: optional off / subtle / expressive. Absent means Subtle. Branding's **Website motion → Scrolling & transitions** previews the current draft immediately. Expressive enables selected template effects; reduced motion overrides all animation choices. The setting affects only the regular website, preserves other branding, travels between templates, and resets to Subtle. Save draft does not update the publication.
 - `customAccent`: opt-in use of the existing `SiteContent.accent`; invalid contrast uses the palette accent. Palette text, muted text, accent and button foreground pairings have contrast tests.
 - `entry`: existing website / assistant preference, independent of every styling update and reset.
-- `customized`: optional list of deliberate palette, typography, textSize, spacing and customAccent choices. Explicit choices travel between templates; untouched defaults follow the new template. Earlier saved template styles infer customization from differences from their template defaults.
+- `customized`: optional list of deliberate palette, typography, textSize, spacing, customAccent and websiteMotion choices (up to six). Explicit choices travel between templates; untouched defaults follow the new template. Earlier saved template styles infer customization from differences from their template defaults.
 
 Identity stays in the existing content fields (`name`, `logoAssetId`) plus optional `tagline` (180 characters). Reset preserves content, accent input, logo, source corrections, media revisions, stable item IDs, capabilities, opening selections and the entry preference. Every individual control merges its style patch into the current object. The website-import design application likewise preserves a selected template, independent settings, opening selections and tone.
 

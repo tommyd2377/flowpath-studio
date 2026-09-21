@@ -5,6 +5,7 @@ import { sampleContent } from '../lib/site-model';
 import { DEFAULT_VISITOR_SETTINGS, type VisitorAvailability } from '../lib/visitor-model';
 import { validateVisitorOffer, visitorRealtimeSession, type VisitorSessionOptions } from '../lib/visitor-realtime-session';
 import { LIVE_VOICE_CHOICES, CONVERSATION_PRESETS } from '../lib/voice-settings';
+import { DEFAULT_EXPLORE_SETTINGS } from '../lib/explore-model';
 
 const offer = 'v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendrecv\r\n';
 const availability: VisitorAvailability = { enabled: true, mode: 'voice', live: true, chatRemaining: 25, voiceRemaining: 4, resetsAt: '2026-09-10T00:00:00.000Z' };
@@ -101,6 +102,36 @@ test('mocked Live session creation uses the selected built-in voice, personality
     const before = Date.now(), response = visitorRealtimeSession(h.options), reader = response.body!.getReader();
     const event = JSON.parse(new TextDecoder().decode((await reader.read()).value));
     assert.ok(event.expiresAt >= before + 30_000 && event.expiresAt <= Date.now() + 30_000);
+    await reader.cancel(); h.controller.abort(); await flush();
+  }
+});
+
+test('Live receives website-wide delegation authority even with an empty screen, with publisher permissions intact', async () => {
+  for (const enabled of [false, true]) {
+    const content = { ...sampleContent('general'), name: enabled ? 'Aster Consulting' : 'Harbor Gallery', contact: '555-0109',
+      visitor: { ...DEFAULT_VISITOR_SETTINGS, assistantPurpose: 'Help visitors explore our published work.' },
+      explore: { ...DEFAULT_EXPLORE_SETTINGS, enabled } };
+    const h = harness({ content, context: {} });
+    const original = h.options.fetch!;
+    h.options.fetch = async (url, init) => {
+      if (!String(url).endsWith('/hangup')) {
+        const { session } = JSON.parse(String(init?.body));
+        assert.ok(session.instructions.includes(JSON.stringify(content.name)));
+        for (const heading of ['Backchannel policy:', 'Interruption policy:', 'Delegation policy:', 'Backend tools:', 'Delegate to the backend when:', 'Do not delegate to the backend when:']) assert.ok(session.instructions.includes(heading), heading);
+        assert.match(session.instructions, /entire current publication/);
+        assert.match(session.instructions, /empty screen is never evidence/);
+        assert.match(session.instructions, /Delegate before claiming information is missing/);
+        assert.match(session.instructions, /phone numbers/);
+        assert.match(session.instructions, /multiple sentences and pauses/);
+        assert.equal(session.instructions.includes('External research is disabled'), !enabled);
+        assert.equal(session.instructions.includes('External research: search the web, images and maps'), enabled);
+        assert.deepEqual(session.input, []);
+      }
+      return original(url, init);
+    };
+    const response = visitorRealtimeSession(h.options), reader = response.body!.getReader();
+    await reader.read(); await reader.read();
+    assert.equal(h.control.content.contact, content.contact, 'The backend retains the approved facts; an empty screen does not strip them');
     await reader.cancel(); h.controller.abort(); await flush();
   }
 });

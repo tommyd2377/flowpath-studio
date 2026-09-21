@@ -37,8 +37,9 @@
 .assistant :global(.platform-conversation-dock) .composer { width: 100%; padding: 8px 12px 8px 18px; }
 
 /* The dock stays mounted above both surfaces. Only the cards occupy the AI layer. */
-.interaction { position: sticky; top: 0; z-index: 55; width: 100%; background: #101110; }
-.interaction .modes { position: absolute; top: auto; right: 24px; bottom: -34px; margin: 0; padding: 3px; border-radius: 22px; box-shadow: 0 3px 15px #0001; }
+.interaction { position: sticky; top: 0; z-index: 55; width: 100%; background: var(--platform-bg, #101110); }
+.interaction .modes { position: absolute; top: 100%; right: 24px; bottom: auto; translate: 0 -50%; margin: 0; padding: 3px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.interaction .modes button[aria-pressed=false] .modeLabel { background: var(--platform-bg, #101110); }
 .interaction .modes button { min-height: 32px; padding: 6px 12px; font-size: 11px; }
 .website { padding: 40px 28px 0; transition: filter .3s ease, opacity .3s ease; container-type: inline-size; }
 .assistant[data-ai-layer-open=true] .website { filter: blur(6px); opacity: .38; user-select: none; }
@@ -78,3 +79,17 @@
 .interaction[data-voice-color] .modeSelection { background: var(--platform-surface); }
 .interaction[data-voice-color] .suggestions button { color: var(--platform-text); background: var(--platform-surface); border-color: var(--platform-border); }
 .interaction[data-voice-color] button:focus-visible { outline-color: var(--voice-accent); }
+
+/* Comfortable controls in the compact assistant dock. */
+.interaction .modes button { min-height: 44px; }
+.send { width: 44px; height: 44px; }
+.cancelWork { min-height: 44px; bottom: -44px; }
+
+/* Editing stays above the persistent surface instead of floating over its answer. */
+/* Keep the chat dock's flow height consistent when opening/closing the layer,
+   so a compact composer cannot clamp the website's retained scroll position. */
+.interaction :global(.platform-conversation-dock) { height: auto; min-height: 0; padding: 8px 0; }
+.interaction :global(.platform-conversation-dock) { background: var(--platform-bg, #101110); border-color: var(--platform-border, #32342a70); }
+.interaction :global(.platform-conversation-surface) { position: relative; top: 0; left: auto; right: auto; width: calc(100% - 36px); min-height: 0; }
+.assistant[data-ai-layer-open=true] .interaction :global(.platform-conversation-suggestions) { position: static; }
+.composer textarea:focus-visible { outline: none; box-shadow: none; }

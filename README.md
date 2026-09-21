@@ -126,6 +126,7 @@ See [Product philosophy and direction](docs/product-philosophy.md) for the princ
 
 ## Documentation and contribution
 
+- [Shared working philosophy, numbered notes and dynamic backlog](docs/project-todo.md)
 - [Architecture and code map](docs/architecture.md)
 - [Knowledge and shared interfaces](docs/platform-foundation.md)
 - [Source review and updates](docs/source-review.md)
@@ -143,4 +144,4 @@ This repository is private. No open-source license is included; visibility, lice
 
 ## Visitor task system
 
-Hierarchical publication spaces support shared records, nested collections, conversational and manual filtering, persistent selections, typed capability composition, editable artifacts and synthetic commerce/scheduling reviews. The normal website is independent. Voice and chat open a shared carousel layer above it; filtering, details and Back operate within that layer and retain its criteria and ordering. The v2 path streams and reviews up to 10,000 records without hydrating the public page or model context with the full catalog. Existing v1 publications remain readable. See [the AI carousel layer](docs/visitor-task-system/ai-layer-implementation.md) for current state, rendering and verification, and the [implementation report](docs/visitor-task-system/implementation-report.md) for earlier migration and capability work.
+Hierarchical publication spaces support shared records, nested collections, conversational and manual filtering, persistent selections, typed capability composition, editable artifacts and synthetic commerce/scheduling reviews. The normal website is independent. Voice and chat open one evolving information surface above it. Related media and explanations share a composition; Back restores whole answer states, including retained query criteria and ordering. The v2 path streams and reviews up to 10,000 records without hydrating the public page or model context with the full catalog. Existing v1 publications remain readable. See [the information surface](docs/information-surface.md) for current state, rendering and verification, and the [implementation report](docs/visitor-task-system/implementation-report.md) for earlier migration and capability work.

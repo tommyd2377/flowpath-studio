@@ -58,7 +58,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
       preview.content.catalogPublicationId ? Promise.resolve(null) : getPublishedKnowledgeSnapshot(preview.siteId, preview.content.knowledgeRevisionId),
       getPublishedMedia(preview.siteId, preview.content.mediaRevisionId),
     ]);
-    const context = validateVisitorContext(input.context ?? (input.catalogState ? { catalogState: input.catalogState } : {}), preview.content, catalog ?? undefined, media ?? undefined);
+    const context = validateVisitorContext(input.context ?? (input.catalogState ? { catalogState: input.catalogState } : {}), preview.content, catalog ?? undefined, media ?? undefined, slug);
     if (input.context?.catalogState && input.catalogState && JSON.stringify(input.catalogState) !== JSON.stringify(input.context.catalogState)) throw new AppError('The current view is inconsistent. Reload and try again.', 400);
     const catalogState = catalog ? validateCatalogState(context.catalogState, catalog, media) : undefined;
     if (!catalog && input.catalogState) throw new AppError('This site changed. Reload to continue.', 409);
@@ -95,15 +95,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
     if (request.signal.aborted) throw new AppError('Voice request cancelled.', 499);
     const key = process.env.OPENAI_API_KEY?.trim();
     if (!key) throw new AppError('Voice is temporarily unavailable.', 503);
+    const record = requestTestRecorder(request, input.requestId);
     return visitorRealtimeSession({
-      record: requestTestRecorder(request, input.requestId),
+      record,
       offer: input.sdp, apiKey: key, signal: request.signal, traceId: input.requestId,
       content: preview.content, catalog: catalog ?? undefined, media: media ?? undefined, catalogState,
       context, history: input.history,
       idleTimeoutMs: visitorSettings(preview.content).voiceIdleTimeoutSeconds * 1000,
       mailbox: { slug, siteId: preview.siteId, publicationKey: createHash('sha256').update(snapshot).digest('hex') },
       availability, reservationChecksPublication: true, reserveTurn: () => reserve(randomUUID()), assertCurrent,
-      search: async (query, kind, signal, annotationTarget) => (await authorizedExplore(slug, { query, kind, requestId: randomUUID(), parentTraceId: input.requestId, ...(annotationTarget ? { annotationTarget } : {}) }, signal, snapshot)).result,
+      search: async (query, kind, signal, annotationTarget) => (await authorizedExplore(slug, { query, kind, requestId: randomUUID(), parentTraceId: input.requestId, ...(annotationTarget ? { annotationTarget } : {}) }, signal, snapshot, record)).result,
       onTiming: (stage, durationMs) => { void recordPlatformEvent(preview.siteId, { ...observed, type: 'provider_usage', status: 'observed', operationId: `latency_${stage}`, durationMs }).catch(() => undefined); },
       onUsage: (usage, source) => { void recordPlatformEvent(preview.siteId, { ...observed, type: 'provider_usage', status: 'observed', operationId: source === 'live' ? 'gpt_live_duration' : source === 'backend' ? 'luna_backend' : 'input_transcription', requestId: currentRequestId, usage }).catch(() => undefined); },
       onCleanupFailure: () => { gate.blocked = true; }, onClosed: release,

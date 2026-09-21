@@ -41,6 +41,8 @@ before reloading to ensure the final browser buffer is saved.
 | `model.request`, `model.transport`, `model.response` | Bounded copies of actual backend inputs/tools/settings and output, with the WebSocket cache reference/delta when used |
 | `tool.request/result`, `action.request/result/failed` | Requested actions, arguments, validated results, failures and timings; direct navigation is captured as well as delegated work |
 | `chat.submitted`, chat/voice stream events | Typed input and model-provided transcripts/answers, including provisional output |
+| `conversation.memory`, `conversation.memory_unavailable` | The bounded historical research supplied to voice, or a safe hydration failure; actual delivered parts also appear in `voice.sent` |
+| `voice.application` with `answer_completed` | A successful, revision-scoped backend reply retained for dialogue, even without a display change; not proof of audible delivery |
 | `screen.observed`, `screen.received`, `screen.accepted`, `screen.confirmed` | Browser state versus server-accepted context and display acknowledgments |
 | `http.*`, `diagnostic`, `problem.marked` | Request timing/status, existing browser diagnostics and tester notes |
 
@@ -54,6 +56,24 @@ credentials are saved. A transcript event is evidence of a transcript, not proof
 that the speaker heard that text. Browser playback diagnostics are useful but do
 not measure the sound at a physical speaker. Inputs describe what the model was
 given; they cannot prove it attended to or understood every part.
+
+Handled `search_explore` failures now include `action.failed` with a bounded
+`phase` (`validation`, `search`, or `display`), operation and safe diagnostic
+classification. An omitted unused argument can be distinguished from a provider
+failure without exposing its raw error body or automatically retrying it.
+
+Before the Record button is pressed, ordinary development diagnostics may show
+timings, failures and stops, but they do not reconstruct the missing conversation.
+Retained earlier dialogue in an attachment snapshot also does not establish its
+original timestamps or the complete earlier model inputs. The [noon investigation](qa-voice-2026-09-19-noon.md)
+demonstrates this boundary. Conversation memory works with recording on or off;
+enabling recording changes observation, not which past facts the assistant receives.
+
+The September 19 QA incident exposed a gap in that binary omission: output-audio
+events used the generic `delta` field. New writes now omit these audio deltas,
+while keeping transcript deltas. Timeline/export reads sanitize older events as
+well; existing ignored originals remain private under the retention policy.
+See the [incident and verification report](qa-real-content-2026-09-18.md).
 
 Each event includes a wall-clock timestamp, a process-local monotonic timestamp,
 source and recording sequence. Request IDs, turn generations, interaction
@@ -187,3 +207,48 @@ production telemetry dashboard are not enabled by this implementation.
 - Verified with 95 offline server/recorder/control tests and six isolated recorder
   browser cases, including mocked active-voice attachment and attachment failure.
   These checks do not establish live spoken-phone-number accuracy.
+
+## Optional bounded local paid QA
+
+With explicit authorization for the host, task and dollar ceiling, an ignored
+`.visitor-recordings/qa-budget.json` can scope a development-only guard to an
+active local recorder. Example (use the actual active recorder ID and site slug):
+
+```json
+{"recordingId":"00000000-0000-4000-8000-000000000001","slugs":["synthetic-qa"],"limitMicros":3000000,"voiceReserveMicros":150000}
+```
+
+The guard is off without this file and always off outside `NODE_ENV=development`.
+It changes neither provider prompts nor output limits. Configured local test
+slugs require the matching, validated active recorder and reject paid requests
+when its scope is missing or different; other slugs are unaffected. Keep that
+recording active and do not run unrelated paid flows concurrently. It covers task backend
+REST/WebSocket requests, the older text provider, and nested/direct web, image
+and map providers. Mock/local maps do not need paid reservations.
+
+Before sending a request it writes a conservative reservation to
+`qa-budget-<recordingId>.json`, under an exclusive filesystem lock. Count
+`voiceReserveMicros + sum(entries[].chargedMicros)` against the ceiling. The
+ledger survives HMR/restarts. Missing usage, missing/unrecognized service tier,
+aborts and failed calls retain their reservation. Measured usage releases only
+the difference from a conservative upper-bound cost; these figures are **not
+billed totals**. Never delete/reset a ledger or lock to continue spending without
+first reconciling the prior run. Recorder events `qa_budget.reserved`,
+`qa_budget.measured` and `qa_budget.usage_unknown` contain accounting observations.
+
+The initial $0.15 is a held allowance for **one manually supervised voice session
+of at most 120 seconds**, not permission for repeated microphone sessions. Its
+backend requests consume the separate guarded token allowance. This guard does
+not meter or limit the number of Live session starts; the operator must enforce
+that single-session test boundary. Stop on unexpected calls or uncertain usage.
+
+Rates/bounds verified September 18, 2026 against official
+[pricing](https://developers.openai.com/api/docs/pricing),
+[Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna) and
+[web search](https://developers.openai.com/api/docs/guides/tools-web-search):
+Luna Fast/long/cache-write input is conservatively charged at $1/M, output at
+$3.60/M, hosted web/image search at $0.01 plus up to 128K context tokens. Serialized
+UTF-8 bytes plus 20K framing headroom bound request text tokens. A full 128K search
+context is added without changing the request's search settings. GPT-Live is
+$0.05/minute, billed per second. Reverify these rates before later runs. Other
+models, media inputs and unbounded hosted tools are rejected while enabled.

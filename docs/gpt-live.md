@@ -1,6 +1,14 @@
 # GPT-Live voice architecture
 
-Studio and the independent FlowPath app use identical copies of `lib/gpt-live/{protocol,backend,runtime,browser}.ts`. Each repository builds independently; `tests/gpt-live.test.ts` compares these files byte for byte when both sibling checkouts are available. Changes to the common core must be applied to both repositories. Product content and tool adapters remain app-specific.
+Studio and the independent FlowPath app maintain copies of `lib/gpt-live/{protocol,backend,runtime,browser}.ts` that are intended to stay identical. Each repository builds independently; `tests/gpt-live.test.ts` compares these files byte for byte when both sibling checkouts are available. Changes to the common core must be reconciled in both repositories. Product content and tool adapters remain app-specific. **September 20:** local sibling parity was already failing before this repair; Studio's optional listening-only startup is also pending reconciliation in the separate FlowPath checkout. Do not claim current byte parity.
+
+## September 20: current visibility and reconnect readiness
+
+Studio starts visitor-first and resumed calls with `start('listen')`. It sends the silent-readiness instruction before enabling delegation; retained history alone does not trigger backend work. User transcript fragments received during startup remain eligible. This avoids the previous intermediate instruction inviting a response before the host's silent-resume policy. Actual audible compliance and interruption still require a recorded microphone test.
+
+Screen visibility now travels as one compact observation: primary/supporting region, visible/offscreen state, observed item count, short labels and history availability. Full validated references remain in the delegated backend context. Photo labels for at most four visible images use their own context channel; paging no longer retransmits unchanged answers or contact facts. Published content and conversation research remain independent of current visibility. An append acknowledgment confirms delivery, not model comprehension; this follows the [Live context model](https://developers.openai.com/api/docs/guides/live-conversations).
+
+The browser confirms visible requested regions and loaded gallery/photo content before returning display success. Clarification uses its own empty record receipt, not IDs from retained detail. A cancelled task's server generation can advance while its old view stays visible; preparation checks that generation and restores with fresh metadata. Restoration does not replay paid tools. See [recorded evidence and verification](qa-voice-2026-09-20-fixes.md).
 
 ## Shared path
 
@@ -43,7 +51,7 @@ References: [progress and cancellation](https://developers.openai.com/api/docs/g
 
 ## Audio and lifecycle
 
-Input, output and backend activity remain independent. Waveforms and startup protection use browser media levels, not transcript arrivals, backend completion or append acknowledgments. Both apps keep original microphone capture running and mute cloned outgoing tracks during the iOS opening protection. Protection ends two seconds after first observed output activity, with a ten-second no-output escape. Microphone initialization and acoustic echo cancellation still belong to the browser.
+Input, output and backend activity remain independent. Waveforms and the shared optional startup protection use browser media levels, not transcript arrivals, backend completion or append acknowledgments. The shared guard keeps original microphone capture running and can mute cloned outgoing tracks during an iOS opening; protection ends two seconds after first observed output activity, with a ten-second no-output escape. Studio no longer enables that opening mute: its outgoing tracks become available after the readiness acknowledgment and stay available during the greeting. The shared implementation and the independent FlowPath app remain unchanged. Microphone initialization and acoustic echo cancellation still belong to the browser; physical mobile echo and interruption remain separate acceptance checks.
 
 Output quiet uses a 1.2-second observation window. This is a UI heuristic, not proof a sentence finished or that a user heard it. FlowPath uses it to advance its per-card briefing; long within-sentence pauses may need real-device tuning. Studio does not put generated assistant transcripts into cross-mode history as fully heard answers. User caption grouping is revisable; the backend keeps original fragments during the active session.
 

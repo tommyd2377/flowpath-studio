@@ -19,7 +19,21 @@ export function websiteQueryCommand(text: string, context: Pick<CapabilityContex
   if (!history) return null;
   const query = history.current, fields = index.space.fields;
   const value = text.toLowerCase().trim().replace(/[.!?]+$/, '');
+  const explicitAll = /^(?:show(?: me)?|find|search(?: for)?|browse)\s+all(?: of)?\s+/.test(value);
   if (/^(?:what|when|where|why|how|who|does|do|is|are|can|could|tell|explain)\b/.test(value)) return null;
+  // Searching external media/maps is an assistant capability, not a catalog
+  // keyword filter. A plain "show photos" can still select a published gallery.
+  if (/^(?:search(?:\s+for)?|find)\s+(?:(?:some|a|an|the)\s+)?(?:(?:web|online)\s+)?(?:images?|pictures?|photos?|photographs?|videos?|maps?)\b/.test(value)
+    || /\b(?:on|from|across)\s+(?:the\s+)?(?:web|internet)\b/.test(value)) return null;
+  // A projection/request for explanation is not a text predicate. Leave mixed
+  // display/filter requests intact for the assistant's typed query tools.
+  if (/[?;]|\.\s|\b(?:and then|then)\b|\band\s+(?:show|tell|explain|display|list|include|their|its)\b/.test(value)) return null;
+  // A shortcut completes the whole request; it cannot discard a second task
+  // after selecting a named value. Ordinary alternatives (red and blue) remain filters.
+  if (/(?:\b(?:and|also|plus|while|as well as)\s+|,\s*)(?:(?:then|also|please|can you|could you|would you)\s+)*(?:calculate|compute|estimate|total|sum|add up|work out|figure out|apply|explain|summari[sz]e|compare|research|search|look up|find out|annotate|enrich|convert|give|tell|show)\b/.test(value)) return null;
+  const displayClause = value.match(/\b(?:with|along with|including|plus)\s+(.+)$/)?.[1];
+  if (displayClause && (/^(?:their|its|the|listed|published)\b/.test(displayClause)
+    || fields.some(field => [field.id, field.label, ...field.aliases].some(label => phrase(displayClause, label))))) return null;
   const patch = (operations: QueryPatch['operations']): WebsiteCommand => {
     if (/\bat any price$/.test(value)) {
       const projected = patchQuery(history, { queryId: query.queryId, baseRevision: query.revision, operations });
@@ -39,6 +53,18 @@ export function websiteQueryCommand(text: string, context: Pick<CapabilityContex
   if (/^(?:exclude subcollections|only (?:this|the current) collection)$/.test(value)) return patch([{ op: 'setScope', scope: { ...query.scope, traversal: 'direct', include: undefined } }]);
   if (/^(?:search|show) (?:the )?(?:whole (?:site|website)|all collections)$/.test(value)) return patch([{ op: 'setScope', scope: { collectionId: index.space.rootId, path: [index.space.rootId], traversal: 'descendants' } }]);
 
+  const scopeName = value.match(/^(?:show(?: me)?|browse)\s+(?:(?:your|the|all)\s+)?(.+)$/)?.[1].replace(/,?\s*at any price$/, '').replace(/\s+instead,?$/, '').trim();
+  const sameWords = (left: string, right: string) => words(left).map(singular).join(' ') === words(right).map(singular).join(' ');
+  const exactScope = scopeName && index.space.collections.filter(collection => sameWords(collection.name, scopeName));
+  if (exactScope && exactScope.length === 1) {
+    const target = exactScope[0];
+    const pathTo = (id: string): string[] => {
+      if (id === index.space.rootId) return [id];
+      for (const edge of index.space.edges.filter(edge => edge.childId === id)) { const path = pathTo(edge.parentId); if (path.length) return [...path, id]; } return [];
+    };
+    return patch([{ op: 'setScope', scope: { collectionId: target.id, path: pathTo(target.id), traversal: 'descendants' } }, { op: 'setSearch', text: '' }, ...explicitAll ? [replaceRoot(all([])), { op: 'setSort' as const, order: [] }, { op: 'setPreferences' as const, preferences: [] }] : nodes.filter(node => node.kind === 'search').map(node => ({ op: 'removeConstraint' as const, nodeId: node.id }))]);
+  }
+
   const openName = value.match(/^open\s+(?:the\s+)?(.+)$/)?.[1];
   const showName = value.match(/^show(?: me)?\s+(?:(?:your|the)\s+)?(.+)$/)?.[1];
   if (openName || showName) {
@@ -49,18 +75,6 @@ export function websiteQueryCommand(text: string, context: Pick<CapabilityContex
       const matches = index.space.records.filter(record => words(requested).every(word => words(record.name).includes(word)));
       return matches.length === 1 ? { capabilityId: 'record.detail', input: { recordId: matches[0].id } } : clarify('Which item should I open? Use its full name or a number from the current results.');
     }
-  }
-
-  const scopeName = value.match(/^(?:show(?: me)?|browse)\s+(?:(?:your|the|all)\s+)?(.+)$/)?.[1].replace(/,?\s*at any price$/, '').replace(/\s+instead,?$/, '').trim();
-  const sameWords = (left: string, right: string) => words(left).map(singular).join(' ') === words(right).map(singular).join(' ');
-  const exactScope = scopeName && index.space.collections.filter(collection => sameWords(collection.name, scopeName));
-  if (exactScope && exactScope.length === 1) {
-    const target = exactScope[0];
-    const pathTo = (id: string): string[] => {
-      if (id === index.space.rootId) return [id];
-      for (const edge of index.space.edges.filter(edge => edge.childId === id)) { const path = pathTo(edge.parentId); if (path.length) return [...path, id]; } return [];
-    };
-    return patch([{ op: 'setScope', scope: { collectionId: target.id, path: pathTo(target.id), traversal: 'descendants' } }, { op: 'setSearch', text: '' }, ...nodes.filter(node => node.kind === 'search').map(node => ({ op: 'removeConstraint' as const, nodeId: node.id }))]);
   }
 
   const named = fields.map(field => ({ field, score: Math.max(0, ...[field.id, field.label, ...field.aliases].filter(label => phrase(value.replace(/[,:]/g, ' '), label)).map(label => normalized(label).length)) }));
@@ -119,12 +133,19 @@ export function websiteQueryCommand(text: string, context: Pick<CapabilityContex
   }
   if (!/^(?:show(?: me)?|find|search(?: for)?|include)\s+/.test(value)) return null;
   if (/\b(web|online|internet|map|annotate|compare|how|why|who|when)\b/.test(value)) return null;
-  let subject = value.replace(/^(?:show(?: me)?|find|search(?: for)?|include)\s+/, '').replace(/^(?:your|the|our)\s+/, '').replace(/\s+(?:instead|too|again|please)$/, '').replace(/,?\s*at any price$/, '').trim();
+  let subject = value.replace(/^(?:show(?: me)?|find|search(?: for)?|include)\s+/, '').replace(/^all(?: of)?\s+/, '').replace(/^(?:your|the|our)\s+/, '').replace(/\s+(?:instead|too|again|please)$/, '').replace(/,?\s*at any price$/, '').trim();
   if (!subject || subject.length > 160) return null;
   const terms = words(subject).map(singular);
-  const scopes = index.space.collections.filter(collection => collection.id !== index.space.rootId).map(collection => ({ collection, terms: words(collection.name).map(singular) })).filter(item => item.terms.length && item.terms.every(term => terms.includes(term)));
+  const scopes = index.space.collections.filter(collection => collection.id !== index.space.rootId).map(collection => {
+    const full = words(collection.name).map(singular);
+    // Imported categories can retain a qualified name such as "Retail / Cakes".
+    // A request for the reviewed leaf category should use its memberships,
+    // not unrelated records that merely mention that word in a policy.
+    const leaf = words(collection.name.split(/\s*(?:\/|>|→)\s*/).at(-1) ?? '').map(singular);
+    return { collection, terms: full.every(term => terms.includes(term)) ? full : leaf };
+  }).filter(item => item.terms.length && item.terms.every(term => terms.includes(term)));
   const longest = Math.max(0, ...scopes.map(item => item.terms.length));
-  const chosen = /^(?:photos?|pictures?|images?|photographs?|gallery)$/.test(subject) ? index.space.collections.filter(collection => collection.view === 'gallery' && [...index.direct.get(collection.id) ?? []].some(id => index.records.get(id)?.type === 'published-photo')).map(collection => ({ collection, terms: words(subject).map(singular) })) : scopes.filter(item => item.terms.length === longest);
+  const chosen = longest ? scopes.filter(item => item.terms.length === longest) : /^(?:photos?|pictures?|images?|photographs?|gallery)$/.test(subject) ? index.space.collections.filter(collection => collection.view === 'gallery' && [...index.direct.get(collection.id) ?? []].some(id => index.records.get(id)?.type === 'published-photo')).map(collection => ({ collection, terms: words(subject).map(singular) })) : [];
   const operations: QueryPatch['operations'] = [];
   if (chosen.length) {
     const pathTo = (id: string, seen = new Set<string>()): string[] => {
@@ -133,6 +154,10 @@ export function websiteQueryCommand(text: string, context: Pick<CapabilityContex
     };
     operations.push({ op: 'setScope', scope: chosen.length === 1 ? { collectionId: chosen[0].collection.id, traversal: 'descendants', path: pathTo(chosen[0].collection.id) } : { collectionId: chosen[0].collection.id, traversal: 'explicitUnion', include: chosen.slice(1, 25).map(item => item.collection.id), path: pathTo(chosen[0].collection.id) } });
     subject = words(subject).filter(word => !chosen[0].terms.includes(singular(word))).join(' ');
+    // A resolved category plus a presentation noun requests its members, not
+    // records containing that noun. Exact record/category names already won
+    // above. Preserve genuine qualifiers (e.g. "winter menu") for retrieval.
+    if (/^(?:(?:a|the|your|our) )?(?:menu|list|catalog|catalogue|gallery|collection|selection|options)(?: of)?$/.test(subject)) subject = '';
   }
   // Tokens are resolved against the complete publication, including full reading text.
   // Singular/plural equivalence is allowed only when that exact alternate token is published.
@@ -151,8 +176,15 @@ export function websiteQueryCommand(text: string, context: Pick<CapabilityContex
       if ('children' in node) { const children = node.children.map(withoutSearch).filter((child): child is Expression => !!child); return children.length ? { ...node, children } : null; }
       return node;
     };
-    const retained = withoutSearch(query.where);
-    operations.push({ op: 'setSearch', text: '' }, replaceRoot(all([...(retained?.kind === 'all' ? retained.children : retained ? [retained] : []), ...next ? [next] : []])));
+    // Explicitly asking for every member of a resolved collection starts its
+    // full view. Prior offering prices must not silently exclude its photos.
+    // Ordinary refinements and qualified requests still keep their constraints.
+    const resetCriteria = explicitAll && chosen.length > 0 && !subject;
+    const retained = resetCriteria ? null : withoutSearch(query.where);
+    if (resetCriteria) operations.push({ op: 'setSort', order: [] }, { op: 'setPreferences', preferences: [] });
+    // Plain keyword searches have one owner. Boolean alternatives remain
+    // explicit predicates, so broadening preserves typed constraints.
+    operations.push({ op: 'setSearch', text: next?.kind === 'search' ? next.text : '' }, replaceRoot(all([...(retained?.kind === 'all' ? retained.children : retained ? [retained] : []), ...next && next.kind !== 'search' ? [next] : []])));
   }
   return patch(operations);
 }

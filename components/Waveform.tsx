@@ -67,10 +67,12 @@ export default function Waveform({
       palette.width = canvas.width;
       palette.height = 1;
       const gradient = paletteContext.createLinearGradient(0, 0, width * dpr, 0);
-      const brand = canvas.closest('[data-site-template]') ? getComputedStyle(canvas).getPropertyValue('--platform-accent').trim() : '';
+      // A chosen voice hue keeps the same soft, transparent tails as the default.
+      const customColor = color && /^#[\da-f]{6}$/i.test(color) ? color : '';
+      const brand = customColor || (canvas.closest('[data-site-template]') ? getComputedStyle(canvas).getPropertyValue('--platform-accent').trim() : '');
       if (/^#[\da-f]{6}$/i.test(brand)) {
         for (const [position, alpha] of [[0, '00'], [.13, '52'], [.36, 'dd'], [.5, 'ff'], [.64, 'dd'], [.87, '52'], [1, '00']] as const) gradient.addColorStop(position, brand + alpha);
-        shadow = brand + '4d';
+        shadow = brand + (customColor ? '33' : '4d');
       } else {
         gradient.addColorStop(0, "rgba(221, 191, 146, 0)");
         gradient.addColorStop(0.13, "rgba(221, 191, 146, 0.32)");
@@ -85,8 +87,6 @@ export default function Waveform({
       const pattern = context.createPattern(palette, "repeat-y");
       pattern?.setTransform(new DOMMatrix().scale(1 / dpr, 1));
       stroke = pattern ?? (/^#[\da-f]{6}$/i.test(brand) ? brand : "#f6eddb");
-      // Explicit voice colors use one solid hue; old sites keep their existing stroke.
-      if (color && /^#[\da-f]{6}$/i.test(color)) { stroke = color; shadow = color + '33'; }
       previousDraw = 0;
       // Resizing clears the bitmap after animation frames have run. Paint before
       // this frame reaches the screen, without creating a second animation loop.
