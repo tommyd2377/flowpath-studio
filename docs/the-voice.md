@@ -5,9 +5,9 @@ Implemented September 16, 2026. Studio now has **The Voice** beside Branding. We
 ## Publisher guide
 
 1. Open **The Voice** for the current site. GPT Live 1 is the fixed voice model.
-2. Choose a speaking voice and language. Start with **Quiet**, **Helpful** or **Expressive**, then adjust answer length, warmth, formality and energy. Open **Conversation habits & pronunciation** for pace, listening acknowledgements, pauses, follow-up questions, small talk and pronunciation hints.
+2. Set **Assistant role → Role and identity**: who the assistant is, whom it helps and the useful outcomes it supports. This ongoing role applies to voice and chat. Leave it blank for a knowledgeable website guide. Choose a speaking voice and language, then start with **Quiet**, **Helpful** or **Expressive** and adjust answer length, warmth, formality and energy. Open **Conversation habits & pronunciation** for pace, listening acknowledgements, pauses, follow-up questions, small talk and pronunciation hints.
 3. Choose **Amber**, **Slate**, **Ocean**, **Teal**, **Jade**, **Indigo**, **Plum**, **Rose** or **Copper** for the waveform and chat controls. Amber is the new-site default. This color is independent of your website palette; it does not recolor website buttons, content cards or expanded publisher details.
-4. Set the welcome message, optional approved greeting points and who speaks first. Set the assistant purpose, voice/chat availability, initial website/assistant preference, session duration, inactivity timeout and daily allowances. Optional external search, image search, map and annotation settings are here too.
+4. Set the welcome message, up to three approved opening topics and who speaks first in **Conversation opening**. These are separate from the ongoing assistant role. Set voice/chat availability, initial website/assistant preference, session duration, inactivity timeout and daily allowances. Optional external search, image search, map and annotation settings are here too.
 5. **Save draft**, review your site preview, then **Publish** when ready. Existing visitors must reload to adopt the new publication; an active session cannot continue using a superseded publication. A new voice requires a new conversation.
 
 Each site's saved settings are independent. The existing published `/s/{slug}` address uses its site's snapshot. This change does not provision subdomains, DNS or custom domains; the Domains section still reports the current hosting limitations.
@@ -15,6 +15,8 @@ Each site's saved settings are independent. The existing published `/s/{slug}` a
 The preview demonstrates appearance without AI calls. The welcome's existing Listen control uses a locally installed device voice, **not** the selected GPT Live voice. Actual timbre, pronunciation, accent, pacing and instruction adherence need an authorized live audio test.
 
 ## Configuration and compatibility
+
+The ongoing role uses the existing optional `visitor.assistantPurpose` field, trimmed and bounded to 1,000 characters. Existing publisher purposes remain intact without a schema migration. The shared `assistantRoleInstructions` helper is included in chat, delegated voice guidance and the Live startup policy. It treats the role as identity/audience guidance, not evidence of business facts or permission to grant capabilities, credentials or actions. `welcomeMessage` and `greetingPoints` remain independent; changing the opening or choosing visitor-speaks-first does not erase the role. Draft saves do not affect the published role until Publish.
 
 `SiteContent.visitor.conversation` is an optional strict schema. Fields are optional to keep old drafts and publications readable. Unsupported keys/values are rejected before saving; raw prompts, temperatures, VAD thresholds, arbitrary provider models and custom-voice IDs are not accepted.
 
@@ -34,7 +36,7 @@ The preview demonstrates appearance without AI calls. The welcome's existing Lis
 | `pronunciation` | Up to 500 characters, quoted pronunciation data |
 | `color` | Nine validated solid-color identities |
 
-Optional `visitor.voiceSessionSeconds` accepts 30, 60 or 120 seconds; absence retains the existing two-minute cap. The shorter choice is enforced by the session owner, including cleanup. Existing inactivity options, quotas and the platform cap still apply. Turning conversations off preserves the configured choices and normal website browsing.
+Optional `visitor.voiceSessionSeconds` accepts 30, 60, 120, 300 or 600 seconds; absence retains the two-minute default. The platform maximum is ten minutes. The selected duration is enforced by the session owner, including cleanup, and published settings apply to new connections. Longer connections can use more paid voice time. Inactivity settings and daily task allowances remain separate; increasing session duration does not replenish a daily allowance. Turning conversations off preserves the configured choices and normal website browsing.
 
 Quiet sets reserved/professional/calm behavior, minimal answers, patient pauses, no filler and no unsolicited follow-up. It still permits necessary clarification. Presets patch only the nine behavior fields: voice, language, color, pronunciation, greeting, purpose, entry preference, search and usage limits survive. Individual controls also merge rather than replacing their parent settings.
 

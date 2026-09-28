@@ -7,6 +7,7 @@ export type TestEvent = TestObservation & {
 };
 export const RECORDING_HEADER = 'x-flowpath-test-recording';
 export const LOCAL_TEST_HEADER = 'x-flowpath-local-test';
+export const PHONE_RECORDING_HEADER = 'x-flowpath-phone-recording';
 export const RECORDING_EVENT_BYTES = 240_000;
 const noop: TestRecorder = () => {};
 
@@ -33,7 +34,7 @@ export function recordBrowserTestEvent(type: string, data: unknown, traceId?: st
 export function sanitizeTestObservation(event: TestObservation) {
   let budget = 100_000, nodes = 0, truncated = !!event.truncated, redacted = !!event.redacted;
   const seen = new WeakSet<object>();
-  const secret = /^(?:api[_-]?key|authorization|cookie|set-cookie|token|access[_-]?token|refresh[_-]?token|id[_-]?token|secret|password|credential|credentials|sdp|encrypted_content|client_secret|control)$/i;
+  const secret = /^(?:api[_-]?key|authorization|cookie|set-cookie|token|access[_-]?token|refresh[_-]?token|id[_-]?token|pairing[_-]?token|recording[_-]?grant|x-flowpath-phone-recording|secret|password|credential|credentials|sdp|encrypted_content|client_secret|control)$/i;
   function text(value: string) {
     let result = value.replace(/\bBearer\s+[^\s"<>]+/gi, '[redacted bearer]')
       .replace(/\bsk-[a-zA-Z0-9_-]{12,}/g, '[redacted key]')

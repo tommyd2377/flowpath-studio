@@ -101,7 +101,7 @@ test('provider request is single-call, bounded and uses the existing OpenAI tran
     const transport: typeof fetch = async (url, init) => {
       calls++; assert.equal(url, 'https://api.openai.com/v1/responses');
       const request = JSON.parse(String(init?.body));
-      assert.equal(request.model, 'gpt-5.6-luna'); assert.equal(request.store, false);
+      assert.equal(request.model, 'gpt-6-astra'); assert.deepEqual(request.reasoning, { effort: 'high' }); assert.equal(request.service_tier, 'default'); assert.equal(request.max_output_tokens, 8192); assert.equal(request.store, false);
       assert.equal(request.max_tool_calls, 1); assert.equal(request.tool_choice, 'required');
       assert.deepEqual(request.tools[0].filters.allowed_domains, ['nps.gov']);
       assert.deepEqual(request.tools[0].search_content_types, ['image']);

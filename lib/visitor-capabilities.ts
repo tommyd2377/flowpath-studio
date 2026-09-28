@@ -3,11 +3,11 @@ import { websiteQueryCommand } from './visitor-query-command';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { capabilityDefinitionSchema } from '@thevoice/platform-ui/contracts';
-import { expressionSchema, fieldDescriptorSchema, relationshipDescriptorSchema, patchQuery, queryPatchSchema, queryScopeSchema, querySpecSchema, queryResultSchema, expressionNodes, selectionStateSchema, taskIdSchema, type QuerySpec } from '@thevoice/platform-ui/query';
+import { expressionSchema, fieldDescriptorSchema, relationshipDescriptorSchema, patchQuery, queryPatchSchema, queryPatchOperationSchema, queryScopeSchema, querySpecSchema, queryResultSchema, expressionNodes, validateQueryFields, selectionStateSchema, taskIdSchema, type QuerySpec } from '@thevoice/platform-ui/query';
 import { canonicalRecordSchema, spaceCollectionSchema } from '@thevoice/platform-ui/collection-space';
 import { capabilityDescriptorSchema, type CapabilityDescriptor } from '@thevoice/platform-ui/task';
 import { displayedTaskRecordIds, type VisitorTaskView } from '@thevoice/platform-ui/task-view';
-import { describeScope, projectField, QueryResultStore, compatibleComparisonFields, evaluateQuery } from './catalog-query';
+import { describeScope, projectField, QueryResultStore, compatibleComparisonFields, evaluateQuery, resolveCollectionScope, CollectionScopeError } from './catalog-query';
 import { queryHash, type CompiledQueryIndex } from './catalog-query-index';
 import { EvidenceTypeError, retainEvidence, resolveEvidence } from './visitor-evidence-store';
 import { retainVisitorConversationResearch } from './visitor-conversation-memory';
@@ -17,17 +17,38 @@ import { exploreResultSchema } from './explore-model';
 import { getBackendMode } from './firebase/config';
 import { researchCapabilities, taskMapSchema, type VisitorResearch } from './visitor-research';
 import { taskExtensionCapabilities } from './visitor-task-extensions';
+import { priceTotalInputSchema, priceTotalOutputSchema, totalPublishedPrices, PublishedPriceInputError } from './visitor-price-calculation';
+import { publishedEstimateSchema } from '@thevoice/platform-ui/estimate';
+import { estimateCapabilities } from './visitor-estimate-capabilities';
+import { estimatePriceOptions } from './visitor-estimate-price-options';
+import { readPublishedEstimate, updatePublishedEstimate } from './visitor-estimate';
+import { estimateVisitorTax, TaxEstimateInputError } from './visitor-estimate-tax';
+import type { VisitorEstimateTaxInput } from '@thevoice/platform-ui/estimate-tax';
+import { queryFieldFeedback, type QueryFieldFeedback } from './visitor-query-field-feedback';
 
 const id = taskIdSchema, empty = z.object({}).strict();
+const scopeInputSchema = queryScopeSchema.extend({
+  collectionId: queryScopeSchema.shape.collectionId.describe('For explicitUnion, the first member collection, not a container. Never combine an ancestor with its descendant.'),
+  include: queryScopeSchema.shape.include.describe('Additional explicitUnion member collections. Each member includes its descendants; omit ancestor containers.'),
+  path: queryScopeSchema.shape.path.optional(),
+});
+const patchInputSchema = queryPatchSchema.extend({ operations: z.array(z.union([
+  z.object({ op: z.literal('setScope'), scope: scopeInputSchema }).strict(), ...queryPatchOperationSchema.options.filter(option => option.shape.op.value !== 'setScope'),
+])).min(1).max(24) });
+const comparisonInputSchema = z.object({ records: z.array(canonicalRecordSchema).max(6).optional(),
+  recordIds: z.array(id).min(2).max(6).refine(ids => new Set(ids).size === ids.length, 'Comparison requires distinct published record IDs.').describe('Exact published IDs for two to six specifically requested records. Copy IDs from current context; do not use this to truncate a query result.').optional(), queryHandleId: id.optional(),
+  queryId: id.optional(), baseRevision: queryPatchSchema.shape.baseRevision.optional() }).strict();
 const displayValue = z.object({ fieldId: id, text: z.string().max(4000) }).strict();
 const outputSchemas: Record<string, z.ZodType> = {
+  estimate: publishedEstimateSchema,
+  'price-total': priceTotalOutputSchema,
   links: z.array(capabilityDefinitionSchema).max(20), clarification: clarificationSchema, research: exploreResultSchema,
-  display: z.object({ type: z.enum(['records', 'comparison', 'detail', 'map', 'research', 'links']) }).strict(), map: taskMapSchema,
+  display: z.object({ type: z.enum(['records', 'comparison', 'detail', 'map', 'research', 'links', 'estimate']) }).strict(), map: taskMapSchema,
   query: querySpecSchema, selection: selectionStateSchema, records: z.array(canonicalRecordSchema).max(48), home: z.object({ home: z.literal(true) }).strict(),
   page: z.object({ cursor: z.string().max(4096).nullable() }).strict(),
-  detail: z.object({ nextBlockOffset: z.number().int().nullable().optional(), nextFieldOffset: z.number().int().nullable().optional(), blockOffset: z.number().int().optional(), fieldOffset: z.number().int().optional(), record: canonicalRecordSchema, values: z.array(displayValue.extend({ label: z.string().max(160) })).max(64) }).strict(),
+  detail: z.object({ priceOptions: z.array(z.object({ fieldId: id, label: z.string().max(160), text: z.string().max(160) }).strict()).max(16).optional(), nextBlockOffset: z.number().int().nullable().optional(), nextFieldOffset: z.number().int().nullable().optional(), blockOffset: z.number().int().optional(), fieldOffset: z.number().int().optional(), record: canonicalRecordSchema, values: z.array(displayValue.extend({ label: z.string().max(160) })).max(64) }).strict(),
   comparison: z.object({ fields: z.array(fieldDescriptorSchema).max(16), rows: z.array(z.object({ id, name: z.string().max(180), values: z.array(displayValue).max(16) }).strict()).max(6) }).strict(),
-  schema: z.object({ collection: spaceCollectionSchema, children: z.array(spaceCollectionSchema).max(24), omittedChildren: z.number().int().nonnegative(), fields: z.array(fieldDescriptorSchema).max(32), omittedFields: z.number().int().nonnegative(), relationships: z.array(relationshipDescriptorSchema).max(16) }).strict(),
+  schema: z.object({ collection: spaceCollectionSchema, scope: queryScopeSchema, children: z.array(spaceCollectionSchema).max(24), childScopes: z.array(queryScopeSchema).max(24), omittedChildren: z.number().int().nonnegative(), fields: z.array(fieldDescriptorSchema).max(32), omittedFields: z.number().int().nonnegative(), relationships: z.array(relationshipDescriptorSchema).max(16) }).strict(),
 };
 const resultStore = new QueryResultStore();
 export type CapabilityContext = { nativeWebsite?: boolean; websiteOpening?: boolean; research?: VisitorResearch; records?: (ids: string[]) => Promise<z.infer<typeof canonicalRecordSchema>[]>; index: CompiledQueryIndex; session: VisitorTaskSession; signal: AbortSignal };
@@ -48,11 +69,37 @@ function createQuery(context: CapabilityContext, scope: QuerySpec['scope'] = { c
   evaluateQuery(context.index, current); context.session.queries.push({ current, past: [] }); context.session.activeQueryId = current.queryId;
   return current;
 }
-const fieldText = (context: CapabilityContext, recordId: string, fieldId: string) => {
-  const value = projectField(context.index, recordId, fieldId, active(context.session).current.asOf);
+const fieldText = (context: CapabilityContext, recordId: string, fieldId: string, asOf = active(context.session).current.asOf) => {
+  const value = projectField(context.index, recordId, fieldId, asOf);
   return value.state === 'known' ? `${Array.isArray(value.value!.value) ? value.value!.value.join(', ') : typeof value.value!.value === 'object' ? JSON.stringify(value.value!.value) : value.value!.value}${value.value?.currency ? ` ${value.value.currency}` : ''}${value.value?.unit ? ` ${value.value.unit}` : ''}${value.value?.basis ? ` / ${value.value.basis}` : ''}` : value.state;
 };
+function comparePublishedRecords(context: CapabilityContext, recordIds: string[], asOf = active(context.session).current.asOf) {
+  if (recordIds.length < 2 || recordIds.length > 6) throw new CapabilityInputError([{ path: 'input', code: 'comparison_size', message: `The exact result contains ${recordIds.length} records; comparison needs two to six. Keep the requested criteria. For zero or one match, use query.patch to show that result; for more than six, ask which records to compare or apply only a visitor-requested refinement. Never silently truncate or relax filters.` }]);
+  const records = recordIds.map(id => { const record = context.index.records.get(id); if (!record) throw new CapabilityInputError([{ path: 'input', code: 'unavailable_comparison_record', message: 'A comparison record is not in the current publication. Use exact current published record IDs; do not construct IDs or substitute other records.' }]); return record; });
+  const fields = compatibleComparisonFields(context.index.space.fields, records.map(record => record.type))
+    .filter(field => records.some(record => projectField(context.index, record.id, field.id, asOf).state !== 'unknown')).slice(0, 16);
+  if (!fields.length) throw new CapabilityInputError([{ path: 'input', code: 'comparison_fields', message: 'No compatible fields are published for this comparison. Keep the useful view and explain the published evidence without inventing fields.' }]);
+  return { fields, rows: records.map(record => ({ id: record.id, name: record.name, values: fields.map(field => ({ fieldId: field.id, text: fieldText(context, record.id, field.id, asOf) })) })) };
+}
+function comparisonQuery(session: VisitorTaskSession, input: z.infer<typeof comparisonInputSchema>): QuerySpec | undefined {
+  const currentQuery = input.queryId !== undefined || input.baseRevision !== undefined;
+  if (Number(currentQuery) + Number(input.queryHandleId !== undefined) + Number(input.records !== undefined) + Number(input.recordIds !== undefined) > 1) throw new CapabilityInputError([{ path: 'input', code: 'ambiguous_comparison_source', message: 'Use one source: current queryId/baseRevision, a queryHandleId, exact published recordIds, or a records binding. Query sources select all matches, never a page.' }]);
+  if (currentQuery) {
+    if (input.queryId === undefined || input.baseRevision === undefined) throw new CapabilityInputError([{ path: 'input', code: 'incomplete_query_reference', message: 'Copy both queryId and baseRevision from the current query identity and revision.' }]);
+    const query = active(session).current;
+    if (input.queryId !== query.queryId) throw new CapabilityInputError([{ path: 'input.queryId', code: 'inactive_query', message: 'Only the current active query can be compared by queryId/baseRevision. Use the current context; do not reuse a remembered older query.' }]);
+    if (input.baseRevision !== query.revision) throw new Error('Query changed.');
+    return query;
+  }
+  try { return input.queryHandleId ? querySpecSchema.parse(resolveEvidence(session, input.queryHandleId, 'query')) : undefined; }
+  catch (error) {
+    if (!(error instanceof EvidenceTypeError)) throw error;
+    throw new CapabilityInputError([{ path: 'input.queryHandleId', code: 'evidence_type_mismatch', message: error.message }]);
+  }
+}
 export const visitorCapabilities = new Map<string, Capability>([
+  // Model capability: Compute bounded subtotals from published money fields, never model-supplied prices.
+  capability('prices.total', 'Calculate a listed-price subtotal from 1–12 published record/price-field references and integer quantities. Use this for price multiplication and addition; returns exact rounded line totals and subtotal. Match the requested unit to the published field. No taxes, fees, currency conversion, inventory, order or payment action.', priceTotalInputSchema, 'price-total', async (context, input) => totalPublishedPrices(context.index, input, active(context.session).current.asOf), 'read'),
   // Model capability: Describe the retained verbatim-command adapter, which the model-facing registry excludes.
   capability('query.command', 'Apply a clear conversational filter, scope, sort or undo using published field definitions. Supply the visitor words verbatim; ambiguous requests ask for clarification.', z.object({ text: z.string().trim().min(1).max(2000) }).strict(), 'query', async () => { throw new Error('Commands must run through validated task execution.'); }),
   // Model capability: Describe reviewed navigation links without implying external action completion.
@@ -60,7 +107,7 @@ export const visitorCapabilities = new Map<string, Capability>([
   // Model capability: Describe clarification that preserves the useful current view.
   capability('task.clarify', 'Ask a bounded clarification before interpreting an ambiguous field, reference or unsupported capability. Preserve the current useful view.', clarificationSchema, 'clarification', async (context, input) => { context.session.clarification = input; return input; }),
   // Model capability: Describe display of a retained typed result with a browser receipt.
-  capability('presentation.show', 'Display a retained typed result. Completion requires the exact settled browser receipt.', z.object({ handleId: id, outputType: z.enum(['records', 'comparison', 'detail', 'map', 'research', 'links']) }).strict(), 'display', async (context, input) => {
+  capability('presentation.show', 'Display a retained typed result. Completion requires the exact settled browser receipt.', z.object({ handleId: id, outputType: z.enum(['records', 'comparison', 'detail', 'map', 'research', 'links', 'estimate']) }).strict(), 'display', async (context, input) => {
     const data = outputSchemas[input.outputType].parse(resolveEvidence(context.session, input.handleId, input.outputType));
     context.session.presentation = { type: input.outputType, data }; return { type: input.outputType };
   }),
@@ -78,21 +125,26 @@ export const visitorCapabilities = new Map<string, Capability>([
     context.session.selection.members = [...new Set(input.records.map(record => record.id))].map(recordId => ({ recordId, resultSetId: 'dependent-records', available: true })); context.session.selection.revision++; return context.session.selection;
   }),
   // Model capability: Describe retrieval of reviewed fields and collection scopes.
-  capability('schema.describe', 'Describe a collection, child scopes and reviewed field definitions.', z.object({ scope: queryScopeSchema.optional(), children: z.number().int().min(0).max(1000).optional(), fields: z.number().int().min(0).max(64).optional() }).strict(), 'schema', async (context, input) => describeScope(context.index, input.scope ?? active(context.session).current.scope, input), 'read'),
+  capability('schema.describe', 'Describe a published collection, exact childScopes and reviewed fields. Omit offsets for the first page. Use rootScope to discover top-level collections; a unique collection path can be omitted.', z.object({ scope: scopeInputSchema.optional(), children: z.number().int().min(0).max(1000).describe('Zero-based child collection offset, not a count or limit. Use 0 for the first page (up to 24 children), 24 for the next.').optional(), fields: z.number().int().min(0).max(64).describe('Zero-based field offset, not a count or limit. Use 0 for the first page (up to 32 fields), 32 for the next.').optional() }).strict(), 'schema', async (context, input) => describeScope(context.index, input.scope ? resolveCollectionScope(context.index, input.scope) : active(context.session).current.scope, input), 'read'),
   // Model capability: Describe paging through child collections and fields.
-  capability('collection.page', 'Browse another bounded page of child collections and reviewed fields.', z.object({ children: z.number().int().min(0).max(1000), fields: z.number().int().min(0).max(64) }).strict(), 'schema', async (context, input) => { context.session.browse = input; return describeScope(context.index, active(context.session).current.scope, input); }),
+  capability('collection.page', 'Browse another bounded page of child collections and reviewed fields.', z.object({ children: z.number().int().min(0).max(1000).describe('Zero-based child collection offset, not a count or limit. Use 0 for the first page (up to 24 children), 24 for the next.'), fields: z.number().int().min(0).max(64).describe('Zero-based field offset, not a count or limit. Use 0 for the first page (up to 32 fields), 32 for the next.') }).strict(), 'schema', async (context, input) => { context.session.browse = input; return describeScope(context.index, active(context.session).current.scope, input); }),
   // Model capability: Describe closing a query while retaining visitor work.
   capability('query.close', 'Close a query while retaining selections, artifacts and cart.', z.object({ queryId: id }).strict(), 'home', async (context, input) => { context.session.queries = context.session.queries.filter(query => query.current.queryId !== input.queryId); if (context.session.activeQueryId === input.queryId) context.session.activeQueryId = context.session.queries[0]?.current.queryId ?? null; context.session.scene = null; context.session.page = null; return { home: true }; }),
   // Model capability: Describe creating an independent scoped query.
-  capability('query.create', 'Create an independent query in a chosen collection scope.', z.object({ scope: queryScopeSchema.optional() }).strict(), 'query', async (context, input) => createQuery(context, input.scope)),
+  capability('query.create', 'Create an independent query in a chosen collection scope; omit path for unique published ancestry.', z.object({ scope: scopeInputSchema.optional() }).strict(), 'query', async (context, input) => createQuery(context, input.scope ? resolveCollectionScope(context.index, input.scope) : undefined)),
   // Model capability: Describe typed criterion edits that preserve unrelated constraints.
-  capability('query.patch', 'Atomically edit named criteria; preserve untouched constraints. setSearch replaces only searchText, not where predicates. Search subject terms only; requested display fields are not filters. Supports undo and fork.', queryPatchSchema, 'query', async (context, input) => {
+  capability('query.patch', 'Atomically edit named criteria; preserve untouched constraints. setScope uses a published collectionId; omit path for unique ancestry or copy a schema.describe childScope. setSearch replaces only searchText, not where predicates. Search subject terms only; requested display fields are not filters. Supports undo and fork.', patchInputSchema, 'query', async (context, input) => {
     const history = context.session.queries.find(query => query.current.queryId === input.queryId);
-    if (!history) throw new Error('Unknown query.');
+    if (!history) throw new CapabilityInputError([{ path: 'input.queryId', code: 'unknown_query', message: 'Unknown query. Use the current query identity from context; do not construct or alter IDs.' }]);
     const updated = patchQuery(history, input, randomUUID()); evaluateQuery(context.index, updated.current);
     if (updated.current.queryId !== history.current.queryId) { if (context.session.queries.length >= 8) throw new Error('Query limit reached.'); context.session.queries.push(updated); }
     else context.session.queries[context.session.queries.indexOf(history)] = updated;
     context.session.navigation = []; context.session.activeQueryId = updated.current.queryId; context.session.scene = null; context.session.page = null; context.session.presentation = null; context.session.browse = { children: 0, fields: 0 }; return updated.current;
+  }),
+  // Model capability: Compose an exact query and comparison without model-side ID copying or an intermediate display.
+  capability('query.compare', 'Apply query.patch operations, then compare all exact matches in one atomic display. Requires two to six; never truncates or relaxes filters. Unknown properties stay unknown. Complete any further calculation, recommendation or research separately.', patchInputSchema, 'comparison', async (context, input) => {
+    const query = querySpecSchema.parse(await visitorCapabilities.get('query.patch')!.execute(context, input));
+    return comparePublishedRecords(context, evaluateQuery(context.index, query).ordered, query.asOf);
   }),
   // Model capability: Describe returning to an existing query without transferring criteria.
   capability('query.activate', 'Return to another existing query without transferring incompatible criteria.', z.object({ queryId: id }).strict(), 'query', async (context, input) => {
@@ -129,14 +181,9 @@ export const visitorCapabilities = new Map<string, Capability>([
     selected.revision++; context.session.presentation = null; return selected;
   }),
   // Model capability: Describe comparison using compatible reviewed fields.
-  capability('selection.compare', 'Compare two to six selected records using compatible reviewed field definitions.', z.object({ records: z.array(canonicalRecordSchema).max(6).optional() }).strict(), 'comparison', async (context, input) => {
-    const records = input.records ? input.records.map(record => { const authorized = context.index.records.get(record.id); if (!authorized) throw new Error('Unavailable record.'); return authorized; }) : context.session.selection.members.filter(member => member.available).map(member => context.index.records.get(member.recordId)!);
-    if (records.length < 2 || records.length > 6) throw new Error('Select two to six records for comparison.');
-    const asOf = active(context.session).current.asOf;
-    const fields = compatibleComparisonFields(context.index.space.fields, records.map(record => record.type))
-      .filter(field => records.some(record => projectField(context.index, record.id, field.id, asOf).state !== 'unknown')).slice(0, 16);
-    if (!fields.length) throw new Error('No compatible fields are published for this comparison.');
-    return { fields, rows: records.map(record => ({ id: record.id, name: record.name, values: fields.map(field => ({ fieldId: field.id, text: fieldText(context, record.id, field.id) })) })) };
+  capability('selection.compare', 'Compare two to six exact records with published fields. For specifically named records whose exact published IDs are in context, pass recordIds directly; no records.lookup. For all current matches copy queryId and baseRevision from query. Or use a fresh queryHandleId, records binding, or current selection. Use one source. Never truncate to a page.', comparisonInputSchema, 'comparison', async (context, input) => {
+    const query = comparisonQuery(context.session, input);
+    return comparePublishedRecords(context, query ? evaluateQuery(context.index, query).ordered : input.recordIds ?? (input.records ? input.records.map(record => record.id) : context.session.selection.members.filter(member => member.available).map(member => member.recordId)), query?.asOf);
   }),
   // Model capability: Describe reading bounded published records without private or live-state claims.
   capability('records.lookup', 'Read bounded current published records; no private sources or inferred live availability.', z.object({ recordIds: z.array(id).min(1).max(6) }).strict(), 'records', async (context, input) => {
@@ -150,7 +197,7 @@ export const visitorCapabilities = new Map<string, Capability>([
     // Keep paragraphs with their headings, with a bounded reading page.
     let end = Math.min(record.blocks.length, input.blockOffset + 12);
     if (end < record.blocks.length && record.blocks[end - 1]?.kind === 'heading') end--;
-    return { record: { ...record, assertions: [], blocks: record.blocks.slice(input.blockOffset, end) }, blockOffset: input.blockOffset, fieldOffset: input.fieldOffset, nextBlockOffset: end < record.blocks.length ? end : null, nextFieldOffset: input.fieldOffset + 16 < fields.length ? input.fieldOffset + 16 : null, values: fields.slice(input.fieldOffset, input.fieldOffset + 16).map(field => ({ fieldId: field.id, label: field.label, text: fieldText(context, record.id, field.id).slice(0, 1000) })) };
+    return { priceOptions: estimatePriceOptions(context, record.id), record: { ...record, assertions: [], blocks: record.blocks.slice(input.blockOffset, end) }, blockOffset: input.blockOffset, fieldOffset: input.fieldOffset, nextBlockOffset: end < record.blocks.length ? end : null, nextFieldOffset: input.fieldOffset + 16 < fields.length ? input.fieldOffset + 16 : null, values: fields.slice(input.fieldOffset, input.fieldOffset + 16).map(field => ({ fieldId: field.id, label: field.label, text: fieldText(context, record.id, field.id).slice(0, 1000) })) };
   }),
   // Model capability: Describe resolving stable codes or ordinals against a confirmed scene.
   capability('reference.resolve', 'Resolve a stable result code or visible ordinal. Visible ordinals require the exact current sceneRevision; stale or unsettled scenes require clarification.', z.object({ ordinal: z.number().int().min(1).max(10000), resultSetId: id, visible: z.boolean(), sceneRevision: z.number().int().nonnegative().optional() }).strict(), 'records', async (context, input) => {
@@ -167,7 +214,7 @@ export const visitorCapabilities = new Map<string, Capability>([
     return { home: true };
   }),
 ].map(value => [value.descriptor.id, value]));
-for (const entry of [...taskExtensionCapabilities(), ...researchCapabilities()]) visitorCapabilities.set(entry.descriptor.id, entry);
+for (const entry of [...taskExtensionCapabilities(), ...researchCapabilities(), ...estimateCapabilities()]) visitorCapabilities.set(entry.descriptor.id, entry);
 
 export const capabilityCallSchema = z.object({ operationId: z.string().uuid(), capabilityId: id, expectedRevision: z.number().int().nonnegative(), input: z.unknown(),
   bindings: z.array(z.object({ input: id, handleId: id, outputType: id }).strict()).max(12).optional(),
@@ -175,14 +222,20 @@ export const capabilityCallSchema = z.object({ operationId: z.string().uuid(), c
 export type CapabilityCall = z.infer<typeof capabilityCallSchema>;
 /** Only validation before operation reservation is eligible for model correction. */
 export class CapabilityInputError extends Error {
-  constructor(readonly issues: { path: string; code: string; message: string }[]) {
+  constructor(readonly issues: { path: string; code: string; message: string }[], readonly queryFields?: QueryFieldFeedback) {
     super('The capability arguments do not match its typed input.'); this.name = 'CapabilityInputError';
   }
 }
-export async function executeVisitorCapability(options: { nativeWebsite?: boolean; websiteOpening?: boolean; research?: VisitorResearch; records?: CapabilityContext['records']; sessionId: string; index: CompiledQueryIndex; store: VisitorTaskStore; call: CapabilityCall; signal: AbortSignal; assertCurrent: () => Promise<void>; registry?: Map<string, Capability>; taskId?: string }) {
+export async function executeVisitorCapability(options: { nativeWebsite?: boolean; websiteOpening?: boolean; research?: VisitorResearch; records?: CapabilityContext['records']; sessionId: string; sessionSnapshot?: VisitorTaskSession; index: CompiledQueryIndex; store: VisitorTaskStore; call: CapabilityCall; signal: AbortSignal; assertCurrent: () => Promise<void>; registry?: Map<string, Capability>; taskId?: string }) {
   const { index, store, signal } = options, call = capabilityCallSchema.parse(options.call), registry = options.registry ?? visitorCapabilities;
-  signal.throwIfAborted(); await options.assertCurrent();
-  let session = await store.read(options.sessionId, index.space.publication);
+  signal.throwIfAborted();
+  // Both are read-only prerequisites. Preserve the revision/CAS checks below,
+  // but do not put publication I/O in front of independent session I/O.
+  // Only server callers can supply a freshly read snapshot. The reservation
+  // CAS below must still succeed before any adapter executes, including reads.
+  let [, session] = await Promise.all([options.assertCurrent(), options.sessionSnapshot ?? store.read(options.sessionId, index.space.publication)]);
+  if (session.id !== options.sessionId || queryHash(session.publication) !== queryHash(index.space.publication)) throw new Error('Visitor session snapshot does not match this publication.');
+  signal.throwIfAborted();
   const hash = queryHash({ capabilityId: call.capabilityId, input: call.input, bindings: call.bindings });
   const prior = session.operations.find(operation => operation.id === call.operationId);
   if (prior) { if (prior.hash !== hash) throw new Error('Conflicting operation ID reuse.'); if (prior.status !== 'completed' || (prior.result as { expired?: boolean })?.expired) throw new Error('Operation requires status inspection; it will not execute twice.'); return prior.result as { view: VisitorTaskView; handleId: string; outputType: string; data: unknown }; }
@@ -214,8 +267,72 @@ export async function executeVisitorCapability(options: { nativeWebsite?: boolea
   const parsed = selected.input.safeParse(input);
   if (!parsed.success) throw new CapabilityInputError(parsed.error.issues.slice(0, 8).map(issue => ({ path: `input.${issue.path.join('.')}`.slice(0, 160), code: issue.code, message: issue.message.slice(0, 240) })));
   input = parsed.data;
+  // Validate published money references before reserving state. The model may
+  // correct a rejected reference inside the existing bounded turn; no action ran.
+  if (call.capabilityId === 'prices.total' || call.capabilityId === 'estimate.update') {
+    const priced = input as { op?: string };
+    if (call.capabilityId === 'prices.total' || ['set', 'upsert'].includes(priced.op ?? '')) {
+      try {
+        const asOf = new Date().toISOString().slice(0, 10);
+        if (call.capabilityId === 'prices.total') totalPublishedPrices(index, input as z.infer<typeof priceTotalInputSchema>, asOf);
+        else updatePublishedEstimate(index, session.business.estimate, input, asOf);
+      }
+      catch (error) {
+        if (!(error instanceof PublishedPriceInputError)) throw error;
+        throw new CapabilityInputError([{ path: 'input.lines', code: 'invalid_published_price', message: `${error.message} Read records.lookup for the requested record IDs and copy their returned priceOptions fieldId and unit; never guess a field ID.`.slice(0, 500) }]);
+      }
+    }
+  }
+  if (call.capabilityId === 'estimate.tax') {
+    const estimate = readPublishedEstimate(index, session.business.estimate, new Date().toISOString().slice(0, 10));
+    try { estimateVisitorTax({ session, estimate, input: (input as { tax: VisitorEstimateTaxInput }).tax }); }
+    catch (error) {
+      if (!(error instanceof TaxEstimateInputError)) throw error;
+      throw new CapabilityInputError([{ path: 'input.tax', code: 'invalid_tax_evidence', message: `${error.message} Copy the exact retained cited excerpt and source URL; do not rewrite the evidence.`.slice(0, 500) }]);
+    }
+  }
+  // Resolve scope identity before reserving an operation. Unknown/ambiguous
+  // references are correctable input, never a failed execution or a paid retry.
+  try {
+    if (call.capabilityId === 'query.patch' || call.capabilityId === 'query.compare') {
+      const patch = input as z.infer<typeof patchInputSchema>;
+      input = { ...patch, operations: patch.operations.map(operation => {
+        if (operation.op !== 'setScope') return operation;
+        const scope = resolveCollectionScope(index, operation.scope);
+        const members = [...new Set([scope.collectionId, ...scope.include ?? []])];
+        if (scope.traversal === 'explicitUnion' && members.some(parent => members.some(child => parent !== child && index.descendants.get(parent)?.has(child)))) {
+          throw new CollectionScopeError('explicitUnion collectionId is the first member, not a container. Choose the desired member collections without also including their ancestors; each member already includes its descendants.');
+        }
+        return { ...operation, scope };
+      }) };
+    } else if (call.capabilityId === 'query.create' || call.capabilityId === 'schema.describe') {
+      const scoped = input as { scope?: z.infer<typeof scopeInputSchema> };
+      if (scoped.scope) input = { ...scoped, scope: resolveCollectionScope(index, scoped.scope) };
+    }
+  } catch (error) {
+    if (!(error instanceof CollectionScopeError)) throw error;
+    throw new CapabilityInputError([{ path: ['query.patch', 'query.compare'].includes(call.capabilityId) ? 'input.operations.setScope' : 'input.scope', code: 'invalid_scope', message: error.message }]);
+  }
+  // Field-dependent validation is also preflight: missing currency/basis must
+  // be correctable without reserving an operation or losing the current view.
+  if (call.capabilityId === 'query.patch' || call.capabilityId === 'query.compare') {
+    const patch = input as z.infer<typeof patchInputSchema>;
+    const history = session.queries.find(query => query.current.queryId === patch.queryId);
+    if (!history) throw new CapabilityInputError([{ path: 'input.queryId', code: 'unknown_query', message: 'Unknown query. Use the current query identity from context; do not construct or alter IDs.' }]);
+    const projected = patchQuery(history, patch, randomUUID()).current;
+    try { validateQueryFields(projected, index.space.fields, index.space.relationshipTypes); }
+    catch (error) {
+      throw new CapabilityInputError([{ path: 'input.operations', code: 'invalid_query_fields', message: `${error instanceof Error ? error.message : 'Invalid query fields.'} queryFields contains exact published definitions and discovery candidates, not accepted replacements. Copy full field IDs and the correct type, currency, basis or numeric unit into filters and sort. Do not substitute unit for money basis. Use schema.describe only for unknown, ambiguous or omitted field meanings; never guess or relax the request.`.slice(0, 1600) }], queryFieldFeedback(projected, index.space.fields));
+    }
+    if (call.capabilityId === 'query.compare') comparePublishedRecords({ index, session, signal }, evaluateQuery(index, projected).ordered, projected.asOf);
+  }
+  if (call.capabilityId === 'selection.compare') {
+    const comparison = input as z.infer<typeof comparisonInputSchema>, query = comparisonQuery(session, comparison);
+    comparePublishedRecords({ index, session, signal }, query ? evaluateQuery(index, query).ordered : comparison.recordIds ?? (comparison.records ? comparison.records.map(record => record.id) : session.selection.members.filter(member => member.available).map(member => member.recordId)), query?.asOf);
+  }
   const dependencies = (call.bindings ?? []).flatMap(binding => session.evidence.find(value => value.handle.id === binding.handleId)?.handle.dependencies ?? []);
   if (call.capabilityId === 'presentation.show') dependencies.push(...(session.evidence.find(value => value.handle.id === (input as { handleId: string }).handleId)?.handle.dependencies ?? []));
+  if (call.capabilityId === 'selection.compare' && (input as { queryHandleId?: string }).queryHandleId) dependencies.push(...(session.evidence.find(value => value.handle.id === (input as { queryHandleId: string }).queryHandleId)?.handle.dependencies ?? []));
   if (call.capabilityId === 'reference.resolve' && (input as { visible: boolean }).visible) dependencies.push({ id: `scene:${session.id}`, revision: (input as { sceneRevision?: number }).sceneRevision ?? -1 });
   const generation = session.generation;
   const taskId = options.taskId ?? randomUUID();
@@ -231,22 +348,31 @@ export async function executeVisitorCapability(options: { nativeWebsite?: boolea
   task.budget.capabilityCalls++; task.revision++; task.status = 'running';
   if (call.capabilityId !== 'task.clarify') session.clarification = null;
   task.steps.push({ id: randomUUID(), capabilityId: call.capabilityId, capabilityVersion: selected.descriptor.version, operationId: call.operationId, bindings: call.bindings ?? [], status: 'running' });
-  // Reserve the operation before any adapter can execute. Provider calls are outside CAS callbacks.
-  session.operations.push({ id: call.operationId, hash, status: 'running' }); session = await store.save(session, session.revision);
+  // Built-in query edits/comparisons are pure in-memory work: persist operation and
+  // result atomically once. Every other adapter still reserves before executing,
+  // including custom registries and anything that can call a provider.
+  const atomicQuery = selected === visitorCapabilities.get('query.patch') || selected === visitorCapabilities.get('query.compare');
+  session.operations.push({ id: call.operationId, hash, status: 'running' });
+  if (!atomicQuery) session = await store.save(session, session.revision);
   const context = { nativeWebsite: options.nativeWebsite, websiteOpening: options.websiteOpening, index, session, signal, records: options.records, research: options.research };
   try {
     const sameDetail = call.capabilityId === 'record.detail' && session.presentation?.type === 'detail' && (session.presentation.data as VisitorTaskView['detail'])?.record.id === (input as { recordId: string }).recordId;
-    if (['record.detail', 'selection.compare', 'presentation.show'].includes(call.capabilityId) && !sameDetail) {
+    if (['record.detail', 'selection.compare', 'presentation.show', 'estimate.update', 'estimate.show', 'estimate.tax'].includes(call.capabilityId) && !sameDetail) {
       session.navigation = [...session.navigation, { queryId: session.activeQueryId, page: session.page, presentation: session.presentation }].slice(-8);
       session.activeQueryId ??= session.queries[0]?.current.queryId ?? null;
     }
-    const data = selected.output.parse(await selected.execute(context, input)); signal.throwIfAborted(); await options.assertCurrent();
-    const current = await store.read(session.id, index.space.publication);
+    const data = selected.output.parse(await selected.execute(context, input)); signal.throwIfAborted();
+    // A pure query has no external effect and commits once below. That CAS
+    // rejects intervening session changes without rereading the whole document.
+    // Viewport-dependent bindings still require their independent scene check.
+    const [, current] = await Promise.all([options.assertCurrent(), atomicQuery && !dependencies.some(dependency => dependency.id === `scene:${session.id}`)
+      ? session : store.read(session.id, index.space.publication)]);
+    signal.throwIfAborted();
     if (current.generation !== generation || current.revision !== session.revision) throw new Error('Manual interaction superseded this task.');
     if (dependencies.some(dependency => dependency.id === `scene:${session.id}` && current.viewport?.sceneRevision !== dependency.revision)) throw new Error('The viewport changed. Clarify the requested record.');
     if (call.capabilityId === 'research.lookup') retainVisitorConversationResearch(session, data);
     const query = session.queries.find(query => query.current.queryId === session.activeQueryId)?.current;
-    const handle = retainEvidence(session, selected.descriptor.outputType, data, ['research.lookup', 'research.recall', 'research.history'].includes(call.capabilityId) ? 'external' : selected.descriptor.effect === 'externalCommit' ? 'provider' : selected.descriptor.effect === 'read' ? 'publisher' : 'calculated', [...new Map([...dependencies, ...(query ? [{ id: query.queryId, revision: query.revision }] : []), ...(['selection.compare', 'artifact.compose'].includes(call.capabilityId) ? [{ id: session.selection.selectionId, revision: session.selection.revision }] : [])].map(dependency => [dependency.id, dependency])).values()]);
+    const handle = retainEvidence(session, selected.descriptor.outputType, data, (call.capabilityId === 'prices.total' || call.capabilityId.startsWith('estimate.')) ? 'calculated' : ['research.lookup', 'research.recall', 'research.history'].includes(call.capabilityId) ? 'external' : selected.descriptor.effect === 'externalCommit' ? 'provider' : selected.descriptor.effect === 'read' ? 'publisher' : 'calculated', [...new Map([...dependencies, ...(query ? [{ id: query.queryId, revision: query.revision }] : []), ...(['selection.compare', 'artifact.compose'].includes(call.capabilityId) ? [{ id: session.selection.selectionId, revision: session.selection.revision }] : [])].map(dependency => [dependency.id, dependency])).values()]);
     if (selected.descriptor.effect !== 'read') { session.scene = null; session.viewport = null; }
     task = session.tasks.find(task => task.taskId === taskId)!;
     const step = task.steps.find(step => step.operationId === call.operationId)!;
@@ -260,7 +386,7 @@ export async function executeVisitorCapability(options: { nativeWebsite?: boolea
     if (call.capabilityId === 'home') view.navigation = 'home';
     if (call.capabilityId === 'view.reset') view.navigation = 'reset';
     const surface = selected.descriptor.outputType === 'display' ? (data as { type: string }).type : selected.descriptor.outputType;
-    view.focus = call.capabilityId === 'view.back' && session.presentation ? session.presentation.type : ['comparison', 'detail', 'research', 'map', 'artifact', 'clarification', 'records', 'links'].includes(surface) ? surface as VisitorTaskView['focus'] : ['demo-quote', 'demo-booking', 'demo-receipt', 'demo-cart', 'demo-slots'].includes(surface) ? surface.slice(5) as VisitorTaskView['focus'] : call.capabilityId.startsWith('demo.') ? 'business' : ['query', 'page', 'schema'].includes(surface) ? 'query' : undefined;
+    view.focus = call.capabilityId === 'view.back' && session.presentation ? session.presentation.type : ['comparison', 'detail', 'research', 'map', 'artifact', 'clarification', 'records', 'links', 'estimate'].includes(surface) ? surface as VisitorTaskView['focus'] : ['demo-quote', 'demo-booking', 'demo-receipt', 'demo-cart', 'demo-slots'].includes(surface) ? surface.slice(5) as VisitorTaskView['focus'] : call.capabilityId.startsWith('demo.') ? 'business' : ['query', 'page', 'schema'].includes(surface) ? 'query' : undefined;
     if (Buffer.byteLength(JSON.stringify(view)) > 150_000) throw new Error('View exceeds the bounded page payload. Narrow the displayed fields.');
     const result = { view, handleId: handle.id, outputType: handle.type, data };
     const operation = session.operations.find(operation => operation.id === call.operationId)!; operation.status = 'completed'; operation.result = result;
@@ -269,7 +395,8 @@ export async function executeVisitorCapability(options: { nativeWebsite?: boolea
     await store.save(session, session.revision); return result;
   } catch (error) {
     const current = await store.read(session.id, index.space.publication);
-    const operation = current.operations.find(operation => operation.id === call.operationId)!;
+    const operation = current.operations.find(operation => operation.id === call.operationId);
+    if (!operation) throw error; // A rejected atomic query never entered storage.
     operation.status = selected.descriptor.effect === 'externalCommit' ? 'reconciling' : 'failed';
     const task = current.tasks.find(task => task.taskId === taskId);
     if (task) { const step = task.steps.find(step => step.operationId === call.operationId)!; step.status = operation.status; task.status = operation.status === 'reconciling' ? 'reconciling' : signal.aborted || current.generation !== generation ? 'cancelled' : task.steps.some(step => step.status === 'completed') ? 'partiallyCompleted' : 'failed'; }
@@ -303,6 +430,7 @@ export function buildVisitorTaskView(context: CapabilityContext, cursor?: string
   if (session.presentation?.type === 'records') view.lookupRecords = (outputSchemas.records.parse(session.presentation.data) as z.infer<typeof canonicalRecordSchema>[]).map(({ id, name, type, summary }) => ({ id, name, type, summary }));
   if (session.presentation?.type === 'links') view.links = outputSchemas.links.parse(session.presentation.data) as VisitorTaskView['links'];
   if (session.presentation?.type === 'research') { const result = exploreResultSchema.parse(session.presentation.data); view.research = { id: result.id, kind: result.kind, query: result.query, fetchedAt: result.fetchedAt, demo: result.demo, answer: result.answer, sources: result.sources, citations: result.citations, images: result.images, map: result.map }; }
+  if (session.presentation?.type === 'estimate') view.estimate = publishedEstimateSchema.parse(session.presentation.data);
   if (session.presentation?.type === 'map') view.map = taskMapSchema.parse(session.presentation.data);
   if (session.presentation?.type === 'comparison') view.comparison = outputSchemas.comparison.parse(session.presentation.data) as VisitorTaskView['comparison'];
   if (session.presentation) view.focus = session.presentation.type;
@@ -311,7 +439,7 @@ export function buildVisitorTaskView(context: CapabilityContext, cursor?: string
   return view;
 }
 export async function acknowledgeTaskDisplay(store: VisitorTaskStore, sessionId: string, publication: QuerySpec['publication'], input: { generation?: number; operationId: string; queryId: string; queryRevision: number; resultSetId: string; sceneRevision: number; recordIds: string[] }) {
-  const session = await store.read(sessionId, publication), operation = session.operations.find(operation => operation.id === input.operationId);
+  const session = await store.read(sessionId, publication, { viewport: false }), operation = session.operations.find(operation => operation.id === input.operationId);
   const result = operation?.result as { view?: VisitorTaskView; outputType: string; data: unknown } | undefined, view = result?.view;
   const query = session.queries.find(query => query.current.queryId === input.queryId);
   const displayedIds = view ? displayedTaskRecordIds(view) : [];
@@ -328,10 +456,10 @@ export async function acknowledgeTaskDisplay(store: VisitorTaskStore, sessionId:
 }
 
 export async function observeTaskScene(store: VisitorTaskStore, sessionId: string, publication: QuerySpec['publication'], input: { operationId: string; queryId: string; queryRevision: number; resultSetId: string; sceneRevision: number; generation: number; recordIds: string[]; ready: boolean }) {
-  const session = await store.read(sessionId, publication), base = session.scene;
+  const session = await store.read(sessionId, publication, { viewport: false }), base = session.scene;
   const view = (session.operations.find(operation => operation.id === input.operationId)?.result as { view?: VisitorTaskView } | undefined)?.view;
   const query = session.queries.find(value => value.current.queryId === session.activeQueryId)?.current;
-  const allowed = new Set([...(view?.records.map(record => record.id) ?? []), ...(view?.comparison?.rows.map(record => record.id) ?? []), ...(view?.lookupRecords?.map(record => record.id) ?? []), ...(view?.detail ? [view.detail.record.id] : [])]);
+  const allowed = new Set([...(view?.records.map(record => record.id) ?? []), ...(view?.comparison?.rows.map(record => record.id) ?? []), ...(view?.lookupRecords?.map(record => record.id) ?? []), ...(view?.detail ? [view.detail.record.id] : []), ...(view?.estimate?.lines.map(line => line.recordId) ?? [])]);
   if (!base || !view || input.operationId !== base.operationId || input.generation !== session.generation || input.queryId !== query?.queryId || input.queryRevision !== query.revision || input.resultSetId !== base.resultSetId || input.sceneRevision <= base.sceneRevision || input.recordIds.length > 48 || new Set(input.recordIds).size !== input.recordIds.length || input.recordIds.some(id => !allowed.has(id)) || !input.ready && input.recordIds.length) throw new Error('Viewport observation does not match the current displayed result.');
   await store.observeViewport(session, input);
 }

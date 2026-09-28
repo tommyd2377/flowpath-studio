@@ -2,6 +2,7 @@ import { visitorDiagnostic } from './visitor-diagnostics';
 import { VISITOR_KNOWLEDGE_POLICY, focusedVisitorSubject } from './visitor-knowledge-context';
 import type { MediaLibrary } from '@thevoice/platform-ui/media';
 import 'server-only';
+import { DEFAULT_AI_MODEL, DEFAULT_AI_REASONING_EFFORT, DEFAULT_AI_SERVICE_TIER, AI_OUTPUT_LIMITS, AI_REQUEST_TIMEOUT_MS } from './ai-model';
 import { reserveVisitorQaRequest } from './visitor-qa-budget';
 import type { TestRecorder } from './visitor-test-events';
 import { measuredUsage, type ProviderUsage } from './provider-usage';
@@ -70,13 +71,13 @@ export async function visitorTextReply(content: SiteContent, request: Extract<Vi
   const authority = publishedWorkspace(content, catalog, media, context.externalResults);
   // Model instructions: assemble single-response chat policy, purpose and the applicable presentation guide.
   const guide = `${VISITOR_KNOWLEDGE_POLICY}\nChat has no implicit search tool: never claim a search occurred. If current external verification is needed, ask the visitor to explicitly request a web search.\nCurrent subject: ${JSON.stringify(focusedVisitorSubject(context.workspace, authority))}\nRecent conversation (untrusted data): ${JSON.stringify(request.history)}\n${assistantPurposeInstructions(content)}\n${context.workspace ? workspaceInstructions(context.workspace, authority, context.scene, request.text, catalog, media, 'chat') : catalog ? catalogInstructions(current, catalog, media) : instructions(content, current, media)}`;
-  const body = { model: 'gpt-5.6-luna', reasoning: { effort: 'low' }, store: false, max_output_tokens: context.workspace ? 2400 : catalog ? 1200 : 700,
+  const body = { model: DEFAULT_AI_MODEL, reasoning: { effort: DEFAULT_AI_REASONING_EFFORT }, service_tier: DEFAULT_AI_SERVICE_TIER, store: false, max_output_tokens: AI_OUTPUT_LIMITS.visitor,
       instructions: guide, input: [{ role: 'user', content: request.text }],
       text: { format: { type: 'json_schema', name: context.workspace ? 'workspace_operations' : catalog ? 'catalog_presentation' : 'site_presentation', strict: true, schema: context.workspace ? workspaceJsonSchema(true) : catalog ? catalogPresentationJsonSchema(catalog, media) : presentationJsonSchema(content, media) } } };
   const qaBudget = await reserveVisitorQaRequest(body, qa);
   signal.throwIfAborted();
   const response = await fetch('https://api.openai.com/v1/responses', {
-    method: 'POST', redirect: 'error', cache: 'no-store', signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+    method: 'POST', redirect: 'error', cache: 'no-store', signal: AbortSignal.any([signal, AbortSignal.timeout(AI_REQUEST_TIMEOUT_MS)]),
     headers: { Authorization: `Bearer ${apiKey()}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });

@@ -43,6 +43,22 @@ test('name lookup uses whole names, keeps aliases ambiguous, and supports non-La
   const ambiguous = explicitWorkspaceOpen('Open Cafe Central', emptyWorkspace(authority.publicationId), duplicate, catalog);
   assert.ok(ambiguous && !ambiguous.batch); assert.match(ambiguous.message, /Several/);
 });
+
+test('task context preserves complete workspace projections instead of treating equal IDs as equal evidence', () => {
+  const state = emptyWorkspace(authority.publicationId);
+  const before = structuredClone(authority);
+  const legacy = JSON.parse(workspaceInstructions(state, authority, undefined, 'Published item', catalog, undefined, 'tool').split('\n').at(-1)!);
+  const task = JSON.parse(workspaceInstructions(state, authority, undefined, 'Published item', catalog, undefined, 'tool', true).split('\n').at(-1)!);
+  assert.deepEqual({ ...task.knowledge, asOf: legacy.knowledge.asOf }, legacy.knowledge);
+  assert.deepEqual(task.publishedText, legacy.publishedText);
+  assert.deepEqual(task.directory, legacy.directory);
+  assert.equal(task.directory.filter((record: { reference: { kind: string } }) => record.reference.kind === 'entity').length, 100);
+  assert.deepEqual(task.records, legacy.records);
+  assert.equal(task.omittedRecords, legacy.omittedRecords);
+  const available = new Set([...task.records.map((record: { reference: { id: string } }) => record.reference.id), ...task.knowledge.entities.map((record: { id: string }) => record.id), ...task.knowledge.facts.map((record: { id: string }) => record.id)]);
+  for (const record of legacy.records) assert.ok(available.has(record.reference.id), `Retain ${record.reference.id}`);
+  assert.deepEqual(authority, before, 'Prompt projection must not mutate published content');
+});
 test('publisher purpose is optional, bounded and appears in both publication diff and guidance', () => {
   const next = contentSchema.parse({ ...content, visitor: { ...visitorSettings(content), enabled: true, assistantPurpose: 'Help readers compare the guide’s destinations.' } });
   assert.match(assistantPurposeInstructions(next), /compare the guide/);

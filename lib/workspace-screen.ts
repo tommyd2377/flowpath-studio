@@ -1,4 +1,10 @@
 import { referenceKey, workspaceRecord, type WorkspaceAuthority, type WorkspaceScene, type WorkspaceState } from '@thevoice/platform-ui/workspace';
+import type { VisitorTaskView } from '@thevoice/platform-ui/task-view';
+
+/** A quantity/tax update can retain its records and query identity while changing its estimate. */
+export function taskSurfaceRevisionMatches(view: Pick<VisitorTaskView, 'focus' | 'estimate'>, surface: Pick<HTMLElement, 'dataset'> | null | undefined) {
+  return view.focus !== 'estimate' || Boolean(view.estimate && surface?.dataset.estimateRevision === String(view.estimate.revision));
+}
 
 const clamp = (value: number, max = 10000000) => Math.max(0, Math.min(max, Math.round(value)));
 export function workspaceElementVisible(element: HTMLElement) {

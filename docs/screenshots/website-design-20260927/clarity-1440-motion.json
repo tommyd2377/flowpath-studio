@@ -1,0 +1,506 @@
+[
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 8, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.985, 0, 0, 0.985, 12, 6)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 8, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.985, 0, 0, 0.985, 12, 6)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 8, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.985, 0, 0, 0.985, 12, 6)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 7.92029, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.985149, 0, 0, 0.985149, 11.8804, 5.94021)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 7.34619, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.986226, 0, 0, 0.986226, 11.0193, 5.50964)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 6.77499, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.987297, 0, 0, 0.987297, 10.1625, 5.08125)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 6.2164, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.988344, 0, 0, 0.988344, 9.3246, 4.6623)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 5.67973, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.98935, 0, 0, 0.98935, 8.5196, 4.2598)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 5.16406, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.990317, 0, 0, 0.990317, 7.7461, 3.87305)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 4.67712, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.99123, 0, 0, 0.99123, 7.01568, 3.50784)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 4.22455, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.992079, 0, 0, 0.992079, 6.33683, 3.16842)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 3.80005, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.992875, 0, 0, 0.992875, 5.70008, 2.85004)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 3.41621, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.993595, 0, 0, 0.993595, 5.12432, 2.56216)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 3.05832, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.994266, 0, 0, 0.994266, 4.58748, 2.29374)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 2.73586, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.99487, 0, 0, 0.99487, 4.10379, 2.05189)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 2.4408, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.995423, 0, 0, 0.995423, 3.6612, 1.8306)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 2.17305, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.995926, 0, 0, 0.995926, 3.25958, 1.62979)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 1.93041, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.99638, 0, 0, 0.99638, 2.89562, 1.44781)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 1.712, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.99679, 0, 0, 0.99679, 2.568, 1.284)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 1.51316, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.997163, 0, 0, 0.997163, 2.26974, 1.13487)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 1.33441, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.997498, 0, 0, 0.997498, 2.00162, 1.00081)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 1.17189, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.997803, 0, 0, 0.997803, 1.75784, 0.87892)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 1.02517, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.998078, 0, 0, 0.998078, 1.53776, 0.768881)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 0.89285, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.998326, 0, 0, 0.998326, 1.33927, 0.669637)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 0.774334, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.998548, 0, 0, 0.998548, 1.1615, 0.58075)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 0.667074, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.998749, 0, 0, 0.998749, 1.00061, 0.500305)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 0.571355, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.998929, 0, 0, 0.998929, 0.857032, 0.428516)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 0.485121, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.99909, 0, 0, 0.99909, 0.727682, 0.363841)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 0.408168, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.999235, 0, 0, 0.999235, 0.612253, 0.306126)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 0.340152, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.999362, 0, 0, 0.999362, 0.510229, 0.255114)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 0.279601, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.999476, 0, 0, 0.999476, 0.419402, 0.209701)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 0.226359, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.999576, 0, 0, 0.999576, 0.339539, 0.169769)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 0.179894, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.999663, 0, 0, 0.999663, 0.26984, 0.13492)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 0.139945, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.999738, 0, 0, 0.999738, 0.209918, 0.104959)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 0.1056, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.999802, 0, 0, 0.999802, 0.1584, 0.0791999)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 0.0767199, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.999856, 0, 0, 0.999856, 0.11508, 0.0575399)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 0.0530731, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.9999, 0, 0, 0.9999, 0.0796097, 0.0398048)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 0.0340482, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.999936, 0, 0, 0.999936, 0.0510722, 0.0255361)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 0.0195769, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.999963, 0, 0, 0.999963, 0.0293653, 0.0146826)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 0.00921181, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.999983, 0, 0, 0.999983, 0.0138177, 0.00690886)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 0.00282872, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(0.999995, 0, 0, 0.999995, 0.00424309, 0.00212154)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-hero h1",
+    "transform": "matrix(1, 0, 0, 1, 0.000120623, 0)",
+    "clip": "none",
+    "width": 1440
+  },
+  {
+    "selector": ".platform-website-section li[data-website-reveal]",
+    "transform": "matrix(1, 0, 0, 1, 0.000180934, 9.0467e-05)",
+    "clip": "none",
+    "width": 1440
+  }
+]

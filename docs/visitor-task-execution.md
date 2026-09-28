@@ -1,5 +1,7 @@
 # General visitor task execution
 
+September 27 recovery refinement: invalid query-field replies now include bounded exact published candidates for filters, preferences and sorts, so a model can correct a missing namespace without a second schema-discovery round. The query remains rejected until a valid explicit call arrives. Workspace tools likewise return bounded correction feedback for incompatible component/reference shapes, retaining the prior view and applying no part of the invalid batch. Authorization, publication, stale-scene and cancellation checks remain in force. Both paths use the existing task/tool ceiling; neither adds provider retries. See [mobile refinement and live evidence](qa-mobile-refinement-2026-09-27.md).
+
 ## Required outcome
 
 Chat and voice represent the same publisher website and complete a visitor task through enabled capabilities. The model resolves dependencies from actual results, not subject-specific routing or hard-coded action pairs. Finding an address and displaying a map is one acceptance case; retrieval, comparison, image search and display must compose through the same mechanism.
@@ -30,7 +32,17 @@ The first browser reproduction opened an empty published map card stating that n
 
 ## Persistent query and capability extension
 
+Deterministic query shortcuts handle exact published identities, reviewed collection membership and unambiguous field filters. Published money bases such as a slice, session or hour can identify a price field even when its display label includes a currency. Requests that also ask for displayed prices, qualified photo associations or an unresolved menu/category stay intact for semantic interpretation; their words must not become accidental keyword filters. A bound on the current results preserves prior constraints, and an ambiguous price basis still requires clarification.
+
 The executor now hosts the shared v2 task bridge for published catalogs. Both channels expose strict capability inputs and fresh bounded query/schema context each round. Server-owned typed evidence handles enable lookup/filter/compare/presentation and research/map composition; exact browser ACKs remain distinct from adapter effect receipts. Sessions initialize before conversational work so read-only results survive across turns. Explicit clarification, revision/generation cancellation, task budgets and usage are persisted. The tool/model round limits above are unchanged. See the [complete implementation report](visitor-task-system/implementation-report.md) for the registry, storage/migration contracts, synthetic adapter boundaries and acceptance evidence.
+
+### September 27 prompt and round reduction
+
+Both transport adapters now serialize one current view and use an application-owned manifest for exact repeated prompt data. References are local to the current round; historical tool replies remain self-contained. Matching IDs alone do not merge evidence, and old presentation states cannot supply current-screen authority. Shared capability schemas and descriptor defaults expand exactly to the original metadata; runtime validators and the 48 KB task-context ceiling are unchanged.
+
+`query.compare` applies a typed query patch and compares its complete result atomically when it contains two to six comparable records. Zero, one, excessive or uncomparable matches return feedback without mutating the query. `selection.compare` accepts the active query's exact `queryId` and `baseRevision` to compare all current matches across turns without a record lookup; an inactive or changed query is rejected. It can also resolve two to six distinct exact published `recordIds` directly against the authoritative index, preserving the active filters. A fresh query handle, bound records, or the current selection remain separate alternatives; mixed sources are rejected. Query handles still expire with their task generation; these paths do not revive stale evidence or substitute a visible page for the full result.
+
+A model-selected `completion: "display_only"` can end an acknowledged `query.patch` for a display-only request with complete query coverage, an exact count and no pending clarification. It can also finish a compare-only `query.compare` or current-query `selection.compare` after the exact receipt, provided its two-to-six rows match the complete ordered result. This is an explicit completion choice, not an automatic stop after display. Requested explanations, questions, recommendations, calculations, research and enrichment continue. The browser also skips a local-command probe when a shared syntax gate proves that the existing server parser cannot accept that wording; field meaning and publication validation stay on the server. No paid retry or business-specific route is introduced. See [earlier live evidence and limitations](qa-context-rounds-speed-2026-09-27.md); the new across-turn comparison and completion paths are covered by synthetic chat/voice tests, with live retesting tracked separately.
 
 ## Foreground coordination
 

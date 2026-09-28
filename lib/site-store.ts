@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { getBackendMode } from './firebase/config';
 import type { WorkspaceUser } from './firebase/types';
 import { AppError } from './errors';
-import { clientSite, createSite, findSite, pruneMediaReferences, withDatabase, type StoredFile, type StoredSite } from './local-store';
+import { clientSite, createSite, findSite, pruneMediaReferences, readDatabaseSnapshot, withDatabase, type StoredFile, type StoredSite } from './local-store';
 import { summarize } from './site-model';
 import { assertUploadAllowed } from './file-validation';
 import { createCloudSite, downloadCloudFile, downloadCloudPublishedImage, getCloudPublished, getCloudSite,
@@ -86,7 +86,7 @@ export async function downloadFile(user: WorkspaceUser, id: string, fileId: stri
 export async function getPublished(slug: string): Promise<PublishedSite | null> {
   if (!slugSchema.safeParse(slug).success) return null;
   if (getBackendMode() === 'firebase') return getCloudPublished(slug);
-  return withDatabase(db => {
+  return readDatabaseSnapshot(db => {
     const site = db.sites.find(site => site.slug === slug && site.ownerId === 'local-demo');
     return site?.published ? { siteId: site.id, slug, content: site.published, publishedAt: site.publishedAt!,
       logo: site.files.find(file => file.id === site.published?.logoAssetId && file.kind === 'image') ?? null,

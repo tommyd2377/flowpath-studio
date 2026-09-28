@@ -20,7 +20,8 @@ async function fixture() {
 }
 test('structural extraction separates chrome and preserves price hierarchy and source identity',()=>{
   const page=extractWebsitePage(html,url);
-  assert.ok(!page.text.includes('Repeated'));
+  assert.ok(!page.text.includes('Repeated navigation'));
+  assert.ok(page.text.includes('Repeated footer'));
   assert.ok(page.rawText?.includes('Repeated footer'));
   assert.ok(!page.text.includes('data-sub-html'));
   assert.equal(page.name,'Bakery');

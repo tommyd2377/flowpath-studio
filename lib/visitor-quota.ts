@@ -9,6 +9,7 @@ export const ledgerSchema = z.object({
   sites: z.record(z.string(), counts),
   requests: z.record(z.string(), z.literal(true)),
   search: z.object({ total: counter, sites: z.record(z.string(), counter) }).optional(),
+  dictation: z.object({ total: counter, sites: z.record(z.string(), counter) }).optional(),
 });
 export type VisitorLedger = z.infer<typeof ledgerSchema>;
 export class VisitorAttemptError extends AppError {
@@ -50,4 +51,22 @@ export function reserveReply(ledger: VisitorLedger, siteId: string, requestId: s
   ledger.totals[kind]++;
   ledger.requests[requestId] = true;
   return availability(ledger, siteId, settings, live);
+}
+
+/** Dictation fills the composer; only a later Send reserves a chat turn. */
+export function reserveDictation(ledger: VisitorLedger, siteId: string, requestId: string, settings: VisitorSettingsInput, live: boolean) {
+  if (!settings.enabled) throw new AppError('This site has not enabled visitor conversations.', 403);
+  if (!live) throw new AppError('Recorded dictation is unavailable in the demo preview. Type your message instead.', 503);
+  const state = availability(ledger, siteId, settings, live);
+  if (ledger.requests[requestId]) throw new AppError('This recording was already received. Start a new recording to continue.', 409);
+  if (!state.chatRemaining) throw new VisitorLimitError('Chat has reached its daily limit. Please return after the daily reset.', state);
+  const used = ledger.dictation?.sites[siteId] ?? 0;
+  if (used >= settings.chatDailyLimit || (ledger.dictation?.total ?? 0) >= GLOBAL_VISITOR_LIMITS.chat) {
+    throw new VisitorLimitError('Dictation has reached its daily limit. You can still type your message.', state);
+  }
+  ledger.dictation ??= { total: 0, sites: {} };
+  ledger.dictation.total++;
+  ledger.dictation.sites[siteId] = used + 1;
+  ledger.requests[requestId] = true;
+  return state;
 }

@@ -186,7 +186,17 @@ test('resumed bridge and reconnect memory reuse prior research without generatio
     assert.deepEqual(resolveEvidence(withDirectory, directoryHandleId, 'research-directory'), history);
     assert.throws(() => resolveEvidence(withDirectory, directoryHandleId, 'research'), /unavailable/);
     const read = await resumed.execute(JSON.stringify({ capabilityId: 'research.recall', input: { resultId: history.entries[0].id } }), new AbortController().signal, async () => { assert.fail('Recall must not display.'); });
-    assert.deepEqual(read.data.result, original); assert.equal(providerCalls, 0);
+    const { evidenceExcerpts, omittedEvidenceExcerpts, ...recalled } = read.data.result as ExploreResult & {
+      evidenceExcerpts: { resultId: string; url: string; excerpt: string; start: number; end: number }[]; omittedEvidenceExcerpts: number;
+    };
+    assert.deepEqual(recalled, original); assert.equal(providerCalls, 0);
+    assert.ok(Array.isArray(evidenceExcerpts)); assert.equal(typeof omittedEvidenceExcerpts, 'number');
+    for (const quote of evidenceExcerpts) {
+      assert.equal(quote.resultId, original.id);
+      assert.equal(quote.excerpt, original.answer.slice(quote.start, quote.end));
+    }
+    const afterRecall = await context.store.read(resumed.sessionId, context.publication);
+    assert.deepEqual(resolveEvidence(afterRecall, read.data.handleId!, 'research'), original, 'Copyable model excerpts do not change canonical evidence or binding authority');
     await assert.rejects(first.rememberResearch(finding('stale-result'), new AbortController().signal), /cancelled/);
     const abort = new AbortController(); abort.abort();
     await assert.rejects(resumed.rememberResearch(finding('aborted-result'), abort.signal), { name: 'AbortError' });

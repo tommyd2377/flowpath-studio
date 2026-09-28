@@ -75,7 +75,8 @@ test('one connected call sends only sanitized selected thumbnails and reserves o
   const result = await interpretMedia(user, site.id, request, new AbortController().signal);
   assert.equal(result.mode, 'connected'); assert.equal(requests.length, 1); assert.equal(attemptsFor(user.uid), 1);
   const { options, body } = requests[0];
-  assert.equal(body.store, false); assert.equal(body.max_output_tokens, 6000); assert.equal(options.redirect, 'error'); assert.equal(options.cache, 'no-store'); assert.ok(options.signal instanceof AbortSignal);
+  assert.equal(body.model, 'gpt-6-astra'); assert.deepEqual(body.reasoning, { effort: 'high' }); assert.equal(body.service_tier, 'default');
+  assert.equal(body.store, false); assert.equal(body.max_output_tokens, 16384); assert.equal(options.redirect, 'error'); assert.equal(options.cache, 'no-store'); assert.ok(options.signal instanceof AbortSignal);
   const content = (body.input as { content: { type: string; image_url?: string; detail?: string }[] }[])[0].content;
   const images = content.filter(item => item.type === 'input_image');
   assert.equal(images.length, 1); assert.equal(images[0].detail, 'low'); assert.ok(images[0].image_url?.startsWith('data:image/webp;base64,'));

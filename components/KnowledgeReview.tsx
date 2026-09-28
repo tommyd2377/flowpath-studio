@@ -239,6 +239,7 @@ function CandidateReview({ candidate, content, disabled, act, onDirtyChange, res
   const [text, setText] = useState('');
   const [error, setError] = useState('');
   const [aliasText, setAliasText] = useState<Record<string, string>>({});
+  const partial = candidate.files?.some(file => file.status === 'failed') || candidate.website?.incomplete || candidate.website?.pages.some(page => page.status === 'failed' || page.status === 'skipped');
   const dirty = JSON.stringify(design) !== JSON.stringify(candidate.website?.design) || JSON.stringify(catalog) !== JSON.stringify(candidate.catalog) || Object.entries(aliasText).some(([id, value]) => value !== (candidate.catalog.entities.find(entity => entity.id === id)?.aliases ?? []).join(', '));
   const dirtyCallback = useRef(onDirtyChange);
   useEffect(() => { dirtyCallback.current = onDirtyChange; }, [onDirtyChange]);
@@ -300,6 +301,6 @@ function CandidateReview({ candidate, content, disabled, act, onDirtyChange, res
     </div>
     {error && <p className="form-error" role="alert">{error}</p>}
     {pendingKnowledgeReviews(candidate).length > 0 && <p role="status" className="field-help">Review and approve the pending content above before applying. Nothing has been saved to your draft yet.</p>}
-    <div className="proposal-actions">{dirty ? <><button className="button primary" disabled={disabled} onClick={() => void save()}><Check size={16}/>Save corrections</button><button className="text-button muted" disabled={disabled} onClick={() => { setCatalog(candidate.catalog); setAliasText({}); setDesign(candidate.website?.design); }}>Discard field edits</button></> : <button className="button primary" disabled={disabled || pendingKnowledgeReviews(candidate).length > 0 || !!candidate.files?.some(file => file.status === 'failed') && !acceptPartial} onClick={() => void act({ action: 'apply', candidateId: candidate.id, candidateRevisionId: candidate.catalog.id, ...(includeDesign && design ? { websiteDesign: design } : {}), acceptPartial })}><Check size={16}/>Apply to draft</button>}<button className="text-button muted" disabled={disabled || dirty} onClick={() => void act({ action: 'discard', candidateId: candidate.id })}>Dismiss proposal</button></div>
+    <div className="proposal-actions">{dirty ? <><button className="button primary" disabled={disabled} onClick={() => void save()}><Check size={16}/>Save corrections</button><button className="text-button muted" disabled={disabled} onClick={() => { setCatalog(candidate.catalog); setAliasText({}); setDesign(candidate.website?.design); }}>Discard field edits</button></> : <button className="button primary" disabled={disabled || pendingKnowledgeReviews(candidate).length > 0 || !!partial && !acceptPartial} onClick={() => void act({ action: 'apply', candidateId: candidate.id, candidateRevisionId: candidate.catalog.id, ...(includeDesign && design ? { websiteDesign: design } : {}), acceptPartial })}><Check size={16}/>Apply to draft</button>}<button className="text-button muted" disabled={disabled || dirty} onClick={() => void act({ action: 'discard', candidateId: candidate.id })}>Dismiss proposal</button></div>
   </section>;
 }

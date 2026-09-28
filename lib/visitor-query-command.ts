@@ -2,38 +2,34 @@ import 'server-only';
 import { randomUUID } from 'node:crypto';
 import { patchQuery, expressionNodes, type Expression, type FieldDescriptor, type QueryPatch } from '@thevoice/platform-ui/query';
 import type { CapabilityContext } from './visitor-capabilities';
+import { publishedOfferingScope } from './catalog-query';
+import { normalizedWebsiteCommand, websiteCommandCanMatch, websiteCommandFieldPredicate, websiteCommandFieldState, websiteCommandSortPattern } from './visitor-command-intent';
 
 export type WebsiteCommand = { capabilityId: string; input: unknown };
 const normalized = (value: string) => value.normalize('NFKC').toLowerCase().replace(/[’‘]/g, "'").replace(/[-_/]/g, ' ').replace(/\s+/g, ' ').trim();
 const words = (value: string) => normalized(value).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
 const singular = (value: string) => value.length > 3 && value.endsWith('s') && !value.endsWith('ss') ? value.slice(0, -1) : value;
 const phrase = (text: string, label: string) => ` ${words(text).map(singular).join(' ')} `.includes(` ${words(label).map(singular).join(' ')} `);
+const fieldLabels = (field: FieldDescriptor) => [field.id, field.label, ...field.aliases,
+  ...field.type === 'money' && field.basis ? ['price', 'cost', 'rate', 'fee'].map(label => `${field.basis} ${label}`) : []];
 const clarify = (question: string): WebsiteCommand => ({ capabilityId: 'task.clarify', input: { question, options: [] } });
 
 /** A conservative, publication-driven shortcut. Unhandled prose stays with the assistant.
  * Every recognized command becomes an ordinary validated capability and needs its display receipt.
  */
 export function websiteQueryCommand(text: string, context: Pick<CapabilityContext, 'index' | 'session'>): WebsiteCommand | null {
+  if (!websiteCommandCanMatch(text)) return null;
   const { index, session } = context;
   const history = session.queries.find(item => item.current.queryId === session.activeQueryId) ?? session.queries[0];
   if (!history) return null;
   const query = history.current, fields = index.space.fields;
-  const value = text.toLowerCase().trim().replace(/[.!?]+$/, '');
+  const value = normalizedWebsiteCommand(text);
+  // Reopening is a view action, not a request to rebuild quantities or research.
+  // Added qualifications (for example "including tax") stay with the assistant.
+  if (/^(?:show(?: me)?|open|bring back|restore) (?:my |the |current |saved )*(?:estimate|basket)(?: again)?$/.test(value)) {
+    return { capabilityId: 'estimate.show', input: {} };
+  }
   const explicitAll = /^(?:show(?: me)?|find|search(?: for)?|browse)\s+all(?: of)?\s+/.test(value);
-  if (/^(?:what|when|where|why|how|who|does|do|is|are|can|could|tell|explain)\b/.test(value)) return null;
-  // Searching external media/maps is an assistant capability, not a catalog
-  // keyword filter. A plain "show photos" can still select a published gallery.
-  if (/^(?:search(?:\s+for)?|find)\s+(?:(?:some|a|an|the)\s+)?(?:(?:web|online)\s+)?(?:images?|pictures?|photos?|photographs?|videos?|maps?)\b/.test(value)
-    || /\b(?:on|from|across)\s+(?:the\s+)?(?:web|internet)\b/.test(value)) return null;
-  // A projection/request for explanation is not a text predicate. Leave mixed
-  // display/filter requests intact for the assistant's typed query tools.
-  if (/[?;]|\.\s|\b(?:and then|then)\b|\band\s+(?:show|tell|explain|display|list|include|their|its)\b/.test(value)) return null;
-  // A shortcut completes the whole request; it cannot discard a second task
-  // after selecting a named value. Ordinary alternatives (red and blue) remain filters.
-  if (/(?:\b(?:and|also|plus|while|as well as)\s+|,\s*)(?:(?:then|also|please|can you|could you|would you)\s+)*(?:calculate|compute|estimate|total|sum|add up|work out|figure out|apply|explain|summari[sz]e|compare|research|search|look up|find out|annotate|enrich|convert|give|tell|show)\b/.test(value)) return null;
-  const displayClause = value.match(/\b(?:with|along with|including|plus)\s+(.+)$/)?.[1];
-  if (displayClause && (/^(?:their|its|the|listed|published)\b/.test(displayClause)
-    || fields.some(field => [field.id, field.label, ...field.aliases].some(label => phrase(displayClause, label))))) return null;
   const patch = (operations: QueryPatch['operations']): WebsiteCommand => {
     if (/\bat any price$/.test(value)) {
       const projected = patchQuery(history, { queryId: query.queryId, baseRevision: query.revision, operations });
@@ -53,6 +49,12 @@ export function websiteQueryCommand(text: string, context: Pick<CapabilityContex
   if (/^(?:exclude subcollections|only (?:this|the current) collection)$/.test(value)) return patch([{ op: 'setScope', scope: { ...query.scope, traversal: 'direct', include: undefined } }]);
   if (/^(?:search|show) (?:the )?(?:whole (?:site|website)|all collections)$/.test(value)) return patch([{ op: 'setScope', scope: { collectionId: index.space.rootId, path: [index.space.rootId], traversal: 'descendants' } }]);
 
+  if (/^(?:show(?: me)?|open(?: up)?|bring up|browse) (?:the |your |our |full |complete |entire |all (?:of )?(?:the |your )?)*menu(?: again)?$/.test(value)) {
+    const scope = publishedOfferingScope(index, 'menu');
+    const reset = /\b(?:full|complete|entire|all)\b/.test(value);
+    if (scope) return patch([{ op: 'setScope', scope }, { op: 'setSearch', text: '' }, ...reset ? [replaceRoot(all([])), { op: 'setSort' as const, order: [] }, { op: 'setPreferences' as const, preferences: [] }] : nodes.filter(node => node.kind === 'search').map(node => ({ op: 'removeConstraint' as const, nodeId: node.id }))]);
+  }
+
   const scopeName = value.match(/^(?:show(?: me)?|browse)\s+(?:(?:your|the|all)\s+)?(.+)$/)?.[1].replace(/,?\s*at any price$/, '').replace(/\s+instead,?$/, '').trim();
   const sameWords = (left: string, right: string) => words(left).map(singular).join(' ') === words(right).map(singular).join(' ');
   const exactScope = scopeName && index.space.collections.filter(collection => sameWords(collection.name, scopeName));
@@ -65,19 +67,36 @@ export function websiteQueryCommand(text: string, context: Pick<CapabilityContex
     return patch([{ op: 'setScope', scope: { collectionId: target.id, path: pathTo(target.id), traversal: 'descendants' } }, { op: 'setSearch', text: '' }, ...explicitAll ? [replaceRoot(all([])), { op: 'setSort' as const, order: [] }, { op: 'setPreferences' as const, preferences: [] }] : nodes.filter(node => node.kind === 'search').map(node => ({ op: 'removeConstraint' as const, nodeId: node.id }))]);
   }
 
-  const openName = value.match(/^open\s+(?:the\s+)?(.+)$/)?.[1];
+  const openName = value.match(/^open(?:\s+up)?\s+(?:the\s+)?(.+)$/)?.[1];
   const showName = value.match(/^show(?: me)?\s+(?:(?:your|the)\s+)?(.+)$/)?.[1];
   if (openName || showName) {
-    const requested = normalized(openName ?? showName!);
-    const exact = index.space.records.filter(record => [record.name, ...record.aliases].some(name => normalized(name) === requested));
+    const nameKey = (name: string) => words(name.replace(/&/g, ' and ')).join(' ');
+    const requested = nameKey(openName ?? showName!);
+    const exact = index.space.records.filter(record => [record.name, ...record.aliases].some(name => nameKey(name) === requested));
     if (exact.length === 1) return { capabilityId: 'record.detail', input: { recordId: exact[0].id } };
     if (openName) {
-      const matches = index.space.records.filter(record => words(requested).every(word => words(record.name).includes(word)));
-      return matches.length === 1 ? { capabilityId: 'record.detail', input: { recordId: matches[0].id } } : clarify('Which item should I open? Use its full name or a number from the current results.');
+      const matches = index.space.records.filter(record => [record.name, ...record.aliases].some(name => words(requested).every(word => nameKey(name).split(' ').includes(word))));
+      // Partial names need the whole dialogue and scene. Let the assistant
+      // resolve them before deciding that a clarification is necessary.
+      return matches.length === 1 ? { capabilityId: 'record.detail', input: { recordId: matches[0].id } } : null;
     }
   }
 
-  const named = fields.map(field => ({ field, score: Math.max(0, ...[field.id, field.label, ...field.aliases].filter(label => phrase(value.replace(/[,:]/g, ' '), label)).map(label => normalized(label).length)) }));
+  // Exact published identities win above. Composed display/media requests need
+  // semantic projection or associations, not keyword predicates for every word.
+  const display = value.match(/\b(?:with|along with|including|plus)\s+(.+)$/), displayClause = display?.[1];
+  const displayBound = displayClause?.match(websiteCommandFieldPredicate);
+  const predicateField = displayBound ? words(displayClause!.slice(0, displayBound.index).replace(/^(?:a|an|the)\s+/, '')).map(singular).join(' ') : '';
+  const currentFieldFilter = displayBound && /^(?:only(?: show)?|show(?: me)?|filter)(?: only)? (?:those|these|them)$/.test(value.slice(0, display!.index).trim())
+    && (/^(?:price|cost|rate|fee)$/.test(predicateField) || fields.some(field => fieldLabels(field).some(label => words(label).map(singular).join(' ') === predicateField)));
+  if (displayClause && !currentFieldFilter && (/^(?:their|its|the|listed|published)\b/.test(displayClause)
+    || /\b(?:prices?|costs?|rates?|fees?)\b/.test(displayClause)
+    || fields.some(field => fieldLabels(field).some(label => phrase(displayClause, label))))) return null;
+  const mediaSubject = value.match(/^(?:show(?: me)?|browse)\s+(.+)$/)?.[1].replace(/^(?:all(?: of)?\s+)?(?:(?:the|your|our)\s+)?/, '').replace(/\s+(?:again|please)$/, '');
+  if (mediaSubject && /\b(?:photos?|pictures?|images?|photographs?|videos?|gallery|galleries)\b/.test(mediaSubject)
+    && !/^(?:photos?|pictures?|images?|photographs?|videos?|gallery|galleries)(?: (?:of|photos?|pictures?|images?|photographs?|videos?|gallery|galleries))*$/.test(mediaSubject)) return null;
+
+  const named = fields.map(field => ({ field, score: Math.max(0, ...fieldLabels(field).filter(label => phrase(value.replace(/[,:]/g, ' '), label)).map(label => normalized(label).length)) }));
   const best = Math.max(0, ...named.map(item => item.score));
   let candidates = named.filter(item => item.score && item.score === best).map(item => item.field);
   if ((!candidates.length || best <= 5 && candidates.every(field => field.type === 'money')) && (/\bprice|\bcost|\bcheapest|\bexpensive/.test(value) || value.includes('$'))) candidates = fields.filter(field => field.type === 'money');
@@ -88,19 +107,35 @@ export function websiteQueryCommand(text: string, context: Pick<CapabilityContex
   }
   const field = candidates.length === 1 ? candidates[0] : undefined;
   if (/^(?:remove|clear)\b/.test(value) || /^(?:at any price|no price limit)$/.test(value)) {
-    if (/^(?:at any price|no price limit)$/.test(value)) candidates = fields.filter(field => field.type === 'money');
+    const priceLimit = /^(?:at any price|no price limit)$/.test(value);
+    const subject = value.replace(/^(?:remove|clear)\s+(?:the\s+)?/, '').replace(/\s+(?:filter|limit|constraint)$/, '');
+    // "Remove the item" may edit a basket or another surface. Only a whole
+    // published field name (or an explicit filter request) belongs to this shortcut.
+    if (!priceLimit && !/\b(?:filter|limit|constraint)\b/.test(value)
+      && !candidates.some(candidate => fieldLabels(candidate).some(label => sameWords(subject, label)))) return null;
+    if (priceLimit) candidates = fields.filter(field => field.type === 'money');
     const removed = nodes.filter(node => 'fieldId' in node && candidates.some(field => field.id === node.fieldId));
     return removed.length ? patch(removed.map(node => ({ op: 'removeConstraint', nodeId: node.id }))) : clarify('Which filter should I remove? Name its attribute, or say “show everything again”.');
   }
-  if (/\b(sort|ascending|descending|cheapest|most expensive|low to high|high to low|largest|smallest|larger|smaller)\b/.test(value) && !/\b(?:larger|smaller) than\b/.test(value)) {
+  if (websiteCommandSortPattern.test(value) && !/\b(?:larger|smaller) than\b/.test(value)) {
+    // This shortcut can perform one sort, not interpret a compound request.
+    // Preserve the entire category + limit + ordering request for the model.
+    // Merely finding "cheapest" previously discarded the visitor's other criteria.
+    let remainder = value;
+    for (const label of field ? fieldLabels(field).sort((a, b) => b.length - a.length) : []) {
+      const escaped = normalized(label).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      remainder = normalized(remainder).replace(new RegExp(`\\b${escaped}\\b`, 'g'), ' ');
+    }
+    remainder = remainder.replace(/\b(?:sort|ascending|descending|cheapest|most expensive|low to high|high to low|highest|lowest|largest|smallest|larger|smaller|show|me|by|price|cost|first|please|the|these|those|them|items|results|options)\b/g, '').trim();
+    if (remainder) return null;
     if (!field?.sort) return clarify(`Which published attribute should I sort by?${fields.filter(field => field.sort && field.coverage.known).length ? ` You can use ${fields.filter(field => field.sort && field.coverage.known).map(field => field.label).slice(0, 5).join(', ')}.` : ''}`);
-    return patch([{ op: 'setSort', order: [{ fieldId: field.id, direction: /descending|largest|larger|high to low|most expensive/.test(value) ? 'desc' : 'asc' }] }]);
+    return patch([{ op: 'setSort', order: [{ fieldId: field.id, direction: /descending|highest|largest|larger|high to low|most expensive/.test(value) ? 'desc' : 'asc' }] }]);
   }
-  const bound = value.match(/\b(under|below|over|above|at least|at most|less than|greater than|larger than|smaller than|before|after|equals?|is|includes? all of|includes? any of|contains|includes?)\s+(.*)$/);
+  const bound = value.match(websiteCommandFieldPredicate);
   const explicitlyTyped = /^(?:only|filter|where)\b/.test(value) || best > 0 || !!bound && /\d/.test(bound[2]);
   let expression: Expression | undefined;
-  if (field && /\b(unknown|not published|missing|known|conflicting|conditional|stale)\b/.test(value)) {
-    const state = value.match(/\b(unknown|not published|missing|known|conflicting|conditional|stale)\b/)![1];
+  if (field && websiteCommandFieldState.test(value)) {
+    const state = value.match(websiteCommandFieldState)![1];
     expression = { kind: 'state', id: randomUUID(), fieldId: field.id, state: state === 'missing' || state === 'not published' ? 'unknown' : state as 'known' };
   } else if (bound && explicitlyTyped) {
     if (!field) return clarify('Which published attribute or price basis should I use? Name the field with your limit.');
@@ -112,6 +147,9 @@ export function websiteQueryCommand(text: string, context: Pick<CapabilityContex
     if (!field.operations.includes(op) || typeof data === 'number' && !Number.isFinite(data) || field.type === 'boolean' && !/^(true|false|yes|no)$/.test(raw) || field.type === 'geo') return clarify(`Use a supported ${field.label} value: ${field.operations.join(', ')}${field.unit ? `, measured in ${field.unit}` : ''}.`);
     expression = { kind: 'field', id: randomUUID(), fieldId: field.id, op, value: { type: field.type, value: data, ...(field.unit ? { unit: field.unit } : {}), ...(field.currency ? { currency: field.currency } : {}), ...(field.basis ? { basis: field.basis } : {}) } };
   }
+  // An unparsed predicate is still an instruction. Do not let a recognized
+  // category/value turn its remaining criteria into literal search words.
+  if (!expression && websiteCommandFieldPredicate.test(value.replace(/^include\s+/, ''))) return null;
   // Short requests can name reviewed enum/text values without spelling out the field.
   if (!expression && /^(?:show|find|only|include|filter|search)\b/.test(value)) {
     const matches: { field: FieldDescriptor; values: string[] }[] = [];
@@ -145,7 +183,10 @@ export function websiteQueryCommand(text: string, context: Pick<CapabilityContex
     return { collection, terms: full.every(term => terms.includes(term)) ? full : leaf };
   }).filter(item => item.terms.length && item.terms.every(term => terms.includes(term)));
   const longest = Math.max(0, ...scopes.map(item => item.terms.length));
-  const chosen = longest ? scopes.filter(item => item.terms.length === longest) : /^(?:photos?|pictures?|images?|photographs?|gallery)$/.test(subject) ? index.space.collections.filter(collection => collection.view === 'gallery' && [...index.direct.get(collection.id) ?? []].some(id => index.records.get(id)?.type === 'published-photo')).map(collection => ({ collection, terms: words(subject).map(singular) })) : [];
+  const matches = longest ? scopes.filter(item => item.terms.length === longest) : /^(?:photos?|pictures?|images?|photographs?|gallery)$/.test(subject) ? index.space.collections.filter(collection => collection.view === 'gallery' && [...index.direct.get(collection.id) ?? []].some(id => index.records.get(id)?.type === 'published-photo')).map(collection => ({ collection, terms: words(subject).map(singular) })) : [];
+  // Descendant traversal already includes child albums/categories. Keep union
+  // members disjoint instead of proposing an invalid ancestor/child union.
+  const chosen = matches.filter(child => !matches.some(parent => parent !== child && index.descendants.get(parent.collection.id)?.has(child.collection.id)));
   const operations: QueryPatch['operations'] = [];
   if (chosen.length) {
     const pathTo = (id: string, seen = new Set<string>()): string[] => {
@@ -158,11 +199,21 @@ export function websiteQueryCommand(text: string, context: Pick<CapabilityContex
     // records containing that noun. Exact record/category names already won
     // above. Preserve genuine qualifiers (e.g. "winter menu") for retrieval.
     if (/^(?:(?:a|the|your|our) )?(?:menu|list|catalog|catalogue|gallery|collection|selection|options)(?: of)?$/.test(subject)) subject = '';
-  }
+  } else if (/\b(?:menu|list|catalog|catalogue|gallery|collection|selection|options)\b/.test(subject)) return null;
   // Tokens are resolved against the complete publication, including full reading text.
   // Singular/plural equivalence is allowed only when that exact alternate token is published.
   const search = (input: string): Expression => ({ kind: 'search', id: randomUUID(), text: words(input).filter(word => !['the', 'your', 'our', 'options', 'instead', 'please'].includes(word)).map(word => index.tokens.has(word) ? word : index.tokens.has(singular(word)) ? singular(word) : index.tokens.has(`${word}s`) ? `${word}s` : word).join(' ') });
   const parts = subject.split(/\s+(?:or|and)\s+/).map(search).filter(node => node.kind === 'search' && node.text);
+  // Resolving a collection does not explain the rest of a display request.
+  // Any remaining qualifier needs a published member name/alias; prose such as
+  // "all six ... in this guide" must reach the assistant intact, not become
+  // literal search terms. Explicit searches still retain their keyword intent.
+  if (/^show\b/.test(value) && (subject || !chosen.length)) {
+    const members = chosen.length ? new Set(chosen.flatMap(item => [...index.descendants.get(item.collection.id) ?? []].flatMap(id => [...index.direct.get(id) ?? []]))) : null;
+    if (!parts.length || !parts.every(part => part.kind === 'search'
+      && index.space.records.some(record => (!members || members.has(record.id)) && [record.name, ...record.aliases].some(name =>
+        words(part.text).every(term => words(name).map(singular).includes(singular(term))))))) return null;
+  }
   const next = parts.length > 1 ? { kind: 'any' as const, id: randomUUID(), children: parts } : parts[0];
   const previousSearch = nodes.find(node => node.kind === 'search' || node.kind === 'any' && node.children.every(child => child.kind === 'search'));
   if (/^include\b/.test(value) && next) {

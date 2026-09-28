@@ -64,6 +64,7 @@ test('actual owner review/apply/publish routes feed the same bounded mocked chat
         handleId = result.data.handleId; outputType = result.data.outputType; return result;
       } });
       assert.equal(round, 5); assert.match(result.text, /compared/); assert.deepEqual(displayed!.comparison!.rows.map(row => row.id), ['record-00001', 'record-00003']);
+      await bridge.finish();
       const saved = await context.store.read(bridge.sessionId, context.publication); assert.equal(saved.tasks.length, 1); assert.equal(saved.tasks[0].steps.length, 4); assert.equal(saved.tasks[0].status, 'completed'); assert.equal(saved.tasks[0].budget.modelCalls, 5); assert.equal(saved.tasks[0].budget.inputTokens, 500);
       const sceneContext = JSON.parse((await bridge.instructions()).split('\n').at(-1)!);
       assert.equal(sceneContext.scene.sceneRevision, 1);
@@ -86,6 +87,54 @@ test('actual owner review/apply/publish routes feed the same bounded mocked chat
       const interrupted = await taskRoute(req({ action: 'interrupt', sessionId: saved.id }), { params: Promise.resolve({ slug: site.slug }) }); assert.equal(interrupted.status, 200);
       await assert.rejects(() => bridge.instructions(), /cancelled/);
     }
+    await t.test('refreshing an existing view preserves its revision and does not write session state', async () => {
+      const call = (input: unknown) => taskRoute(req(input), { params: Promise.resolve({ slug: site.slug }) });
+      const initial = (await (await call({ action: 'init' })).json()).view;
+      const context = await visitorTaskContext(site.slug), before = await context.store.read(initial.sessionId, context.publication);
+      for (let i = 0; i < 2; i++) {
+        const response = await call({ action: 'refresh', sessionId: initial.sessionId }), result = await response.json();
+        assert.equal(response.status, 200); assert.equal(result.view.revision, initial.revision);
+        assert.deepEqual(await context.store.read(initial.sessionId, context.publication), before);
+      }
+    });
+    await t.test('one command request cancels old work and rejects stale replay without changing the view', async () => {
+      const call = (input: unknown) => taskRoute(req(input), { params: Promise.resolve({ slug: site.slug }) });
+      const initial = (await (await call({ action: 'init' })).json()).view;
+      const bridge = await createVisitorTaskBridge(site.slug, initial.sessionId);
+      await bridge.beforeModel();
+      const active = (await (await call({ action: 'refresh', sessionId: initial.sessionId })).json()).view;
+      const input = { action: 'command', sessionId: active.sessionId, generation: active.generation, operationId: randomUUID(), text: 'Only reading minutes at least 6' };
+      const response = await call(input), result = await response.json();
+      assert.equal(response.status, 200, JSON.stringify(result));
+      assert.equal(result.view.result.count.value, 2);
+      await assert.rejects(bridge.beforeModel(), /cancelled/);
+      const context = await visitorTaskContext(site.slug);
+      const before = await context.store.read(active.sessionId, context.publication);
+      assert.ok(active.tasks.length > 0);
+      assert.ok(active.tasks.every((task: { id: string }) => before.tasks.find(value => value.taskId === task.id)?.status === 'cancelled'));
+      assert.equal((await call(input)).status, 409, 'An old generation cannot execute the command twice');
+      assert.deepEqual(await context.store.read(active.sessionId, context.publication), before);
+      const unhandled = await call({ ...input, operationId: randomUUID(), generation: result.view.generation, text: 'Explain how this studio can help me' });
+      const fallback = await unhandled.json();
+      assert.equal(unhandled.status, 200, JSON.stringify(fallback));
+      assert.equal(fallback.handled, false);
+      assert.equal(fallback.view.generation, result.view.generation + 1);
+      assert.equal((await context.store.read(active.sessionId, context.publication)).operations.length, before.operations.length, 'Unrecognized prose cancels old work but executes no capability');
+    });
+    for (const status of ['completed', 'cancelled', 'failed'] as const) await t.test(`task counters are batched without losing usage on ${status}`, async () => {
+      const bridge = await createVisitorTaskBridge(site.slug), context = await visitorTaskContext(site.slug);
+      await bridge.beforeModel();
+      const reserved = await context.store.read(bridge.sessionId, context.publication);
+      bridge.usage({ inputTokens: 100, outputTokens: 20 });
+      assert.deepEqual(await context.store.read(bridge.sessionId, context.publication), reserved, 'Token observation must not add a storage round trip before the tool');
+      await bridge.beforeModel();
+      assert.equal((await context.store.read(bridge.sessionId, context.publication)).tasks[0].budget.inputTokens, 100);
+      bridge.usage({ inputTokens: 50, outputTokens: 10 });
+      await bridge.finish(status);
+      const finished = (await context.store.read(bridge.sessionId, context.publication)).tasks[0];
+      assert.equal(finished.status, status);
+      assert.equal(finished.budget.inputTokens, 150); assert.equal(finished.budget.outputTokens, 30);
+    });
     const context = await visitorTaskContext(site.slug);
     for (const compound of [false, true]) {
       const socket = new FakeLiveSocket(); let calls = 0;

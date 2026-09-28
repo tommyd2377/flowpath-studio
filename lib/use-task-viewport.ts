@@ -41,6 +41,7 @@ export function useTaskViewport(root: RefObject<HTMLElement | null>, open: boole
   }, [publish]);
   const pause = useCallback(() => { clearTimeout(timer.current); transport.current?.abort(); accepted.current = null; dirty.current = false; last.current = ''; failure.current = null; }, []);
   const accept = useCallback(async (view: VisitorTaskView, initialRecordIds?: string[]) => {
+    if (accepted.current !== view) { transport.current?.abort(); failure.current = null; }
     accepted.current = view.active ? view : null;
     if (initialRecordIds) { last.current = `${view.operationId}:true:${initialRecordIds.join('|')}`; failure.current = null; }
     await settle();

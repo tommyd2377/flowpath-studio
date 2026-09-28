@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import type { KnowledgeCatalog } from '@thevoice/platform-ui/contracts';
 import type { MediaLibrary } from '@thevoice/platform-ui/media';
 import type { SiteContent } from '@/lib/site-model';
+import type { GreetingRecordTopic } from '@/lib/greeting-records';
 import SiteExperience from './SiteExperience';
 import { observePlatformEvent } from '@/lib/platform-client-events';
 
@@ -13,6 +14,11 @@ export default function KnowledgePreview({ content, siteId }: { content: SiteCon
   const [error, setError] = useState('');
   const [loadedMedia, setLoadedMedia] = useState<{ siteId: string; id: string; library: MediaLibrary } | null>(null);
   const [mediaError, setMediaError] = useState('');
+  const [greeting, setGreeting] = useState<{ key: string; topics: GreetingRecordTopic[]; error?: string } | null>(null);
+  const greetingIds = (content.greetingPoints ?? []).flatMap(point => point?.kind === 'record' ? [point.id] : []).join(',');
+  const catalogRevision = content.catalogPublicationId;
+  const greetingKey = `${siteId}:${catalogRevision}:${greetingIds}`;
+  const greetingLoaded = greeting?.key === greetingKey ? greeting : null;
   const mediaRevision = content.mediaRevisionId;
   const media = loadedMedia?.siteId === siteId && loadedMedia.id === mediaRevision ? loadedMedia.library : null;
   const revisionId = content.knowledgeRevisionId;
@@ -33,5 +39,14 @@ export default function KnowledgePreview({ content, siteId }: { content: SiteCon
       .catch(error => { if (!controller.signal.aborted) setMediaError(error.message); });
     return () => controller.abort();
   }, [mediaRevision, siteId]);
-  return <>{revisionId && !catalog && <p className="knowledge-preview-status" role="status">{error || <LoadingIndicator label="Loading knowledge preview…"/>}</p>}{mediaRevision && !media && <p className="knowledge-preview-status" role="status">{mediaError || <LoadingIndicator label="Loading photo preview…"/>}</p>}<SiteExperience siteId={siteId} content={content} catalog={catalog} media={media}/></>;
+  useEffect(() => {
+    if (!catalogRevision || !greetingIds) return;
+    const controller = new AbortController();
+    const query = new URLSearchParams({ revisionId: catalogRevision, selected: greetingIds, selectedOnly: 'true' });
+    void fetch(`/api/sites/${siteId}/greeting?${query}`, { cache: 'no-store', signal: controller.signal })
+      .then(async response => { const body = await response.json(); if (!response.ok || !Array.isArray(body.selected)) throw new Error(body.error || 'Introduction preview is unavailable.'); if (!controller.signal.aborted) setGreeting({ key: greetingKey, topics: body.selected }); })
+      .catch(error => { if (!controller.signal.aborted) setGreeting({ key: greetingKey, topics: [], error: error.message }); });
+    return () => controller.abort();
+  }, [catalogRevision, greetingIds, greetingKey, siteId]);
+  return <>{revisionId && !catalog && <p className="knowledge-preview-status" role="status">{error || <LoadingIndicator label="Loading knowledge preview…"/>}</p>}{mediaRevision && !media && <p className="knowledge-preview-status" role="status">{mediaError || <LoadingIndicator label="Loading photo preview…"/>}</p>}{catalogRevision && greetingIds && (!greetingLoaded || greetingLoaded.error) && <p className="knowledge-preview-status" role="status">{greetingLoaded?.error || <LoadingIndicator label="Loading introduction preview…"/>}</p>}<SiteExperience siteId={siteId} content={content} catalog={catalog} media={media} greetingRecords={greetingLoaded?.topics}/></>;
 }

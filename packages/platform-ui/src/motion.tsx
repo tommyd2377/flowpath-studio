@@ -1,11 +1,27 @@
 'use client';
 
-import { forwardRef, useLayoutEffect, useRef, type ReactNode } from 'react';
-import { animate, LayoutGroup, MotionConfig, motion, stagger, useIsPresent, useMotionValue, useReducedMotion, type Variants } from 'motion/react';
+import { forwardRef, useLayoutEffect, useRef, useSyncExternalStore, type ReactNode } from 'react';
+import { animate, LayoutGroup, MotionConfig, motion, stagger, useIsPresent, useMotionValue, type Variants } from 'motion/react';
 import type { SemanticTransition } from './contracts.js';
+
+const reducedMotionQuery = '(prefers-reduced-motion: reduce)';
+const subscribeReducedMotion = (changed: () => void) => {
+  const preference = window.matchMedia(reducedMotionQuery);
+  preference.addEventListener('change', changed);
+  return () => preference.removeEventListener('change', changed);
+};
+const readReducedMotion = () => window.matchMedia(reducedMotionQuery).matches;
+const serverReducedMotion = () => false;
+/** Motion 13.2 samples its preference on mount; shared controls must also
+ * respond when a visitor changes the OS setting during the same session. */
+export function usePlatformReducedMotion() {
+  return useSyncExternalStore(subscribeReducedMotion, readReducedMotion, serverReducedMotion);
+}
 
 /** The only motion roles available to a published presentation. */
 export const motionTiming = { reveal: 0.38, disclosure: 0.45, reflow: 0.48, workspace: 0.52, exit: 0.18, feedback: 0.16 } as const;
+/** Information appears promptly while its surrounding geometry settles. */
+export const informationTiming = { enter: 0.32, reflow: 0.38, exit: 0.18, opacity: 0.16 } as const;
 export const surfaceTransition = { type: 'spring', visualDuration: 0.48, bounce: 0.08 } as const;
 export const revealTransition = { type: 'tween', duration: motionTiming.reveal, ease: [0.22, 0.61, 0.36, 1] } as const;
 export const feedbackTransition = { type: 'spring', visualDuration: motionTiming.feedback, bounce: 0.12 } as const;
@@ -28,7 +44,9 @@ export const galleryItemVariants: Variants = {
 };
 
 export function InterfaceMotion({ children, id }: { children: ReactNode; id: string }) {
-  const reduced = useReducedMotion();
+  const reduced = usePlatformReducedMotion();
+  // Registered descendants can supply their own transitions, so retain
+  // Motion's automatic policy as well as the live default durations here.
   return <MotionConfig reducedMotion="user" transition={{ ...revealTransition, duration: reduced ? 0 : motionTiming.reveal, layout: reduced ? { duration: 0 } : surfaceTransition }}><LayoutGroup id={id}>{children}</LayoutGroup></MotionConfig>;
 }
 
@@ -40,7 +58,7 @@ export function MotionHeight({ children, className, duration = motionTiming.refl
   const target = useRef<number | null>(null);
   const running = useRef<ReturnType<typeof animate> | null>(null);
   const height = useMotionValue<number | 'auto'>('auto');
-  const reduced = useReducedMotion();
+  const reduced = usePlatformReducedMotion();
   useLayoutEffect(() => {
     const next = content.current?.getBoundingClientRect().height;
     if (next === undefined) return;
@@ -50,7 +68,7 @@ export function MotionHeight({ children, className, duration = motionTiming.refl
     if (previous !== null && Math.abs(previous - next) < 0.5) return;
     running.current?.stop();
     if (previous === null) height.set(next);
-    else running.current = animate(height, next, { ...surfaceTransition, duration });
+    else running.current = animate(height, next, { ...surfaceTransition, visualDuration: duration });
   });
   useLayoutEffect(() => {
     const element = content.current;
@@ -72,7 +90,7 @@ export function MotionHeight({ children, className, duration = motionTiming.refl
 
 export function Disclosure({ children, name }: { children: ReactNode; name: string }) {
   const present = useIsPresent();
-  const reduced = useReducedMotion();
+  const reduced = usePlatformReducedMotion();
   return <motion.div data-platform-disclosure={name} inert={!present} aria-hidden={!present || undefined} style={{ overflow: 'clip' }}
     initial={reduced ? false : { height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
     transition={{ ...revealTransition, duration: reduced ? 0 : motionTiming.disclosure, opacity: { duration: reduced ? 0 : motionTiming.feedback } }}>{children}</motion.div>;
@@ -80,7 +98,7 @@ export function Disclosure({ children, name }: { children: ReactNode; name: stri
 
 export const SemanticSurface = forwardRef<HTMLDivElement, { children: ReactNode; name: string; intent?: SemanticTransition['type'] }>(function SemanticSurface({ children, name, intent = 'none' }, ref) {
   const present = useIsPresent();
-  const reduced = useReducedMotion();
+  const reduced = usePlatformReducedMotion();
   const still = reduced || intent === 'none';
   const duration = intent === 'workspace-shift' || intent === 'restore' || intent === 'focus' ? motionTiming.workspace : motionTiming.reveal;
   const movement = intent === 'restore' ? -1 : intent === 'workspace-shift' ? 1 : 0;

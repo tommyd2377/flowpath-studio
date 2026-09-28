@@ -1,5 +1,9 @@
 # Regular website design and motion
 
+## Distinct template composition — 27 September 2026
+
+The [current refinement](website-design-update-2026-09-27.md) replaces the shared fade/rise vocabulary with template-specific lateral reveals, finite image focus and compact spatial entrances, including mobile. Content-aware supported compositions adapt to actual media coverage; sparse and mixed-media collections stay simple. The September 19 distances and frame keyframes below describe that historical pass, not the current choreography. No new animation dependency or paid API call was added.
+
 ## React Motion choreography — 19 September 2026
 
 The actual cake-shop publication was already using `PublishedWebsite`, Showcase and the default Subtle setting, with reduced motion disabled and ordinary document scrolling. Its package build matched the source. The problem was the choreography: the old 6–14 px entrance moved the entire opening copy together, lasted only 0.26–0.5 seconds, and reserved continuous image depth for Expressive. Increasing visibility required changing that runtime, not republishing the customer's site or replacing its content.

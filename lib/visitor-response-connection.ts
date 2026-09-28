@@ -66,6 +66,9 @@ export function createVisitorResponseConnection(apiKey: string, factory: SocketF
   const request: VisitorResponseRequest = (body, signal, onOutput, onEvent) => {
     signal.throwIfAborted();
     if (closed || pending) return Promise.reject(unavailable());
+    // The socket state can change before its close callback runs. Only this new
+    // request reconnects; store:false cached response IDs die with the old socket.
+    if (socket && (socket.readyState === WebSocket.CLOSING || socket.readyState === WebSocket.CLOSED)) disconnect(unavailable());
     return new Promise((resolve, reject) => {
       const abort = () => disconnect(signal.reason);
       const clear = () => signal.removeEventListener('abort', abort);

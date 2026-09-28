@@ -1,0 +1,2086 @@
+[
+  {
+    "at": 1163,
+    "width": 377,
+    "height": 401,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "34352761-7ac4-4598-bd62-597da8247740",
+    "heading": "",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 336.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1183.9000000953674,
+    "width": 377,
+    "height": 401,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "34352761-7ac4-4598-bd62-597da8247740",
+    "heading": "",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 336.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1195.5,
+    "width": 377,
+    "height": 401,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "34352761-7ac4-4598-bd62-597da8247740",
+    "heading": "",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 336.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1218.6000000238419,
+    "width": 377,
+    "height": 401,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 43,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 0,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 18,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 228.9375,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -353.062
+      }
+    ]
+  },
+  {
+    "at": 1229.1000000238419,
+    "width": 377,
+    "height": 401,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 43,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 0,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 18,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 231.61508178710938,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625305175781,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -350.385
+      }
+    ]
+  },
+  {
+    "at": 1245.5,
+    "width": 377,
+    "height": 428.15625,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 41.5989990234375,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 0.0920621,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 16.599,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 257.33349609375,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -324.667
+      }
+    ]
+  },
+  {
+    "at": 1262.1000000238419,
+    "width": 377,
+    "height": 473.890625,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 39.154296875,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 0.244948,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 14.1543,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 300.0607604980469,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625305175781,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -281.939
+      }
+    ]
+  },
+  {
+    "at": 1278.7000000476837,
+    "width": 377,
+    "height": 517.21875,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 36.723487854003906,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 0.394868,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 11.7235,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 340.819580078125,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -241.18
+      }
+    ]
+  },
+  {
+    "at": 1295.5,
+    "width": 377,
+    "height": 554.734375,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 34.563392639160156,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 0.532572,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 9.56339,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 376.09954833984375,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -205.9
+      }
+    ]
+  },
+  {
+    "at": 1312,
+    "width": 377,
+    "height": 590.453125,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 32.79888916015625,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 0.6506,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 7.79889,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 409.6617736816406,
+        "left": 25,
+        "width": 343,
+        "height": 357.5624694824219,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -172.338
+      }
+    ]
+  },
+  {
+    "at": 1328.8000000715256,
+    "width": 377,
+    "height": 621.546875,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 31.22589683532715,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 0.761428,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 6.2259,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 437.13885498046875,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -144.861
+      }
+    ]
+  },
+  {
+    "at": 1344.7000000476837,
+    "width": 377,
+    "height": 646.90625,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 29.923810958862305,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 0.855926,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 4.92381,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 462.2787780761719,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625305175781,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -119.721
+      }
+    ]
+  },
+  {
+    "at": 1364.7000000476837,
+    "width": 377,
+    "height": 668.4375,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 28.918460845947266,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 0.92667,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 3.91846,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 482.697998046875,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -99.302
+      }
+    ]
+  },
+  {
+    "at": 1378.6000000238419,
+    "width": 377,
+    "height": 691.15625,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 27.947139739990234,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 0.982958,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 2.94714,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 503.83642578125,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -78.1636
+      }
+    ]
+  },
+  {
+    "at": 1395.6000000238419,
+    "width": 377,
+    "height": 704.5625,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 27.360973358154297,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 0.999701,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 2.36097,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 516.2720336914062,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -65.728
+      }
+    ]
+  },
+  {
+    "at": 1412.1000000238419,
+    "width": 377,
+    "height": 718.34375,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 26.74477767944336,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 1.74478,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 529.2086181640625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -52.7914
+      }
+    ]
+  },
+  {
+    "at": 1428.7000000476837,
+    "width": 377,
+    "height": 730.0625,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 26.30514907836914,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 1.30515,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 539.5839233398438,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -42.4161
+      }
+    ]
+  },
+  {
+    "at": 1445.6000000238419,
+    "width": 377,
+    "height": 739.203125,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 25.927053451538086,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0.927054,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 548.76953125,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -33.2304
+      }
+    ]
+  },
+  {
+    "at": 1461.9000000953674,
+    "width": 377,
+    "height": 747.46875,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 25.646339416503906,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0.646339,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 556.4000244140625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -25.6
+      }
+    ]
+  },
+  {
+    "at": 1478.8000000715256,
+    "width": 377,
+    "height": 753.859375,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 25.41499900817871,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0.414998,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 562.396728515625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -19.6033
+      }
+    ]
+  },
+  {
+    "at": 1495.5,
+    "width": 377,
+    "height": 759.53125,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 25.242475509643555,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0.242475,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 567.6912841796875,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -14.3087
+      }
+    ]
+  },
+  {
+    "at": 1512,
+    "width": 377,
+    "height": 764.0625,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 25.126293182373047,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0.126292,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 571.9296875,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -10.0703
+      }
+    ]
+  },
+  {
+    "at": 1528.7000000476837,
+    "width": 377,
+    "height": 767.5,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 25.046438217163086,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0.0464375,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 575.08642578125,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -6.91359
+      }
+    ]
+  },
+  {
+    "at": 1548.3000000715256,
+    "width": 377,
+    "height": 770.3125,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 25.007041931152344,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0.0070421,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 577.7416381835938,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -4.25836
+      }
+    ]
+  },
+  {
+    "at": 1562,
+    "width": 377,
+    "height": 772.71875,
+    "top": 181.9375,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 182.9375,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 228.9375,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 579.9365234375,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -2.06347
+      }
+    ]
+  },
+  {
+    "at": 1578.8000000715256,
+    "width": 377,
+    "height": 773.78125,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 532.9744873046875,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -1.08798
+      }
+    ]
+  },
+  {
+    "at": 1595.5,
+    "width": 377,
+    "height": 774.65625,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 533.7711181640625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": -0.291399
+      }
+    ]
+  },
+  {
+    "at": 1612.1000000238419,
+    "width": 377,
+    "height": 774.984375,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1628.7000000476837,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1645.1000000238419,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1661.8000000715256,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1678.4000000953674,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "moving",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1695.3000000715256,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1712.8000000715256,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1728.7000000476837,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1745.3000000715256,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1761.5,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1778.5,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1795.1000000238419,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1811.7000000476837,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1828.6000000238419,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1845.3000000715256,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1861.8000000715256,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1878.5,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1895.4000000953674,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1915.6000000238419,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1928.5,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1945.1000000238419,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1962.7000000476837,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1978.4000000953674,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 1995.6000000238419,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 2011.8000000715256,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  },
+  {
+    "at": 2028.4000000953674,
+    "width": 377,
+    "height": 775,
+    "top": 134,
+    "scrollY": 0,
+    "scrollTop": 0,
+    "readerTop": 135,
+    "transition": "settled",
+    "state": "43dbaf28-86ed-45f6-929f-bc6d7789397e",
+    "heading": "A closer look",
+    "reduced": false,
+    "sameImage": true,
+    "regions": [
+      {
+        "id": "answer",
+        "top": 181,
+        "left": 25,
+        "width": 343,
+        "height": 327.0625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "id": "photo:8fe0034c-188b-47f7-89c9-3f3be54333ea:69dcf6ef-9d9c-482f-bcd5-8307eb3d2d74",
+        "top": 534.0625,
+        "left": 25,
+        "width": 343,
+        "height": 357.5625,
+        "opacity": 1,
+        "scaleX": 1,
+        "scaleY": 1,
+        "x": 0,
+        "y": 0
+      }
+    ]
+  }
+]

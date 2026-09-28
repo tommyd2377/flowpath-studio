@@ -2,8 +2,9 @@
 
 Use this when a voice/chat request goes wrong and you want to trace what the
 application supplied to the model, what it requested, and what the browser did.
-Recording is opt-in, limited to a loopback development server, and disabled in
-production. It does not change prompts, model settings, task limits or provider
+Recording is opt-in and disabled in production. Ordinary recording and timeline
+access stay on a loopback development server; an explicitly paired phone can
+write to its own temporary recording over local HTTPS. Recording does not change prompts, model settings, task limits or provider
 requests, and does not issue additional model calls.
 
 ## Test workflow
@@ -31,6 +32,69 @@ The timeline is `/dev/recordings`. It refreshes on demand rather than polling.
 The recorder resumes within the same tab after a page reload while the server
 session is still active. A new tab is a separate opt-in recording. Stop recording
 before reloading to ensure the final browser buffer is saved.
+After recorder code changes during development, reload the page and verify the
+active recording and voice attachment again before testing. Hot reload can
+replace the recorder's client observer while an older mounted UI still shows
+its previous status; that is not evidence of continued capture.
+
+## Paired phone testing
+
+The existing local HTTPS server must already be reachable and trusted on the
+phone. This pairing workflow does not create certificates, change network
+permissions, start voice, or make provider calls.
+
+1. On the development Mac, from the repo root with Node 24, run the command
+   below using the server's exact HTTPS origin and published site slug:
+
+   ```sh
+   node scripts/pair-phone-recording.mjs https://YOUR-LAN-IP:3220 YOUR-PUBLISHED-SLUG
+   ```
+
+   For the current LAN server, the origin is `https://192.168.1.250:3220`.
+   The command prints a private local HTML card's path, never its invitation.
+   Open that card locally and copy its link to the phone yourself. Keep the
+   card/link private; do not paste it into logs, issues, screenshots or chat.
+2. Open the link within ten minutes. The invitation is in its URL fragment,
+   which is removed immediately on page initialization and is never sent in
+   an HTTP URL or referrer. Nothing records yet. Open **Local test recorder**
+   and tap **Start paired recording** to explicitly consent on the phone.
+3. Start or continue voice/chat yourself. A running voice connection can attach
+   without reconnecting. Check **Voice server capture attached** before testing
+   spoken responses; ordinary browser capture alone is incomplete voice evidence.
+4. Tap **Stop recording** when finished. Delete the private pairing card on the
+   Mac afterward. A new test after stopping or server restart needs a new pairing.
+
+Each one-use invitation creates exactly one recording for one publisher and one
+HTTPS origin. Acceptance rotates the invitation into a separate 30-minute grant,
+held only in that phone tab's session storage. The Mac stores token hashes, not
+usable grants. Reloading the same opted-in tab can resume its still-active
+recording through an empty append check; it never lists other recordings.
+Navigating to another publisher ends browser capture and attempts one stop.
+Server expiry remains independent if the phone goes offline. Stopping capture
+does not stop the conversation or alter the site's separate voice time limits.
+If a save/stop request fails, the server observer may continue until its grant
+expires; stopping the development server ends capture immediately.
+
+The phone can append observations, attach its own existing voice connection and
+stop **only that recording**. It cannot start arbitrary recordings, list, read,
+export or delete them. Pairing requires development mode, an exact same-origin
+HTTPS request, the paired publisher and the active grant. Production rejects
+requests before reading files. This does not weaken the application's ordinary
+LAN, publisher, session or authentication checks. Initial support accepts private
+IPv4 addresses and loopback; public hosts, LAN DNS names and IPv6 LAN addresses
+are not supported. HTTPS loopback pages use the same explicit pairing flow;
+ordinary unpaired recording/history stays on HTTP loopback. Invitation and
+grant-bearing requests reject redirects so their credentials cannot be forwarded
+to another endpoint.
+
+Saved JSONL uses the existing local timeline format and retention/redaction
+limits. On a server bound only to the LAN IP, `/dev/recordings` cannot read the
+recordings remotely, even from the Mac's browser using that LAN URL. After phone
+testing, stop the LAN server and run the ordinary `npm run dev` loopback server
+from the same checkout; open `http://127.0.0.1:3220/dev/recordings` to inspect the
+saved session. The files also remain available for authorized local inspection.
+No raw audio or hidden reasoning is captured, and speech before consent cannot
+be recovered.
 
 ## What the record means
 
@@ -88,9 +152,10 @@ event includes Node version and hashes of the relevant source files at that time
   is created with mode `0700` and files with mode `0600`.
 - Capture only attaches to explicit, same-origin requests from the local browser
   recording. One visitor's recording ID is not inherited by other server requests.
-- API reads and writes require development mode, a loopback URL and Host, an exact
+- The ordinary recording API's reads and writes require development mode, a loopback URL and Host, an exact
   matching Origin and a custom header. Production returns 404 before parsing the
-  body or accessing recording files. These controls are for a local development
+  body or accessing recording files. The separate paired-phone endpoint permits
+  only scoped writes, voice attachment and stopping as described above. These controls are for a local development
   tool; do not expose the development server through a public proxy.
 - Limits: 20 MB and one hour per recording; four active sessions; ten retained
   sessions. Starting or listing sessions removes inactive files older than seven
@@ -123,6 +188,8 @@ event includes Node version and hashes of the relevant source files at that time
 | `lib/visitor-test-events.ts` | Shared event shape, bounded redaction/copying, failure isolation and opt-in browser observer |
 | `lib/visitor-test-recording-store.ts` | Scoped server observers, loopback request gate, bounded JSONL persistence and rotation |
 | `app/api/dev/recordings/route.ts` | Local session start/append/stop/list/read/export/delete API |
+| `lib/visitor-phone-recording.ts`, `app/api/dev/recordings/phone/route.ts` | One-use phone invitations, expiring origin/publisher grants and write-only capture |
+| `scripts/pair-phone-recording.mjs` | Manual local creation of a private pairing card; does not start capture or voice |
 | `lib/visitor-test-recording-client.ts` | Browser buffers, request correlation headers, start/stop/problem marker and tab resume |
 | `lib/visitor-test-socket.ts` | Studio-only observation of the existing socket; shared `lib/gpt-live` stays unchanged |
 | `lib/visitor-task-runner.ts`, `lib/visitor-response-connection.ts` | Model/tool observations before and after actual calls; transport cache details |
@@ -137,7 +204,7 @@ Run with Node 24:
 ```sh
 npm run lint
 npm run typecheck
-node --conditions=react-server --import tsx --test tests/visitor-test-recording.test.ts
+node --conditions=react-server --import tsx --test tests/visitor-test-recording.test.ts tests/visitor-phone-recording.test.ts
 npm run test:recorder
 ```
 
@@ -155,6 +222,13 @@ coverage checks desktop/mobile recording, actual local navigation, markers,
 timeline search/export, voice transcript/display receipts, stopping without
 ending voice, and persistence failure without breaking the app. This does not
 establish live model comprehension or physical microphone/speaker behavior.
+
+Phone unit tests use only synthetic invitations/grants and mocked browser
+requests. They cover consent, fragment removal, passive voice attachment,
+publisher/origin/session isolation, history denial, one-use replay protection,
+expiry/revocation, scoped reload and navigation cleanup. They do not establish
+physical iPhone networking or microphone behavior. No real pairing credential
+was created during implementation verification.
 
 For the continuing QA loop, turn each reported incident into a small synthetic
 regression with the expected final browser state. Preserve request and

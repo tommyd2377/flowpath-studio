@@ -1,9 +1,83 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { compileQueryIndex, QueryIndexCache } from '../lib/catalog-query-index';
-import { evaluateQuery, projectField, QueryResultStore } from '../lib/catalog-query';
+import { evaluateQuery, projectField, QueryResultStore, resolveCollectionScope, describeScope } from '../lib/catalog-query';
 import { publisherVocabularies, taskFixture, fixtureQuery } from '../fixtures/visitor-tasks';
 import { patchQuery, type Expression } from '@thevoice/platform-ui/query';
+
+test('faceted text matches whole category words across domains while free text keeps substring search', () => {
+  for (const [category, included, excluded] of [['cakes', 'Retail / Cakes', 'Retail / Cupcakes'], ['art', 'Fine Art', 'Cart rentals'], ['café', 'Café / Atelier', 'Caféteria'], ['c++', 'C++ / Training', 'C++Plus']]) {
+    for (const facet of [true, false]) {
+      const space = taskFixture(undefined, 3);
+      space.fields.push({ id: 'category', label: 'Category', type: 'text', cardinality: 'one', aliases: [], recordTypes: ['article'], operations: ['eq', 'contains'], filter: true, sort: false, facet, coverage: { known: 2, total: 3 } });
+      for (const [i, value] of [included, excluded].entries()) space.records[i].assertions.push({ id: `category-${i}`, fieldId: 'category', value: { type: 'text', value }, polarity: 'affirmed', conditions: [], authority: 'publisher' });
+      const where: Expression = { kind: 'field', id: 'category-match', fieldId: 'category', op: 'contains', value: { type: 'text', value: category } };
+      const matched = evaluateQuery(compileQueryIndex(space), fixtureQuery(space, where)).ordered;
+      assert.deepEqual(matched, facet ? ['record-00000'] : ['record-00000', 'record-00001'], `${category}, facet ${facet}`);
+      const negative = evaluateQuery(compileQueryIndex(space), fixtureQuery(space, { kind: 'not', id: 'negative', child: where })).ordered;
+      assert.equal(negative.includes('record-00002'), false, 'absence of a category does not prove the opposite category');
+    }
+  }
+});
+
+test('nested scope identity resolves without guessed parents and preserves chosen multi-parent breadcrumbs', () => {
+  const space = taskFixture(), index = compileQueryIndex(space);
+  const scope = { collectionId: 'child', traversal: 'descendants' as const };
+  for (const path of [undefined, ['root', 'child']]) {
+    const resolved = resolveCollectionScope(index, { ...scope, path });
+    assert.deepEqual(resolved.path, ['root', 'topic', 'child']);
+    assert.deepEqual(evaluateQuery(index, { ...fixtureQuery(space), scope: resolved }).ordered, ['record-00001', 'record-00003', 'record-00005', 'record-00007']);
+  }
+  assert.throws(() => resolveCollectionScope(index, { ...scope, collectionId: 'unpublished' }), /Unknown collection/);
+  space.edges.push({ parentId: 'cross', childId: 'child' });
+  const shared = compileQueryIndex(space);
+  assert.throws(() => resolveCollectionScope(shared, scope), /unique breadcrumb/);
+  assert.throws(() => resolveCollectionScope(shared, { ...scope, path: ['root', 'child'] }), /unique breadcrumb/);
+  const chosen = { ...scope, path: ['root', 'cross', 'child'] };
+  assert.deepEqual(resolveCollectionScope(shared, chosen), chosen);
+  const described = describeScope(shared, { collectionId: 'cross', traversal: 'descendants', path: ['root', 'cross'] });
+  assert.deepEqual(described.childScopes, [chosen]);
+});
+
+test('atomic scope changes can clear criteria and add to the current root ID, with one undo step', () => {
+  const space = taskFixture(), index = compileQueryIndex(space);
+  const old: Expression = { kind: 'field', id: 'old-filter', fieldId: 'flag', op: 'eq', value: { type: 'boolean', value: true } };
+  const amount: Expression = { kind: 'field', id: 'minimum', fieldId: space.fields[0].id, op: 'gte', value: { type: 'number', value: 3, unit: 'units' } };
+  for (const kind of ['all', 'any'] as const) {
+    const query = fixtureQuery(space, { kind, id: 'current-root', children: [old] });
+    query.searchText = 'article 0';
+    query.preferences = [{ expression: old, weight: 2 }];
+    query.order = [{ fieldId: space.fields[0].id, direction: 'desc' }];
+    const original = structuredClone(query), history = { current: query, past: [] };
+    const scope = { collectionId: 'child', traversal: 'descendants', path: ['root', 'topic', 'child'] };
+    const updated = patchQuery(history, { queryId: query.queryId, baseRevision: 0, operations: [
+      { op: 'setScope', scope }, { op: 'setSearch', text: '' }, { op: 'clearScopeCriteria' },
+      { op: 'addConstraint', parentId: query.where.id, expression: amount },
+    ] });
+    assert.deepEqual(updated.current, { ...original, scope, searchText: '', where: { kind: 'all', id: query.where.id, children: [amount] }, revision: 1 });
+    assert.deepEqual(evaluateQuery(index, updated.current).ordered, ['record-00007', 'record-00005', 'record-00003']);
+    assert.deepEqual(updated.past, [original]);
+    assert.deepEqual(history, { current: original, past: [] });
+    const undone = patchQuery(updated, { queryId: query.queryId, baseRevision: 1, operations: [{ op: 'undo' }] });
+    assert.deepEqual(undone, { current: { ...original, revision: 2 }, past: [] });
+  }
+});
+
+test('clearing criteria resets to match-all without preserving removed child targets or bypassing validation', () => {
+  const space = taskFixture(), index = compileQueryIndex(space);
+  const old: Expression = { kind: 'field', id: 'old-filter', fieldId: 'flag', op: 'eq', value: { type: 'boolean', value: true } };
+  const query = fixtureQuery(space, { kind: 'any', id: 'current-root', children: [old] });
+  const history = { current: query, past: [] }, original = structuredClone(history);
+  const patch = { queryId: query.queryId, baseRevision: 0, operations: [{ op: 'clearScopeCriteria' }] };
+  const cleared = patchQuery(history, patch);
+  assert.deepEqual(cleared.current.where, { kind: 'all', id: query.where.id, children: [] });
+  assert.equal(evaluateQuery(index, cleared.current).ordered.length, space.records.length);
+  assert.throws(() => patchQuery(history, { ...patch, operations: [...patch.operations, { op: 'addConstraint', parentId: old.id, expression: { ...old, id: 'new-filter' } }] }), /Unknown constraint/);
+  assert.throws(() => patchQuery(history, { ...patch, baseRevision: 1 }), /Query changed/);
+  const invalid = patchQuery(history, { ...patch, operations: [...patch.operations, { op: 'addConstraint', parentId: query.where.id, expression: { ...old, id: 'new-filter', fieldId: 'unpublished-field' } }] });
+  assert.throws(() => evaluateQuery(index, invalid.current), /Unsupported filter field/);
+  assert.deepEqual(history, original);
+});
 
 for (const vocabulary of publisherVocabularies) test(`${vocabulary.name}: one engine scopes/deduplicates, patches and ranks hard matches`, () => {
   const space = taskFixture(vocabulary), index = compileQueryIndex(space);

@@ -1,0 +1,36 @@
+.settings { color: var(--ink); }
+.welcome { margin: 22px 0 24px; }
+.welcome :global(.field) { margin-bottom: 0; }
+.welcome textarea { min-height: 88px; resize: vertical; }
+.reset { min-height: 44px; margin-top: 2px; }
+.topicHeading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.topicHeading h4 { margin: 0; font-size: 14px; font-weight: 600; }
+.topicHeading > span, .topicControls { color: var(--muted); font-size: 12px; }
+.topics { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 10px; }
+.topic { position: relative; border: 1px solid var(--line); border-radius: 12px; padding: 4px 12px 12px; min-width: 0; background: color-mix(in srgb, var(--surface) 45%, transparent); }
+.topicControls { display: flex; align-items: center; justify-content: space-between; min-height: 44px; margin-bottom: 4px; gap: 8px; }
+.topicControls > span { font-weight: 500; }
+.topicControls > div { display: flex; }
+.topicControls button { width: 44px; height: 44px; display: grid; place-items: center; border: 0; background: transparent; color: inherit; border-radius: 8px; }
+.topicControls button:hover:enabled { background: color-mix(in srgb, currentColor 8%, transparent); }
+.topicControls button:disabled { opacity: .3; }
+.topic select { min-height: 44px; }
+.topic :global(.field) { margin-bottom: 0; }
+.topic :global(.field) + :global(.field) { margin-top: 10px; }
+.topicPreview { font-size: 13px; line-height: 1.65; color: var(--muted); margin: 12px 0 0; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-line; }
+.add { display: inline-flex; align-items: center; gap: 6px; margin: 8px 0; min-height: 44px; }
+.loadError { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; margin: 10px 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.loadError button { min-height: 44px; }
+.preview { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 4px; }
+.preview summary { font-size: 13px; cursor: pointer; min-height: 44px; padding: 12px 0; }
+.preview p { font-size: 13px; line-height: 1.7; white-space: pre-line; overflow-wrap: anywhere; }
+.preview :global(.field-help) { display: block; margin-bottom: 14px; }
+.preview button { min-height: 44px; }
+.sequence { margin: 8px 0 18px; padding: 0; list-style: none; }
+.sequence li { margin-left: 4px; padding: 0 0 18px 16px; border-left: 1px solid var(--line); }
+.sequence li:last-child { padding-bottom: 0; }
+.sequence span { position: relative; display: block; font-size: 11px; font-weight: 600; color: var(--muted); }
+.sequence span::before { content: ''; position: absolute; width: 5px; height: 5px; border-radius: 50%; background: var(--muted); left: -19px; top: 5px; }
+.sequence p { margin: 5px 0 0; }
+.settings button:focus-visible, .settings summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.srOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

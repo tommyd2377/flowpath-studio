@@ -144,9 +144,25 @@ for (const channel of ['voice', 'chat'] as const) test(`${channel}: recorder on/
   const baseline = await scenario(), events: TestObservation[] = [];
   const recorded = await scenario(event => events.push(event));
   assert.deepEqual(recorded, baseline); assert.deepEqual(await scenario(() => { throw new Error('Disk failed'); }), baseline);
-  assert.deepEqual(events.map(event => event.type), ['model.request', 'model.response', 'tool.request', 'tool.result', 'model.request', 'model.response']);
+  assert.deepEqual(events.filter(event => event.type !== 'model.transport').map(event => event.type), ['model.preparation', 'model.payload', 'model.request', 'model.response', 'tool.request', 'tool.result', 'model.preparation', 'model.payload', 'model.request', 'model.response']);
+  assert.deepEqual(events.filter(event => event.type === 'model.transport').map(event => {
+    const data = event.data as { round: number; phase: string; transport: string; channel: string };
+    assert.equal(data.transport, 'http'); assert.equal(data.channel, channel);
+    return [data.round, data.phase];
+  }), [[0, 'started'], [0, 'headers'], [0, 'completed'], [1, 'started'], [1, 'headers'], [1, 'completed']]);
+  for (const event of events.filter(event => event.type === 'model.preparation')) {
+    const timing = event.data as Record<string, unknown>;
+    assert.equal(timing.channel, channel);
+    for (const key of ['reservationMs', 'contextMs', 'imageMs', 'durationMs']) assert.ok(typeof timing[key] === 'number' && Number.isFinite(timing[key]) && timing[key] >= 0);
+  }
+  const payload = events.find(event => event.type === 'model.payload')!.data as Record<string, number>;
+  const body = baseline.bodies[0] as { instructions: string; input: unknown[]; tools: unknown[] };
+  assert.equal(payload.requestBytes, Buffer.byteLength(JSON.stringify(body)) - Buffer.byteLength(',"stream":true'));
+  assert.equal(payload.instructionBytes, Buffer.byteLength(body.instructions));
+  assert.equal(payload.inputBytes, Buffer.byteLength(JSON.stringify(body.input)));
+  assert.equal(payload.toolBytes, Buffer.byteLength(JSON.stringify(body.tools)));
   assert.doesNotMatch(JSON.stringify(events), /opaque-model-state|synthetic-key/);
-  const first = events[0].data as { body: { input: unknown[] } }; assert.equal(first.body.input.length, 1, 'Later tool rounds cannot mutate a recorded input');
+  const first = events.find(event => event.type === 'model.request')!.data as { body: { input: unknown[] } }; assert.equal(first.body.input.length, 1, 'Later tool rounds cannot mutate a recorded input');
 });
 
 test('failed validation and cancellation are recorded without retries or successful tool results', async () => {

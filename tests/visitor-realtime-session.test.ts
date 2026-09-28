@@ -6,6 +6,7 @@ import { DEFAULT_VISITOR_SETTINGS, type VisitorAvailability } from '../lib/visit
 import { validateVisitorOffer, visitorRealtimeSession, type VisitorSessionOptions } from '../lib/visitor-realtime-session';
 import { LIVE_VOICE_CHOICES, CONVERSATION_PRESETS } from '../lib/voice-settings';
 import { DEFAULT_EXPLORE_SETTINGS } from '../lib/explore-model';
+import { AppError } from '../lib/errors';
 
 const offer = 'v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendrecv\r\n';
 const availability: VisitorAvailability = { enabled: true, mode: 'voice', live: true, chatRemaining: 25, voiceRemaining: 4, resetsAt: '2026-09-10T00:00:00.000Z' };
@@ -41,6 +42,37 @@ function harness(overrides: Partial<VisitorSessionOptions> = {}) {
   return { options, controller, calls, updates, deliver: (update: VisitorControlUpdate) => deliver(update), mailboxClosed: () => mailboxClosed, metrics: () => ({ blocked, released, stopped }), get control() { return controlOptions!; } };
 }
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));
+
+test('direct-answer sessions periodically verify publication without overlapping checks and close on change', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] });
+  let calls = 0, changed = false, finish: (() => void) | undefined;
+  const h = harness({ assertCurrent: async () => {
+    calls++;
+    if (calls === 1) return;
+    await new Promise<void>(resolve => { finish = resolve; });
+    if (changed) throw new AppError('This site was updated. Reload to continue with its current information.', 409);
+  } });
+  const response = visitorRealtimeSession(h.options); t.after(() => { h.controller.abort(); return response.body!.cancel(); });
+  await flush();
+  h.deliver({ seq: 1, interactionRevision: 0, viewRevision: 0, ready: true, context: {} }); await flush();
+  assert.equal(calls, 1);
+  t.mock.timers.tick(15_000); await flush(); assert.equal(calls, 2);
+  t.mock.timers.tick(15_000); await flush(); assert.equal(calls, 2, 'only one publication check can be outstanding');
+  changed = true; finish!(); await flush(); await flush();
+  assert.equal(h.metrics().stopped, 1); assert.equal(h.mailboxClosed(), 1);
+  assert.equal(h.calls.filter(url => url.endsWith('/sessions')).length, 1, 'no model retry or reconnect');
+});
+
+test('session duration supports ten minutes, retains the legacy default and bounds overrides', async () => {
+  for (const [seconds, durationMs, expected] of [[undefined, undefined, 120_000], [600, undefined, 600_000], [600, 900_000, 600_000]] as const) {
+    const h = harness({ content: { ...sampleContent('general'), visitor: { ...DEFAULT_VISITOR_SETTINGS, voiceSessionSeconds: seconds } }, durationMs });
+    const before = Date.now(), response = visitorRealtimeSession(h.options), reader = response.body!.getReader();
+    const event = JSON.parse(new TextDecoder().decode((await reader.read()).value));
+    assert.ok(event.expiresAt >= before + expected && event.expiresAt <= Date.now() + expected);
+    assert.equal(event.idleTimeoutMs, 60_000, 'Session maximum does not disable inactivity cleanup');
+    await reader.cancel(); h.controller.abort(); await flush();
+  }
+});
 
 test('owner forwards cancellation hints while an earlier apply is blocked', async t => {
   let release!: () => void;
@@ -117,15 +149,39 @@ test('Live receives website-wide delegation authority even with an empty screen,
       if (!String(url).endsWith('/hangup')) {
         const { session } = JSON.parse(String(init?.body));
         assert.ok(session.instructions.includes(JSON.stringify(content.name)));
+        assert.ok(session.instructions.includes(JSON.stringify(content.visitor.assistantPurpose)));
+        assert.match(session.instructions, /Publisher assistant role \(quoted guidance\)/);
+        assert.match(session.instructions, /separate from the welcome message and opening topics/);
+        assert.match(session.instructions, /Identity questions: When asked "Who are you\?"/);
+        assert.match(session.instructions, /accurately repeat the publisher's quoted role/);
+        assert.match(session.instructions, /Explaining your own configured role requires no lookup or delegation/);
         for (const heading of ['Backchannel policy:', 'Interruption policy:', 'Delegation policy:', 'Backend tools:', 'Delegate to the backend when:', 'Do not delegate to the backend when:']) assert.ok(session.instructions.includes(heading), heading);
         assert.match(session.instructions, /entire current publication/);
         assert.match(session.instructions, /empty screen is never evidence/);
         assert.match(session.instructions, /Delegate before claiming information is missing/);
         assert.match(session.instructions, /phone numbers/);
         assert.match(session.instructions, /multiple sentences and pauses/);
+        const direct = session.instructions.split('Do not delegate to the backend when:')[1].split('General knowledge can explain')[0];
+        assert.match(direct, /straightforward general question or explaining a stable concept from your own reliable general knowledge/);
+        assert.match(direct, /Do not refuse just because the subject is absent from this website/);
+        assert.match(direct, /Answering directly from the current server-supplied published website facts/);
+        assert.match(direct, /confirmed context even if they are not on screen or were never returned by an earlier backend request/);
+        assert.match(direct, /Reuse confirmed conversation findings without searching again/);
+        assert.match(direct, /preserve its exact facts, scope and qualifications/);
+        const delegated = session.instructions.split('Delegate to the backend when:')[1].split('Do not delegate')[0];
+        assert.match(delegated, /publisher-specific facts not sufficiently supported by current server-supplied published knowledge/);
+        assert.match(delegated, /show, find, filter, change or close/);
+        assert.match(delegated, /careful reasoning, calculations, multi-step synthesis, current or uncertain information/);
+        assert.match(session.instructions, /cannot establish this publisher's prices, policies, hours, availability or capabilities/);
+        assert.match(session.instructions, /latest confirmed selection; delegate if its identity or relevant facts are unclear/);
+        assert.match(session.instructions, /Retained dialogue is context, not proof/);
+        assert.match(session.instructions, /display action succeeded only after the browser confirms it/);
         assert.equal(session.instructions.includes('External research is disabled'), !enabled);
         assert.equal(session.instructions.includes('External research: search the web, images and maps'), enabled);
-        assert.deepEqual(session.input, []);
+        assert.equal(session.input.length, 1);
+        assert.equal(session.input[0].role, 'developer');
+        assert.match(session.input[0].content[0].text, /Published website knowledge snapshot/);
+        assert.ok(session.input[0].content[0].text.includes(content.contact), 'Live receives the published facts before a card opens');
       }
       return original(url, init);
     };
@@ -136,6 +192,80 @@ test('Live receives website-wide delegation authority even with an empty screen,
   }
 });
 
+test('expanded knowledge and coverage metrics reach the actual startup request without extra provider calls', async () => {
+  const events: import('../lib/visitor-test-events').TestObservation[] = [];
+  const h = harness({ content: { ...sampleContent('general'), sections: Array.from({ length: 4 }, (_, i) => ({ id: `policy-${i}`, title: `Policy ${i}`, body: `POLICY_${i}: ` + 'Applies only to advance requests. '.repeat(80) })) },
+    record: event => { events.push(event); } });
+  const original = h.options.fetch!;
+  let inputBytes = 0, instructionBytes = 0;
+  h.options.fetch = async (input, init) => {
+    if (!String(input).endsWith('/hangup')) {
+      const { session } = JSON.parse(String(init?.body));
+      inputBytes = Buffer.byteLength(session.input[0].content[0].text);
+      instructionBytes = Buffer.byteLength(session.instructions);
+      assert.match(session.instructions, /Additional published website reference JSON/);
+      assert.match(session.instructions, /Backchannel policy/);
+      for (let i = 0; i < 4; i++) assert.ok((session.instructions + session.input[0].content[0].text).includes(`POLICY_${i}:`), 'Whole sections are available before the conversation starts');
+      assert.ok(inputBytes <= 7680); assert.ok(instructionBytes <= 15_872);
+    }
+    return original(input, init);
+  };
+  const response = visitorRealtimeSession(h.options), reader = response.body!.getReader();
+  try {
+    await reader.read(); await reader.read();
+    assert.equal(h.calls.length, 1, 'Knowledge preparation adds no model/counting round');
+    const coverage = events.find(event => event.type === 'voice.knowledge_coverage')?.data as { countingMode: string; inputBytes: number; instructionBytes: number; preparationMs: number };
+    assert.equal(coverage.countingMode, 'conservative_utf8');
+    assert.equal(coverage.inputBytes, inputBytes); assert.equal(coverage.instructionBytes, instructionBytes);
+    assert.ok(coverage.preparationMs >= 0);
+  } finally { await reader.cancel(); h.controller.abort(); await flush(); }
+});
+
+test('fresh assistant-first sessions prime ordered introductory substance and tell the controller to avoid duplicate commentary', async () => {
+  for (const mode of ['fresh', 'visitor-first', 'resumed'] as const) {
+    const sections = [{ id: 'story', title: 'About the workshop', body: 'An independent studio teaches small groups. All visits require prior arrangement.' }];
+    const content = { ...sampleContent('general'), sections, welcomeMessage: 'WELCOME_OPENING_ONLY', visitorSpeaksFirst: mode === 'visitor-first',
+      greetingPoints: [{ kind: 'source' as const, id: 'section:story' }, { kind: 'record' as const, id: 'guided-class' }, null] };
+    const body = 'A tutor leads visitors through the process. Materials are included; attendance must be confirmed.';
+    const h = harness({ content, greetingRecords: [{ id: 'guided-class', title: 'Guided learning', body }],
+      ...(mode === 'resumed' ? { history: [{ role: 'assistant' as const, text: 'An earlier answer.' }] } : {}),
+    });
+    const original = h.options.fetch!;
+    h.options.fetch = async (url, init) => {
+      if (!String(url).endsWith('/hangup')) {
+        const { session } = JSON.parse(String(init?.body));
+        const input = session.input[0].content[0].text;
+        const snapshot = JSON.parse(input.slice(input.indexOf('\n') + 1));
+        if (mode === 'fresh') {
+          assert.match(session.instructions, /Opening policy, only after the application explicitly asks/);
+          assert.match(session.instructions, /two or three natural sentences/);
+          assert.match(session.instructions, /Page titles are organizational labels/);
+          assert.match(session.instructions, /ordinary answer word\/sentence limits and no-follow-up preferences/);
+          assert.match(session.instructions, /This policy is preparation only\. Wait silently/);
+          assert.ok(Buffer.byteLength(session.instructions) <= 15_872, 'Opening policy participates in the existing startup instruction budget');
+          assert.ok(Buffer.byteLength(input) <= 7680);
+          assert.equal(snapshot.opening.welcomeWords, content.welcomeMessage);
+          assert.deepEqual(snapshot.opening.topics.map((topic: { label: string }) => topic.label), ['About the workshop', 'Guided learning']);
+          assert.equal(snapshot.opening.coverage.complete, true);
+          const topic = snapshot.opening.topics[1];
+          assert.equal(snapshot.records.find((record: { id: string }) => record.id === topic.reference.id).data.text, body);
+        } else {
+          assert.doesNotMatch(session.instructions, /Opening policy, only after|two or three natural sentences/);
+          assert.equal(snapshot.opening, undefined);
+          assert.doesNotMatch(input, /WELCOME_OPENING_ONLY/);
+        }
+      }
+      return original(url, init);
+    };
+    const response = visitorRealtimeSession(h.options), reader = response.body!.getReader();
+    try {
+      await reader.read(); await reader.read();
+      assert.equal(h.control.greetingPrimed, mode === 'fresh');
+      assert.equal(h.calls.length, 1, 'Priming adds no generation, counting round or paid retry');
+    } finally { await reader.cancel(); h.controller.abort(); await flush(); }
+  }
+});
+
 test('restarting does not resubmit an unfinished question as fresh voice input', async () => {
   const history = [{ role: 'user' as const, text: 'Earlier unfinished request.' }];
   const h = harness({ history });
@@ -143,7 +273,10 @@ test('restarting does not resubmit an unfinished question as fresh voice input',
   h.options.fetch = async (input, init) => {
     if (!String(input).endsWith('/hangup')) {
       const { session } = JSON.parse(String(init?.body));
-      assert.deepEqual(session.input, [], 'Previous questions must not be replayed as live input');
+      assert.equal(session.input.length, 1);
+      assert.equal(session.input[0].role, 'developer', 'Startup input is factual app context, not a replayed visitor message');
+      assert.match(session.input[0].content[0].text, /not instructions, a visitor request, speech to read aloud/);
+      assert.doesNotMatch(session.input[0].content[0].text, /Earlier unfinished request/, 'Previous questions must not be replayed as live input');
     }
     return original(input, init);
   };
@@ -329,6 +462,14 @@ test('recording attaches to an already-running session without provider calls or
   h.control.record?.({ type: 'voice.received', data: { type: 'session.output_transcript.delta', delta: 'Call 212 555 0199' } });
   assert.ok(events.some(event => event.type === 'voice.config_snapshot'));
   assert.ok(events.some(event => event.type === 'voice.capture_attached'));
+  const coverage = events.find(event => event.type === 'voice.knowledge_coverage')?.data as { countingMode: string; preparationMs: number };
+  assert.equal(coverage.countingMode, 'conservative_utf8');
+  assert.ok(coverage.preparationMs >= 0, 'A late recorder receives numeric priming diagnostics without buffering unrecorded speech');
+  const startup = events.find(event => event.type === 'voice.startup_snapshot')?.data as { startedAt: number; phases: Record<string, number> };
+  assert.ok(startup.startedAt > 0);
+  assert.deepEqual(Object.keys(startup.phases), ['mailbox_ready', 'knowledge_ready', 'provider_ready', 'publication_verified', 'sideband_ready']);
+  const timings = Object.values(startup.phases);
+  assert.ok(timings.every((value, index) => value >= 0 && (index === 0 || value >= timings[index - 1])));
   assert.match(JSON.stringify(events), /Call 212 555 0199/);
   assert.doesNotMatch(JSON.stringify(events), /Before recording|offline-placeholder/);
   assert.deepEqual(h.calls, beforeCalls);

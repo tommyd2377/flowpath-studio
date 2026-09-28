@@ -12,6 +12,7 @@ import { readMediaLibrary, reconcileSectionAssociations, stagePublicMedia } from
 import { validateMediaLibrary } from '@thevoice/platform-ui/media';
 import { CatalogRepository } from '@/lib/catalog-repository';
 import { assertLaunchPublication } from '@/lib/launch-billing';
+import { loadGreetingRecords } from '@/lib/greeting-record-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -32,7 +33,8 @@ export async function POST(request: Request, { params }: Context) {
     if (command.action === 'save' && command.content.greetingPoints) {
       const current = await getSite(user, siteId);
       const catalog = current.draft.knowledgeRevisionId ? (await readKnowledgeArtifact(user, siteId, current.draft.knowledgeRevisionId)).catalog : null;
-      validateGreeting(pruneGreetingSources(command.content), catalog);
+      const greetingRecords = await loadGreetingRecords(siteId, { ...current.draft, greetingPoints: command.content.greetingPoints });
+      validateGreeting(pruneGreetingSources(command.content), catalog, greetingRecords);
     }
     if (command.action === 'publish') {
       let current = await getSite(user, siteId);
@@ -43,7 +45,7 @@ export async function POST(request: Request, { params }: Context) {
       const catalog = current.draft.knowledgeRevisionId ? (await readKnowledgeArtifact(user, siteId, current.draft.knowledgeRevisionId)).catalog : null;
       const media = current.draft.mediaRevisionId ? await readMediaLibrary(user, siteId, current.draft.mediaRevisionId) : null;
       validateOpeningWithMedia(current.draft, catalog, media);
-      validateGreeting(current.draft, catalog);
+      validateGreeting(current.draft, catalog, await loadGreetingRecords(siteId, current.draft));
       if (current.draft.catalogPublicationId) await new CatalogRepository().verify(siteId, current.draft.catalogPublicationId);
       if (current.draft.knowledgeRevisionId) await stagePublicKnowledge(user, siteId, current.draft.knowledgeRevisionId);
       if (media) {

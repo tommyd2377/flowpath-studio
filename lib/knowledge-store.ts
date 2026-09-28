@@ -9,7 +9,7 @@ import { projectKnowledgeCatalog } from '@thevoice/platform-ui/knowledge';
 import { getFirebaseAdminApp } from './firebase/admin';
 import { getBackendMode } from './firebase/config';
 import type { WorkspaceUser } from './firebase/types';
-import { withDatabase } from './local-store';
+import { readDatabaseSnapshot } from './local-store';
 import { AppError } from './errors';
 import { hashValue, sourceFileReportSchema, validateGraphCorrections, validateGraphUpdates, validateKnowledgeUpdates, validateKnowledgeUpdateContext, updateAnchorsSchema, sourceIdentityMatchSchema, type KnowledgeArtifact, type KnowledgeLedger } from './knowledge-model';
 import { validateCatalog, type KnowledgeCatalog } from '@thevoice/platform-ui/contracts';
@@ -204,7 +204,7 @@ export async function getPublishedKnowledgeSnapshot(siteId: string, revisionId?:
     if (data?.siteId !== siteId || data?.revisionId !== revisionId) throw new AppError('Published knowledge is unavailable.', 503);
     return validateCatalog(data.catalog);
   }
-  const permitted = await withDatabase(db => db.sites.some(site => site.id === siteId && site.published?.knowledgeRevisionId === revisionId));
+  const permitted = await readDatabaseSnapshot(db => db.sites.some(site => site.id === siteId && site.published?.knowledgeRevisionId === revisionId));
   if (!permitted) throw new AppError('The published knowledge revision has changed. Reload this site.', 409);
   const catalog = await readOptional(join(root(), 'knowledge-public', `${key}.json`));
   if (!catalog) throw new AppError('Published knowledge is unavailable.', 503);

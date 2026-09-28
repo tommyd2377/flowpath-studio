@@ -2,7 +2,8 @@ import { htmlDocument, textBlocks, parseHtml } from './html-document';
 import 'server-only';
 import { createHash, randomUUID } from 'node:crypto';
 import { validateCatalog, type KnowledgeCatalog } from '@thevoice/platform-ui/contracts';
-import { effectiveWebsiteTemplate } from '@thevoice/platform-ui/site-design';
+import { WEBSITE_TEMPLATES } from '@thevoice/platform-ui/site-design';
+import { recommendWebsiteDesign } from './website-design-recommendation';
 import { extractWebsiteImages } from './website-image-discovery';
 import { AppError } from './errors';
 import { assertPublicWebsiteUrl, fetchWebsiteResource, type WebsiteTransport } from './website-fetch';
@@ -11,7 +12,7 @@ import { WEBSITE_LIMITS, websiteDesignSchema, type WebsiteDesign, type WebsiteDi
 
 const digest = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 24);
 const siteHost = (url: URL) => url.hostname.replace(/^www\./, '');
-const blockedPath = /(?:^|\/)(?:account|accounts|login|signin|sign-in|logout|admin|wp-admin|checkout|cart|payment|payments|billing|subscribe)(?:\/|$)/i;
+const blockedPath = /(?:^|\/)(?:(?:my[-_]?)?accounts?|log[-_]?in|sign[-_]?in|log[-_]?out|admin|wp-admin|wp-login\.php|check[-_]?out|cart|basket|shopping[-_](?:cart|basket)|payments?|billing|subscribe|orders?|ordering|order[-_](?:now|online)|online[-_]order(?:ing)?|place[-_]order)(?:[-_]\d+)?(?:\/|$)/i;
 const excludedFile = /\.(?:pdf|zip|jpe?g|png|webp|gif|svg|mp[34]|css|js|json|xml|txt|woff2?)$/i;
 // Optional labels/metadata can be empty (for example an image-only home link).
 // Only the complete page must contain readable text.
@@ -52,7 +53,9 @@ export function extractWebsitePage(html: string, url: string): ExtractedWebsiteP
   const text = document.text;
   if (!text) throw new AppError('This webpage did not contain readable text.');
   const accent = meta.get('theme-color');
-  const links = root.querySelectorAll('a[href]').slice(0,2000).flatMap(node => {
+  // Read primary navigation before product carousels, archives and footer links.
+  const navigation = root.querySelectorAll('nav a[href],header a[href],[role="navigation"] a[href],[role="banner"] a[href],[data-elementor-type="header"] a[href]');
+  const links = [...new Set([...navigation, ...root.querySelectorAll('a[href]')])].slice(0,2000).flatMap(node => {
     const a=node.attributes, target=pageUrl(a.href,url,url);
     return target ? [{url:target,title:(node.text.trim() || a['aria-label'] || a.title || target).slice(0,160)}] : [];
   });
@@ -60,10 +63,10 @@ export function extractWebsitePage(html: string, url: string): ExtractedWebsiteP
     headline: headline || new URL(url).hostname, description: (meta.get('description') || meta.get('og:description') || text.replace(/^Title:[^\n]*\n?/, '').trim()).slice(0, 1500),
     ...(/^#[\da-f]{6}$/i.test(accent ?? '') ? { accent } : {}), links, images: extractWebsiteImages(html, url) };
 }
-export function designWebsite(page: ExtractedWebsitePage, pages: number): WebsiteDesign {
-  const layout = pages > 8 ? 'compact' : 'editorial';
+export function designWebsite(page: ExtractedWebsitePage, pages: number, catalog?: KnowledgeCatalog, discoveredImageCount = page.images.length): WebsiteDesign {
+  const { template } = recommendWebsiteDesign({ catalog, pageCount: pages, discoveredImageCount });
   return websiteDesignSchema.parse({ name: page.name, headline: page.headline, description: page.description,
-    accent: page.accent ?? '#72542e', contact: page.contact ?? '', hours: page.hours ?? '', style: { palette: 'parchment', layout, template: effectiveWebsiteTemplate({ layout }), entry: 'website', customAccent: true } });
+    accent: page.accent ?? '#72542e', contact: page.contact ?? '', hours: page.hours ?? '', style: { ...WEBSITE_TEMPLATES[template].defaults, palette: 'parchment', entry: 'website', customAccent: true } });
 }
 
 /** Pinned DNS and TLS validation on every hop; no cookies, scripts, forms or external hosts. */
@@ -124,6 +127,19 @@ export async function discoverWebsite(value: string, io?: WebsiteTransport): Pro
   const pages = new Map<string, WebsitePageReport>(); const notes: string[] = [];
   const add = (url: string, title = url) => { if (!pages.has(url) && pages.size < WEBSITE_LIMITS.discovered) pages.set(url, { url, title, status: 'ready', message: 'Discovered; content will be read when selected.', characters: 0 }); };
   add(root);
+  const visited = new Set<string>();
+  const visit = async (next: WebsitePageReport) => {
+    visited.add(next.url);
+    try {
+      const page = await readPage(next.url, root, rules, io, signal);
+      Object.assign(next, { title: page.title, message: 'HTML available.', characters: page.text.length });
+      for (const image of page.images) if (images.size < WEBSITE_LIMITS.images && !images.has(image.url)) images.set(image.url, image);
+      for (const link of page.links) add(link.url, link.title);
+    } catch (error) { Object.assign(next, { status: 'failed', message: message(error) }); }
+  };
+  // Navigation leads both the bounded crawl and the default page selection.
+  // Reading it first also prevents a large sitemap from filling the discovery cap.
+  await visit(pages.get(root)!);
   const maps = [...new Set([new URL('/sitemap.xml', root).toString(), ...[...rules.matchAll(/^sitemap:\s*(\S+)/gim)].map(match => match[1])])];
   const seenMaps = new Set<string>();
   for (let i = 0; i < maps.length && seenMaps.size < WEBSITE_LIMITS.sitemaps && !signal.aborted; i++) {
@@ -138,16 +154,9 @@ export async function discoverWebsite(value: string, io?: WebsiteTransport): Pro
       else for (const location of locations) { const url = pageUrl(location, response.url, root); if (url) add(url); }
     } catch { notes.push('A sitemap could not be read; discovery continued through navigation links.'); }
   }
-  const visited = new Set<string>();
   while (visited.size < WEBSITE_LIMITS.discoveryFetches && !signal.aborted) {
     const next = [...pages.values()].find(page => !visited.has(page.url)); if (!next) break;
-    visited.add(next.url);
-    try {
-      const page = await readPage(next.url, root, rules, io, signal);
-      Object.assign(next, { title: page.title, message: 'HTML available.', characters: page.text.length });
-      for (const image of page.images) if (images.size < WEBSITE_LIMITS.images && !images.has(image.url)) images.set(image.url, image);
-      for (const link of page.links) add(link.url, link.title);
-    } catch (error) { Object.assign(next, { status: 'failed', message: message(error) }); }
+    await visit(next);
   }
   if (pages.size >= WEBSITE_LIMITS.discovered || [...pages.keys()].some(url => !visited.has(url)) || maps.length > seenMaps.size) notes.push('Discovery reached a bound. This is a partial map, not a guarantee that every page was found. You can import another section separately.');
   notes.push('Public HTML only. Discover images to import supported photos. Script-only content, downloads, working forms and account pages are not imported.');

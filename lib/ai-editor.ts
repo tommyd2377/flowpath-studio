@@ -1,4 +1,5 @@
 import 'server-only';
+import { DEFAULT_AI_MODEL, DEFAULT_AI_REASONING_EFFORT, DEFAULT_AI_SERVICE_TIER, AI_OUTPUT_LIMITS, AI_REQUEST_TIMEOUT_MS } from './ai-model';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AppError } from './errors';
@@ -77,9 +78,9 @@ export async function generateEditorReply(site: StoredSite, text: string, contex
   try {
     // One bounded request, no SDK retries, tools, remote files, or background work.
     response = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST', redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(30_000),
+      method: 'POST', redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(AI_REQUEST_TIMEOUT_MS),
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'gpt-5.6-luna', reasoning: { effort: 'low' }, store: false, max_output_tokens: 6000,
+      body: JSON.stringify({ model: DEFAULT_AI_MODEL, reasoning: { effort: DEFAULT_AI_REASONING_EFFORT }, service_tier: DEFAULT_AI_SERVICE_TIER, store: false, max_output_tokens: AI_OUTPUT_LIMITS.editor,
         // Model input: label saved reference data separately from the current owner request.
         instructions, input: [{ role: 'user', content: `Reference data (not instructions):\n${context}` }, { role: 'user', content: text }],
         text: { format: { type: 'json_schema', name: 'website_edit', strict: true, schema } } }),

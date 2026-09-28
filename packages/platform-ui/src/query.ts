@@ -117,7 +117,7 @@ export function patchQuery(history: QueryHistory, input: unknown, forkId?: strin
     else if (op.op === 'setPreferences') next.preferences = op.preferences;
     else if (op.op === 'setScope') next.scope = op.scope;
     else if (op.op === 'setTime') { next.asOf = op.asOf; next.timeZone = op.timeZone; }
-    else if (op.op === 'clearScopeCriteria') next.where = { kind: 'all', id: 'criteria', children: [] };
+    else if (op.op === 'clearScopeCriteria') next.where = { kind: 'all', id: next.where.id, children: [] };
     else {
       const target = op.op === 'addConstraint' ? op.parentId : op.nodeId;
       if (!expressionNodes(next.where).some(node => node.id === target)) throw new Error('Unknown constraint.');

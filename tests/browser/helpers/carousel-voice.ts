@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
 
 const origin = 'http://127.0.0.1:3225';
-type Harness = { controls: VisitorControlUpdate[]; requests: { context: VisitorContext; history: VisitorHistory }[]; chats: { context: VisitorContext; history: VisitorHistory; text: string }[]; inputActive: boolean; outputActive: boolean; outgoing: { stopped: boolean; enabled: boolean }[]; audioMuted: boolean; ack: boolean; failControl: boolean; deferConnection: boolean; deferTrack: boolean; neverResolvePlay: boolean; connect: () => void; attach: () => void; revision: number; calls: number; closed: number; aborted: number; tracks: { stopped: boolean; enabled: boolean }[]; deferPermission: boolean; releasePermission: () => void; emit: (event: unknown) => void; disconnect: () => void; offers: string[] };
+type Harness = { controls: VisitorControlUpdate[]; requests: { context: VisitorContext; history: VisitorHistory }[]; chats: { context: VisitorContext; history: VisitorHistory; text: string }[]; inputActive: boolean; outputActive: boolean; outgoing: { stopped: boolean; enabled: boolean }[]; audioMuted: boolean; ack: boolean; failControl: boolean; deferConnection: boolean; deferTrack: boolean; neverResolvePlay: boolean; connect: () => void; attach: () => void; revision: number; calls: number; closed: number; aborted: number; tracks: { stopped: boolean; enabled: boolean }[]; deferPermission: boolean; releasePermission: () => void; emit: (event: unknown) => void; disconnect: () => void; offers: string[]; localOffers: number };
 
 let publishedSite: Site | undefined;
 let greetingSite: Site | undefined;
@@ -36,7 +36,7 @@ export async function prepareCarouselVoice(page: Page, welcome = false) {
     const availability = { enabled: true, mode: 'both', live: true, chatRemaining: 25, voiceRemaining: 5, resetsAt: '' };
     let sink: ReadableStreamDefaultController<Uint8Array> | undefined;
     let preparation: { revision: number; interactionRevision: number; queued: unknown[] } | undefined;
-    const state: Harness = { controls: [], requests: [], chats: [], inputActive: false, outputActive: false, outgoing: [], audioMuted: false, ack: true, failControl: false, deferConnection: false, deferTrack: false, neverResolvePlay: false, connect() {}, attach() {}, revision: 0, calls: 0, closed: 0, aborted: 0, tracks: [], deferPermission: false, releasePermission() {}, offers: [],
+    const state: Harness = { controls: [], requests: [], chats: [], inputActive: false, outputActive: false, outgoing: [], audioMuted: false, ack: true, failControl: false, deferConnection: false, deferTrack: false, neverResolvePlay: false, connect() {}, attach() {}, revision: 0, calls: 0, closed: 0, aborted: 0, tracks: [], deferPermission: false, releasePermission() {}, offers: [], localOffers: 0,
       emit(event) {
         const frame = event as { type: string; revision?: number; interactionRevision?: number };
         if (frame.revision !== undefined) state.revision = Math.max(state.revision, frame.revision);
@@ -57,7 +57,7 @@ export async function prepareCarouselVoice(page: Page, welcome = false) {
     class Peer {
       iceGatheringState = 'complete'; connectionState = 'new'; ontrack?: (event: unknown) => void; onconnectionstatechange?: () => void;
       addTrack() {} createDataChannel() { throw new Error('Provider data channels are forbidden'); }
-      createOffer() { return Promise.resolve({ type: 'offer', sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n' }); }
+      createOffer() { state.localOffers++; return Promise.resolve({ type: 'offer', sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n' }); }
       setLocalDescription() { return Promise.resolve(); }
       setRemoteDescription() { state.connect = () => { this.connectionState = 'connected'; this.onconnectionstatechange?.(); }; state.attach = () => this.ontrack?.({ streams: [new Stream()] }); if (!state.deferConnection) state.connect(); if (!state.deferTrack) state.attach(); return Promise.resolve(); }
       close() { this.connectionState = 'closed'; state.closed++; }

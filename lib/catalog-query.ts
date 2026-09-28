@@ -60,14 +60,79 @@ export function evaluateExpression(index: CompiledQueryIndex, recordId: string, 
     return expression.op === 'any' ? expected.some(value => actual.some(item => equal(item, value))) : expected.every(value => actual.some(item => equal(item, value)));
   }
   if (expression.op === 'eq') return Array.isArray(actual) ? actual.some(value => equal(value, expected)) : equal(actual, expected);
-  if (expression.op === 'contains') return typeof actual === 'string' && typeof expected === 'string' && canonicalValue(actual).includes(canonicalValue(expected));
+  if (expression.op === 'contains') {
+    if (typeof actual !== 'string' || typeof expected !== 'string') return false;
+    const value = canonicalValue(actual), term = canonicalValue(expected);
+    // Facets are labels/categories, not arbitrary prose substrings. A label
+    // such as "Cupcakes" must not satisfy a category request for "Cakes".
+    if (index.space.fields.find(field => field.id === expression.fieldId)?.facet) {
+      const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'u').test(value);
+    }
+    return value.includes(term);
+  }
   const a = field.value.type === 'date' ? Date.parse(String(actual)) : Number(actual), b = expression.value.type === 'date' ? Date.parse(String(expected)) : Number(expected);
   if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
   return expression.op === 'lt' ? a < b : expression.op === 'lte' ? a <= b : expression.op === 'gt' ? a > b : a >= b;
 }
+export class CollectionScopeError extends Error {}
+/** Browse reviewed offerings, never a same-named article that only describes
+ * them. Only return a scope when its complete membership is exactly that set.
+ */
+export function publishedOfferingScope(index: CompiledQueryIndex, subject: 'menu' | 'offerings' = 'offerings'): QuerySpec['scope'] | null {
+  const offeringTypes = new Set(['offering', 'product', 'service', 'type-offering', 'type-product', 'type-service']);
+  let offerings = new Set(index.space.records.filter(record => offeringTypes.has(record.type)).map(record => record.id));
+  // A publisher can have a menu plus separate services. Resolve the named menu
+  // from its published hierarchy, not every product/service on the website.
+  if (subject === 'menu') {
+    const named = index.space.collections.filter(collection => /\bmenu\b/i.test(collection.name));
+    const members = new Set(named.flatMap(collection => [...index.descendants.get(collection.id) ?? []].flatMap(id => [...index.direct.get(id) ?? []])));
+    const menu = new Set([...offerings].filter(id => members.has(id)));
+    if (menu.size) offerings = menu;
+  }
+  if (!offerings.size) return null;
+  const candidates = index.space.collections.flatMap(collection => {
+    const records = new Set([...index.descendants.get(collection.id) ?? []].flatMap(id => [...index.direct.get(id) ?? []]));
+    return records.size && [...records].every(id => offerings.has(id)) ? [{ id: collection.id, records }] : [];
+  });
+  const roots = candidates.filter(candidate => !candidates.some(other => other.id !== candidate.id && index.descendants.get(other.id)?.has(candidate.id)));
+  if (!roots.length || roots.length > 25 || new Set(roots.flatMap(root => [...root.records])).size !== offerings.size) return null;
+  try {
+    return resolveCollectionScope(index, { collectionId: roots[0].id, traversal: roots.length === 1 ? 'descendants' : 'explicitUnion', ...(roots.length > 1 ? { include: roots.slice(1).map(root => root.id) } : {}) });
+  } catch (error) { if (error instanceof CollectionScopeError) return null; throw error; }
+}
+function validCollectionPath(index: CompiledQueryIndex, collectionId: string, path?: string[]) {
+  return !!path?.length && path[0] === index.space.rootId && path.at(-1) === collectionId
+    && path.every((id, i) => index.direct.has(id) && (i === 0 || index.space.edges.some(edge => edge.parentId === path[i - 1] && edge.childId === id)));
+}
+/** Collection identity is published authority; a model need not reconstruct its
+ * breadcrumb. Preserve valid chosen paths and resolve only unambiguous ancestry.
+ */
+export function resolveCollectionScope(index: CompiledQueryIndex, input: Omit<QuerySpec['scope'], 'path'> & { path?: string[] }): QuerySpec['scope'] {
+  if (!index.direct.has(input.collectionId) || input.include?.some(id => !index.direct.has(id))) throw new CollectionScopeError('Unknown collection scope. Use schema.describe to choose published collections.');
+  if (input.traversal === 'explicitUnion' && !input.include?.length || input.traversal !== 'explicitUnion' && input.include?.length) throw new CollectionScopeError('Only explicitUnion accepts include, and it requires at least one published collection.');
+  if (validCollectionPath(index, input.collectionId, input.path)) return { ...input, path: input.path! };
+  const cache = new Map<string, string[][]>();
+  const pathsTo = (id: string): string[][] => {
+    if (id === index.space.rootId) return [[id]];
+    if (cache.has(id)) return cache.get(id)!;
+    const paths: string[][] = [];
+    for (const edge of index.space.edges.filter(edge => edge.childId === id)) {
+      for (const parent of pathsTo(edge.parentId)) {
+        paths.push([...parent, id]);
+        if (paths.length === 2) break;
+      }
+      if (paths.length === 2) break;
+    }
+    cache.set(id, paths); return paths;
+  };
+  const paths = pathsTo(input.collectionId);
+  if (paths.length !== 1) throw new CollectionScopeError('The collection has no unique breadcrumb. Use schema.describe childScopes to choose an exact published path.');
+  return { ...input, path: paths[0] };
+}
 export function scopeRecords(index: CompiledQueryIndex, query: QuerySpec): Set<string> {
   const { scope } = query;
-  if (scope.path[0] !== index.space.rootId || scope.path.at(-1) !== scope.collectionId || scope.path.some((id, i) => !index.direct.has(id) || i > 0 && !index.space.edges.some(edge => edge.parentId === scope.path[i - 1] && edge.childId === id))) throw new Error('Invalid chosen collection path.');
+  if (!validCollectionPath(index, scope.collectionId, scope.path)) throw new Error('Invalid chosen collection path.');
   if (scope.traversal === 'explicitUnion' && !scope.include?.length || scope.traversal !== 'explicitUnion' && scope.include?.length) throw new Error('Invalid scope union.');
   const roots = [scope.collectionId, ...scope.include ?? []];
   const collections = new Set<string>();
@@ -197,13 +262,15 @@ export class QueryResultStore {
   }
 }
 export function describeScope(index: CompiledQueryIndex, scope: QuerySpec['scope'], offsets: { children?: number; fields?: number } = {}) {
+  scope = resolveCollectionScope(index, scope);
   const childOffset = offsets.children ?? 0, fieldOffset = offsets.fields ?? 0;
   if (![childOffset, fieldOffset].every(value => Number.isInteger(value) && value >= 0) || childOffset > 1000 || fieldOffset > 64) throw new Error('Invalid schema page.');
   const collection = index.space.collections.find(item => item.id === scope.collectionId);
   if (!collection) throw new Error('Unknown collection.');
   const childIds = new Set(index.space.edges.filter(edge => edge.parentId === collection.id).map(edge => edge.childId));
   const children = index.space.collections.filter(item => childIds.has(item.id));
-  return { collection, children: children.slice(childOffset, childOffset + 24), omittedChildren: Math.max(0, children.length - childOffset - 24), fields: index.space.fields.slice(fieldOffset, fieldOffset + 32), omittedFields: Math.max(0, index.space.fields.length - fieldOffset - 32), relationships: index.space.relationshipTypes.slice(0, 16) };
+  const page = children.slice(childOffset, childOffset + 24);
+  return { collection, scope, children: page, childScopes: page.map(child => ({ collectionId: child.id, traversal: 'descendants' as const, path: [...scope.path, child.id] })), omittedChildren: Math.max(0, children.length - childOffset - 24), fields: index.space.fields.slice(fieldOffset, fieldOffset + 32), omittedFields: Math.max(0, index.space.fields.length - fieldOffset - 32), relationships: index.space.relationshipTypes.slice(0, 16) };
 }
 export function compatibleComparisonFields(fields: FieldDescriptor[], recordTypes: string[]) {
   return fields.filter(field => !field.recordTypes.length || recordTypes.every(type => field.recordTypes.includes(type)));

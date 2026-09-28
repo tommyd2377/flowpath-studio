@@ -24,27 +24,41 @@ export function initialSite(kind: 'general' | 'photographer' | 'florist', name?:
       text: 'Your site is ready to make your own. Describe a change, add a file, or use the Branding and Content panels. Review proposed edits before applying them to your draft, then publish when you are ready.' }] };
 }
 
-async function readDatabase(): Promise<Database> {
-  try { return JSON.parse(await readFile(join(directory(), 'workspace.json'), 'utf8')); }
+async function readDatabase(): Promise<{ db: Database; initialize: boolean }> {
+  try { return { db: JSON.parse(await readFile(join(directory(), 'workspace.json'), 'utf8')), initialize: false }; }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    return { schemaVersion: 1, sites: [initialSite('photographer'), initialSite('florist')] };
+    return { db: { schemaVersion: 1, sites: [initialSite('photographer'), initialSite('florist')] }, initialize: true };
   }
 }
 
-// Serialize reads and writes, then atomically replace the file. Local single-process store only.
-export function withDatabase<T>(operation: (db: Database) => T | Promise<T>): Promise<T> {
+// Serialize fresh reads and writes. Local single-process store only.
+function queuedDatabase<T>(operation: (db: Database) => T | Promise<T>, readOnly: boolean): Promise<T> {
   const result = (globalStore.voiceStoreQueue ?? Promise.resolve()).then(async () => {
-    const db = await readDatabase();
+    const { db, initialize } = await readDatabase();
+    // A first read still creates stable demo identities. Never persist changes
+    // made by a read callback, including while initializing the workspace.
+    const initial = readOnly && initialize ? JSON.stringify(db) : undefined;
     const value = await operation(db);
-    await mkdir(directory(), { recursive: true });
-    const path = join(directory(), `workspace-${randomUUID()}.tmp`);
-    await writeFile(path, JSON.stringify(db), { mode: 0o600 });
-    await rename(path, join(directory(), 'workspace.json'));
+    if (!readOnly || initialize) {
+      await mkdir(directory(), { recursive: true });
+      const path = join(directory(), `workspace-${randomUUID()}.tmp`);
+      await writeFile(path, initial ?? JSON.stringify(db), { mode: 0o600 });
+      await rename(path, join(directory(), 'workspace.json'));
+    }
     return value;
   });
   globalStore.voiceStoreQueue = result.catch(() => undefined);
   return result;
+}
+
+export function withDatabase<T>(operation: (db: Database) => T | Promise<T>): Promise<T> {
+  return queuedDatabase(operation, false);
+}
+
+/** No cached authority: each read waits for queued writes and reloads the file. */
+export function readDatabaseSnapshot<T>(operation: (db: Database) => T | Promise<T>): Promise<T> {
+  return queuedDatabase(operation, true);
 }
 
 export function findSite(db: Database, id: string) {

@@ -267,11 +267,14 @@ test('publisher presets and three greeting slots work in a narrow Studio preview
   }
   await navigation.getByRole('button', { name: 'The Voice', exact: true }).click();
   const welcome = page.getByRole('region', { name: 'Voice welcome', exact: true });
+  await welcome.getByRole('combobox', { name: 'Who speaks first?' }).selectOption('assistant');
   await welcome.getByRole('combobox', { name: 'Greeting point 1', exact: true }).selectOption('fact:address');
   await welcome.getByRole('combobox', { name: 'Greeting point 2', exact: true }).selectOption('fact:email');
   await welcome.getByRole('combobox', { name: 'Greeting point 3', exact: true }).selectOption('');
+  await welcome.getByText('Preview introduction', { exact: true }).click();
   await expect(welcome.getByLabel('Spoken greeting text preview')).toContainText('12 Example Lane');
   await expect(welcome.getByLabel('Spoken greeting text preview')).toContainText('hello@harbor.example');
+  await welcome.getByRole('combobox', { name: 'Who speaks first?' }).selectOption('visitor');
   await expect(welcome.getByRole('combobox', { name: 'Who speaks first?' })).toHaveValue('visitor');
   const save = page.getByRole('region', { name: 'Site editor', exact: true }).getByRole('button', { name: 'Save draft', exact: true });
   await save.click(); await expect(save).toBeDisabled();

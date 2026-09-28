@@ -1,6 +1,6 @@
 # FlowPath Studio
 
-Voice now uses **GPT-Live-1 with a separate Luna backend**. See [GPT-Live architecture and verification](docs/gpt-live.md) for the shared core, publisher defaults, limits and migration details.
+Voice uses **GPT-Live-1 with GPT-6 Astra/high for delegated work**. Connected imports, photo interpretation, Studio editing, visitor chat and research also default to Astra/high. See [GPT-Live architecture and verification](docs/gpt-live.md) for the shared core, publisher defaults, limits and migration details.
 
 
 A general-purpose, AI-native website publishing platform. Publishers supply their knowledge, capabilities and identity; the platform helps each visitor discover, understand, compare and act through an interface suited to their current intent.
@@ -28,6 +28,8 @@ VOICE_BACKEND=demo VOICE_AI_MODE=demo npm run dev
 If needed, install Node 24 through your version manager first (`nvm install` for nvm). Run `nvm use` in each new terminal. Application scripts check the Node version and fail clearly if it is incompatible.
 
 Open [Studio](http://127.0.0.1:3220) or the [shared component lab](http://127.0.0.1:3220/lab). No environment file, API key, account or cloud service is needed for the demo. The explicit demo flags above also keep a previously configured checkout offline. Stop the server with **Ctrl+C**.
+
+The [answer component lab](http://127.0.0.1:3220/lab/answers) previews rich answers and an optional catalog relationship map. See [integration and boundaries](docs/answer-components.md).
 
 The demo is a single local owner with Git-ignored storage under `data/`. It is for development and preview, not production authentication or multi-process hosting. `VOICE_DATA_DIR` can select an isolated data directory.
 

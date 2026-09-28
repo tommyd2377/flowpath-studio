@@ -30,7 +30,11 @@ import { knowledgeFacts, retrieveKnowledge, projectKnowledgeCatalog } from '@the
 import { adaptV1Catalog } from '@thevoice/platform-ui/collection-space';
 import { querySpecSchema } from '@thevoice/platform-ui/query';
 import { capabilityDescriptorSchema } from '@thevoice/platform-ui/task';
+import { RichAnswer } from '@thevoice/platform-ui/answer';
+import { CatalogDiagram } from '@thevoice/platform-ui/diagram';
 const catalog = validateCatalog(JSON.parse(readFileSync(new URL('./catalog.json', import.meta.url))));
+assert.ok(renderToStaticMarkup(createElement(RichAnswer, {text:'**Published answer**'})).includes('<strong>Published answer</strong>'));
+assert.match(renderToStaticMarkup(createElement(CatalogDiagram, {catalog,rootId:catalog.entities[0].id})), /Published relationships/);
 const adapted = adaptV1Catalog(catalog, {siteId:'packed-site',revisionId:catalog.id,indexRevision:'packed-index'});
 assert.deepEqual(adapted.legacy, catalog);
 assert.equal(adapted.space.records.length, catalog.entities.length);

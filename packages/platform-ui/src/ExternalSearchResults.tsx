@@ -2,11 +2,12 @@
 
 /* External images load directly from their sources, without a server proxy. */
 /* eslint-disable @next/next/no-img-element */
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'motion/react';
 import { revealTransition, sequenceVariants, sequenceItemVariants } from './motion.js';
 import { Icon } from './components.js';
 import { externalItemLabel } from './workspace.js';
+import { RichAnswer } from './RichAnswer.js';
 
 export type ExternalSearchResult = {
   id: string; kind: 'web' | 'images' | 'map'; query: string; fetchedAt: string; demo: boolean;
@@ -21,27 +22,8 @@ function mapUrl(map: NonNullable<ExternalSearchResult['map']>) {
   const bounds = [Math.max(-180, map.longitude - span), Math.max(-85, map.latitude - span / 2), Math.min(180, map.longitude + span), Math.min(85, map.latitude + span / 2)];
   return `https://www.openstreetmap.org/export/embed.html?${new URLSearchParams({ bbox: bounds.join(','), layer: 'mapnik' })}`;
 }
-function CitedAnswer({ result, formatted = false }: { result: ExternalSearchResult; formatted?: boolean }) {
-  if (formatted) return <>{[...result.answer.matchAll(/\S[\s\S]*?(?=\n\s*\n|$)/g)].map((match, block) => {
-    const heading = /^#{1,3} /.exec(match[0]), start = match.index! + (heading?.[0].length ?? 0), end = match.index! + match[0].length;
-    const parts: ReactNode[] = []; let cursor = start;
-    for (const [index, citation] of result.citations.entries()) {
-      if (citation.start < cursor || citation.start >= end || citation.end > end) continue;
-      parts.push(result.answer.slice(cursor, citation.start));
-      parts.push(<a key={index} href={citation.url} target="_blank" rel="noopener noreferrer" title={citation.title}>[{index + 1}]</a>); cursor = citation.end;
-    }
-    parts.push(result.answer.slice(cursor, end));
-    return heading ? <h3 key={block}>{parts}</h3> : <p className="platform-external-answer" key={block}>{parts}</p>;
-  })}</>;
-  const parts: ReactNode[] = []; let cursor = 0;
-  for (const [index, citation] of result.citations.entries()) {
-    if (citation.start < cursor) continue;
-    parts.push(result.answer.slice(cursor, citation.start));
-    parts.push(<a key={index} href={citation.url} target="_blank" rel="noopener noreferrer" title={citation.title}>[{index + 1}]</a>);
-    cursor = citation.end;
-  }
-  parts.push(result.answer.slice(cursor));
-  return <p className="platform-external-answer">{parts}</p>;
+function CitedAnswer({ result }: { result: ExternalSearchResult; formatted?: boolean }) {
+  return <RichAnswer text={result.answer} sources={result.sources} citations={result.citations}/>;
 }
 function WebImage({ src, fallbackSrc, alt }: { src: string; fallbackSrc?: string; alt: string }) {
   const [failure, setFailure] = useState<{ source: string; fallback: boolean } | null>(null);

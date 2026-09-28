@@ -16,7 +16,7 @@ export type SurfaceSnapshot = z.infer<typeof surfaceSnapshotSchema>;
 export function surfaceFingerprint(state: SurfaceSnapshot) {
   const { workspace, task } = state;
   return JSON.stringify({ workspace: { objects: workspace.objects.map(object => ({ ...object, scrollTop: 0 })), focusedId: workspace.focusedId },
-    task: task && { query: task.query, result: task.result, detail: task.detail, comparison: task.comparison, focus: task.focus, research: task.research, map: task.map, artifacts: task.artifacts, selection: task.selection },
+    task: task && { query: task.query, result: task.result, detail: task.detail, comparison: task.comparison, estimate: task.estimate, focus: task.focus, research: task.research, map: task.map, artifacts: task.artifacts, selection: task.selection },
     external: state.external, selections: state.selections, answer: state.answer, answerPlacement: state.answer ? state.answerPlacement : undefined, primaryId: state.primaryId, expanded: state.expanded });
 }
 export class SurfaceHistory {

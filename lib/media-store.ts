@@ -9,7 +9,7 @@ import { getFirebaseAdminApp } from './firebase/admin';
 import { getBackendMode } from './firebase/config';
 import type { WorkspaceUser } from './firebase/types';
 import { AppError } from './errors';
-import { updateDraft, withDatabase, type StoredFile } from './local-store';
+import { readDatabaseSnapshot, updateDraft, type StoredFile } from './local-store';
 import { readKnowledgeArtifact } from './knowledge-store';
 
 const uuid = z.string().uuid();
@@ -180,7 +180,7 @@ export async function getPublishedMedia(siteId: string, revisionId?: string): Pr
     if (publicRecord?.siteId !== siteId || publicRecord?.revisionId !== revisionId) throw new AppError('Published photos are unavailable.', 503);
     value = publicRecord.library;
   } else {
-    const allowed = await withDatabase(db => db.sites.some(site => site.id === siteId && site.published?.mediaRevisionId === revisionId));
+    const allowed = await readDatabaseSnapshot(db => db.sites.some(site => site.id === siteId && site.published?.mediaRevisionId === revisionId));
     if (!allowed) throw new AppError('The published media revision changed. Reload this site.', 409);
     try { value = JSON.parse(await readFile(join(root(), 'media-public', `${key}.json`), 'utf8')); }
     catch { throw new AppError('Published photos are unavailable.', 503); }

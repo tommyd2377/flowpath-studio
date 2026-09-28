@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { taskFixture, websiteTaskFixture, publisherVocabularies } from '../fixtures/visitor-tasks';
+import { taskFixture, websiteTaskFixture, publisherVocabularies, recordedMenuFixture } from '../fixtures/visitor-tasks';
 import { expressionNodes } from '@thevoice/platform-ui/query';
 import { compileQueryIndex } from '../lib/catalog-query-index';
-import { evaluateQuery } from '../lib/catalog-query';
+import { evaluateQuery, publishedOfferingScope } from '../lib/catalog-query';
 import { buildVisitorTaskView, visitorCapabilities } from '../lib/visitor-capabilities';
 import { websiteQueryCommand } from '../lib/visitor-query-command';
+import { websiteCommandCandidate, websiteCommandCanMatch } from '../lib/visitor-command-intent';
 import { VisitorTaskStore } from '../lib/visitor-task-store';
 import { localTaskDocuments } from '../lib/task-persistence';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -18,11 +19,105 @@ async function setup(space = taskFixture()) {
   const session = await store.create(space.publication), context = { index, session, signal: new AbortController().signal };
   buildVisitorTaskView(context);
   return { context, close: () => rm(path, { recursive: true, force: true }), ask: async (text: string) => {
+    assert.equal(websiteCommandCanMatch(text), true, `The browser must allow this published command: ${text}`);
     const command = websiteQueryCommand(text, context); assert.ok(command, text);
     await visitorCapabilities.get(command.capabilityId)!.execute(context, command.input);
     return buildVisitorTaskView(context);
   } };
 }
+
+test('syntax reachability skips impossible probes without consulting a partial browser field list', async t => {
+  const { context, close } = await setup(); t.after(close);
+  for (const request of [
+    'Keep those quantities, but make both items whole pies instead.',
+    'Keep those quantities, but make both services full-day sessions instead.',
+    'Use three of the second item instead',
+    'Leave the quantities unchanged',
+  ]) {
+    assert.equal(websiteCommandCandidate(request), true, 'These formerly needed an unsuccessful server probe');
+    assert.equal(websiteCommandCanMatch(request), false, request);
+    assert.equal(websiteQueryCommand(request, context), null, request);
+  }
+  for (const [request, capabilityId] of [
+    ['Keep reading minutes at least 2', 'query.patch'],
+    ['Keep documented flag is false', 'query.patch'],
+    ['Reading minutes largest first', 'query.patch'],
+    ['Reading minutes not published', 'query.patch'],
+    ['At any price', 'task.clarify'],
+    ['No price limit', 'task.clarify'],
+    ['Restore my estimate', 'estimate.show'],
+    ['Bring back my estimate', 'estimate.show'],
+    ['Go back to those results', 'view.back'],
+    ['Exclude subcollections', 'query.patch'],
+    ['Reset the sorting', 'query.patch'],
+  ]) {
+    assert.equal(websiteCommandCanMatch(request), true, request);
+    assert.equal(websiteQueryCommand(request, context)?.capabilityId, capabilityId, request);
+  }
+  for (const request of [
+    'Open an unfamiliar thing',
+    'Please narrow this to vegan slices priced below eight dollars, ordered with the priciest first.',
+    'Publication-specific field includes any of red, blue',
+  ]) assert.equal(websiteCommandCanMatch(request), true, 'Potential publication-driven matches must reach the server');
+});
+
+test('estimate recall opens current server state but qualified edits keep assistant interpretation', async t => {
+  const { context, close } = await setup(); t.after(close);
+  for (const text of ['Bring back my estimate', 'Show my current estimate again', 'Open the saved basket']) {
+    assert.deepEqual(websiteQueryCommand(text, context), { capabilityId: 'estimate.show', input: {} });
+  }
+  for (const text of ['Bring back my estimate including tax', 'Show my estimate and change the quantities', 'Make the estimate three instead']) {
+    assert.equal(websiteQueryCommand(text, context), null);
+  }
+});
+
+test('unscoped show requests for information leave catalog ownership and state with the assistant across domains', async () => {
+  for (const vocabulary of publisherVocabularies) {
+    const space = taskFixture(vocabulary);
+    space.records[0].summary = 'Contact information: telephone 000-000-0000. Opening hours and delivery policies are documented here.';
+    space.records[0].blocks = [{ id: 'instructions', kind: 'paragraph', text: 'Scheduling instructions: consult the published service details.' }];
+    const { context, ask, close } = await setup(space);
+    try {
+      await ask(`Only ${vocabulary.field} at least 4`);
+      const before = structuredClone(context.session);
+      for (const request of ['Show contact information', 'Please show your opening hours.', 'Show me delivery policies', 'Show scheduling instructions']) {
+        assert.equal(websiteCommandCanMatch(request), true, 'This still reaches publication-aware routing');
+        assert.equal(websiteQueryCommand(request, context), null, request);
+        assert.deepEqual(context.session, before, 'Model handoff cannot replace the existing query, constraints or display');
+      }
+      for (const request of ['Search for contact information', 'Find contact information']) {
+        assert.equal(websiteQueryCommand(request, context)?.capabilityId, 'query.patch', 'An explicit search keeps its catalog meaning even when the words are only in reading text');
+      }
+    } finally { await close(); }
+  }
+});
+
+test('exact information-themed catalog identities still resolve as records, aliases and collections', async () => {
+  for (const vocabulary of [publisherVocabularies[1], publisherVocabularies[6]]) for (const identity of ['record', 'alias', 'collection']) {
+    const space = taskFixture(vocabulary);
+    if (identity === 'record') space.records[0].name = 'Contact Information';
+    else if (identity === 'alias') space.records[0].aliases = ['Contact Information'];
+    else space.collections[1].name = 'Contact Information';
+    const { context, ask, close } = await setup(space);
+    try {
+      if (identity === 'collection') assert.equal((await ask('Show Contact Information')).query.scope.collectionId, space.collections[1].id);
+      else assert.deepEqual(websiteQueryCommand('Show Contact Information', context), { capabilityId: 'record.detail', input: { recordId: space.records[0].id } });
+    } finally { await close(); }
+  }
+});
+
+test('partial published names and alternatives stay fast while explicit and typed empty queries remain valid', async t => {
+  const space = taskFixture();
+  space.records[0].name = 'Amber Portfolio Project'; space.records[1].name = 'Cobalt Portfolio Project'; space.records[3].aliases = ['Amber Showcase'];
+  const { context, ask, close } = await setup(space); t.after(close);
+  assert.equal((await ask('Show amber')).result.count.value, 2);
+  assert.equal((await ask('Show amber or cobalt')).result.count.value, 3);
+  assert.equal((await ask('Include an unpublished term too')).result.count.value, 3, 'An explicit inclusion preserves the current search');
+  for (const request of ['Search for an unpublished term', 'Find an unpublished term']) assert.equal((await ask(request)).result.count.value, 0);
+  await ask('Clear search');
+  assert.equal((await ask('Only reading minutes at least 999')).result.count.value, 0, 'A valid empty filter must not be weakened');
+  assert.equal(websiteQueryCommand('Show amber', context)?.capabilityId, 'query.patch', 'Ownership comes from published names, not whether the current filters produce matches');
+});
 
 test('browsing a named collection prefers structured offerings over an identically named article', async () => {
   for (const kind of ['products', 'services'] as const) {
@@ -34,6 +129,115 @@ test('browsing a named collection prefers structured offerings over an identical
       const view = await ask(`Show me ${name}`);
       assert.equal(view.detail, undefined); assert.equal(view.result.count.value, 40);
       assert.deepEqual(websiteQueryCommand(`Open ${name}`, context), { capabilityId: 'record.detail', input: { recordId: space.records[0].id } });
+    } finally { await close(); }
+  }
+});
+
+test('recorded menu requests browse every offering category instead of the menu reference article', async t => {
+  const { context, ask, close } = await setup(recordedMenuFixture()); t.after(close);
+  for (const request of ['Can you bring up the menu', 'Please show me the menu.', 'Open up your menu', 'Browse the menu again', 'Show me the complete menu', 'Show your entire menu']) {
+    const view = await ask(request);
+    assert.equal(view.result.count.value, 7, request);
+    assert.equal(view.records.some(record => record.id === 'menu-article'), false);
+    assert.equal(view.records.some(record => record.name === 'Vanilla Cupcake'), true);
+  }
+  const velvet = await ask('Show me velvet');
+  assert.equal(velvet.result.count.value, 6);
+  assert.equal(velvet.records.some(record => record.id === 'menu-article'), false);
+  assert.equal(websiteQueryCommand('Bring up the menu and tell me what is good', context), null, 'compound requests keep their remaining work');
+});
+
+test('opening an item tolerates spoken punctuation and leaves partial ambiguity to dialogue resolution', async t => {
+  const { context, close } = await setup(recordedMenuFixture()); t.after(close);
+  for (const text of ['Open up the red-and-blue velvet', 'Open the Red and Blue Velvet', 'Could you please open up Red & Blue Velvet?']) {
+    assert.deepEqual(websiteQueryCommand(text, context), { capabilityId: 'record.detail', input: { recordId: 'cake-0' } }, text);
+  }
+  for (const text of ['Open up the red and blue', 'Open a picture of it', 'Open the first one']) assert.equal(websiteQueryCommand(text, context), null, text);
+  assert.deepEqual(websiteQueryCommand('Open Our Dessert Menu', context), { capabilityId: 'record.detail', input: { recordId: 'menu-article' } });
+});
+
+test('menu scope requires complete unmixed reviewed offering membership', () => {
+  const space = recordedMenuFixture();
+  space.memberships.push({ collectionId: 'cakes', recordId: 'menu-article' });
+  assert.equal(publishedOfferingScope(compileQueryIndex(space)), null, 'do not call an incomplete or mixed collection the full menu');
+  assert.equal(publishedOfferingScope(compileQueryIndex(taskFixture())), null, 'a prose-only publication stays with its reader');
+});
+
+test('a named menu excludes separate services without omitting its offering categories', async t => {
+  const space = recordedMenuFixture();
+  for (const collection of space.collections) if (['cakes', 'cupcakes'].includes(collection.id)) collection.name = `Our menu / ${collection.name}`;
+  space.records.push({ id: 'separate-service', type: 'type-service', name: 'Event consultation', summary: '', aliases: [], assertions: [], blocks: [] });
+  space.collections.push({ id: 'services-guide', name: 'Services and planning', introduction: '', kind: 'explicit', view: 'list' });
+  space.edges.push({ parentId: space.rootId, childId: 'services-guide' });
+  space.memberships.push({ collectionId: 'services-guide', recordId: 'separate-service' }, { collectionId: 'services-guide', recordId: 'menu-article' });
+  const { ask, context, close } = await setup(space); t.after(close);
+  assert.equal(publishedOfferingScope(context.index), null, 'The whole offering catalog is still mixed');
+  const view = await ask('Show me the complete menu');
+  assert.equal(view.result.count.value, 7);
+  assert.equal(view.records.some(record => record.id === 'separate-service'), false);
+  assert.equal(view.records.some(record => record.id === 'menu-article'), false);
+});
+
+test('a full menu resets earlier criteria while an ordinary menu request preserves them', async t => {
+  const { ask, close } = await setup(websiteTaskFixture('products')); t.after(close);
+  await ask('Only those under $40');
+  assert.equal((await ask('Show me the menu')).result.count.value, 19);
+  assert.equal((await ask('Show me the full menu')).result.count.value, 40);
+  await ask('Only those under $40');
+  assert.equal((await ask('Show me the complete menu')).result.count.value, 40);
+});
+
+test('comparisons with leading conversational words do not become a price sort', async () => {
+  for (const kind of ['products', 'services'] as const) {
+    const { context, close } = await setup(websiteTaskFixture(kind));
+    try {
+      for (const request of ['Okay, can you do a comparison, so the cheapest', 'Please compare the cheapest options', 'Sort by price and compare the first two', 'Most expensive versus cheapest']) {
+        assert.equal(websiteQueryCommand(request, context), null, request);
+      }
+      assert.equal(websiteQueryCommand('Sort price cheapest first', context)?.capabilityId, 'query.patch');
+    } finally { await close(); }
+  }
+});
+
+test('item removal and compound basket edits reach the assistant without changing filters', async () => {
+  for (const kind of ['products', 'services'] as const) {
+    const { context, ask, close } = await setup(websiteTaskFixture(kind));
+    try {
+      await ask('Only those under $40');
+      const before = structuredClone(context.session);
+      for (const request of [
+        'Remove the cheese and make it just one Sweet Chili Oxtail pie.',
+        'Remove the cheese', 'Clear my estimate', 'Remove the studio session',
+        'Remove the price limit and make it one item',
+        'Show all cakes and change the quantity to three',
+        'Show all services and remove the second item from my estimate',
+      ]) assert.equal(websiteQueryCommand(request, context), null, `${kind}: ${request}`);
+      assert.deepEqual(context.session, before, 'The assistant receives the entire edit before any query mutation');
+      assert.equal((await ask('Remove the price limit')).result.count.value, 40);
+      assert.equal(websiteQueryCommand('Remove the unknown filter', context)?.capabilityId, 'task.clarify');
+    } finally { await close(); }
+  }
+});
+
+test('compound category, limit and sort requests reach the model intact across publisher domains', async () => {
+  for (const kind of ['products', 'services'] as const) {
+    const { context, close } = await setup(websiteTaskFixture(kind));
+    try {
+      const before = structuredClone(context.session);
+      for (const request of [
+        'Show only vegan options under seven dollars per slice, cheapest first.',
+        'Show vegan choices priced below eight dollars a slice, highest price first.',
+        'Show vegan choices priced below eight dollars a slice',
+        'Show consultations below forty dollars an hour',
+        'Find studios with sessions before nine in the morning',
+        'Show remote consultations under $40, cheapest first',
+        'Sort the blue products by price descending',
+        'Show studio services, largest duration first',
+        'Show cheapest options under $40',
+        'Sort price descending under $40',
+      ]) assert.equal(websiteQueryCommand(request, context), null, request);
+      assert.deepEqual(context.session, before, 'The shortcut must not apply a partial request');
+      assert.equal(websiteQueryCommand('Sort price descending', context)?.capabilityId, 'query.patch');
     } finally { await close(); }
   }
 });
@@ -99,6 +303,52 @@ test('price commands disambiguate published bases and never make an unknown pric
   } finally { await close(); }
 });
 
+test('decorated money labels support exact published bases without confusing projections with filters', async () => {
+  for (const [kind, basis, otherBasis, request] of [
+    ['products', 'Slice', 'Pie', 'Show me the pizza menu with slice and whole pie prices.'],
+    ['services', 'Hourly', 'Project', 'Show me the consulting catalog with hourly and project rates.'],
+  ] as const) {
+    const space = websiteTaskFixture(kind, 7), price = space.fields.find(field => field.id === 'price')!;
+    price.label = `Listed ${basis} price (USD)`; price.aliases = []; price.basis = basis;
+    space.fields.push({ ...price, id: 'other-price', label: `Listed ${otherBasis} price (USD)`, basis: otherBasis });
+    for (const [i, record] of space.records.entries()) {
+      const assertion = record.assertions.find(assertion => assertion.fieldId === 'price')!;
+      if (assertion.value) assertion.value = { type: 'money', value: i + 4, currency: 'USD', basis };
+      record.assertions.push({ ...assertion, id: `other-price-${i}`, fieldId: 'other-price', value: { type: 'money', value: 20 + i, currency: 'USD', basis: otherBasis } });
+    }
+    const { context, ask, close } = await setup(space);
+    try {
+      const before = structuredClone(context.session);
+      assert.equal(websiteQueryCommand(request, context), null, 'Display wording keeps the whole request for semantic projection');
+      assert.equal(websiteQueryCommand(`Show me seasonal offerings with a ${basis} price under $8`, context), null, 'Do not discard a new subject while applying its bound');
+      assert.equal(websiteQueryCommand(`Only those with red labels and a ${basis} price under $8`, context), null, 'Do not discard another qualification before the bound');
+      assert.deepEqual(context.session, before);
+      await ask(kind === 'products' ? 'Show me vanilla' : 'Show me studio');
+      const view = await ask(`Only show those with a ${basis.toLowerCase()} price under $8.`);
+      assert.deepEqual(view.records.map(record => record.id), ['record-00001'], 'Keep the existing category filter and exclude unknown/out-of-range prices');
+      assert.ok(expressionNodes(view.query.where).some(node => node.kind === 'field' && node.fieldId === 'price' && node.op === 'lt'));
+      assert.equal(websiteQueryCommand('Only those with a price under $8', context)?.capabilityId, 'task.clarify', 'An unspecified basis remains ambiguous');
+      context.index.space.fields.find(field => field.id === 'other-price')!.basis = basis;
+      assert.equal(websiteQueryCommand(`Only ${basis} price under $8`, context)?.capabilityId, 'task.clarify', 'Multiple published fields with the same basis remain ambiguous');
+    } finally { await close(); }
+  }
+});
+
+test('qualified menu and photo requests defer intact while exact identities and collection browsing remain available', async t => {
+  const space = recordedMenuFixture();
+  space.records[0].name = 'Desserts with prices';
+  space.records[1].name = 'Photos of the four seasonal flavors';
+  const { context, ask, close } = await setup(space); t.after(close);
+  const before = structuredClone(context.session);
+  for (const text of ['Show me the pizza menu', 'Show me the seasonal catalog', 'Show me photos of the four oxtail pizza flavors.', 'Show me photos of the chocolate flavors', 'Show me the winter gallery']) {
+    assert.equal(websiteQueryCommand(text, context), null, text);
+    assert.deepEqual(context.session, before, 'Semantic requests must not install partial keyword filters');
+  }
+  assert.deepEqual(websiteQueryCommand('Show me Desserts with prices', context), { capabilityId: 'record.detail', input: { recordId: 'menu-article' } });
+  assert.deepEqual(websiteQueryCommand('Show me Photos of the four seasonal flavors', context), { capabilityId: 'record.detail', input: { recordId: 'cake-0' } });
+  assert.equal((await ask('Show me the cakes menu')).result.count.value, 6, 'A resolved category still uses all reviewed memberships');
+});
+
 test('all members of a named collection clear old offering constraints across publisher types', async () => {
   for (const kind of ['products', 'services'] as const) {
     const space = websiteTaskFixture(kind);
@@ -108,8 +358,14 @@ test('all members of a named collection clear old offering constraints across pu
       space.records.push({ id: `photo-${i}`, type: 'published-photo', name: `Study ${i}`, summary: '', aliases: [], blocks: [], assertions: [] });
       space.memberships.push({ collectionId: 'photos', recordId: `photo-${i}` });
     }
+    space.collections.push({ id: 'album', name: 'Selected studies', introduction: '', kind: 'explicit', view: 'gallery' });
+    space.edges.push({ parentId: 'photos', childId: 'album' });
+    space.memberships.push({ collectionId: 'album', recordId: 'photo-0' });
     const { ask, close } = await setup(space);
     try {
+      const initial = await ask('Show me your photos');
+      assert.equal(initial.result.count.value, 3, 'A parent photo library includes its nested album without an invalid union');
+      assert.equal(initial.query.scope.collectionId, 'photos');
       for (const request of ['Show me all the photos', 'Show me all Portfolio studies']) {
         await ask(kind === 'products' ? 'Show me chocolate' : 'Show me remote');
         await ask('Only those under $40');
@@ -152,6 +408,7 @@ test('presentation words do not erase exact names or meaningful search qualifier
   space.collections[1].name = 'Reports';
   space.collections[2].name = 'Reports menu';
   space.records[0].name = 'Report catalog';
+  space.records[1].name = 'Winter catalog';
   const { ask, context, close } = await setup(space); t.after(close);
   assert.deepEqual(websiteQueryCommand('Show me the report catalog', context), { capabilityId: 'record.detail', input: { recordId: space.records[0].id } });
   assert.equal((await ask('Show me the Reports menu')).query.scope.collectionId, space.collections[2].id);

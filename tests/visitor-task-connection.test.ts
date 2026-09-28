@@ -1,3 +1,4 @@
+import { taskPromptData } from './helpers/prompt-context-fixture';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -79,7 +80,7 @@ test('the real chat stream reports connection failure, retains the acknowledged 
       if (requests === 2) throw socketFailure();
       if (requests === 3) return Response.json({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Your published information remains available.' }] }] });
       assert.equal(requests, 1, 'No automatic retries');
-      const state = JSON.parse(body.instructions.split('\n').find((line: string) => line.startsWith('{"activeRecords"'))!);
+      const state = taskPromptData(body);
       return Response.json({ status: 'completed', output: [{ type: 'function_call', call_id: 'show-fixture', name: 'visitor_task', arguments: JSON.stringify({ capabilityId: 'query.patch', input: {
         queryId: state.query.queryId, baseRevision: state.query.revision, operations: [{ op: 'setSearch', text: '' }],
       } }) }] });

@@ -87,7 +87,7 @@ test('text adapter sends exactly one mocked request, uses semantic schema and re
   globalThis.fetch = async (_input, init) => {
     calls++;
     const body = JSON.parse(String(init?.body));
-    assert.equal(body.max_output_tokens, 1200);
+    assert.equal(body.model, 'gpt-6-astra'); assert.deepEqual(body.reasoning, { effort: 'high' }); assert.equal(body.max_output_tokens, 8192);
     assert.equal(body.store, false);
     assert.equal(body.text.format.name, 'catalog_presentation');
     assert.equal(body.text.format.strict, true);

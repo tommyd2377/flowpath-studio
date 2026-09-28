@@ -11,8 +11,12 @@ const groups = {
   websiteDesign: ['website-design.spec.ts'],
   websiteHero: ['website-hero.spec.ts'],
   websiteMotion: ['website-motion.spec.ts'],
+  websiteMotionControls: ['website-motion-controls.spec.ts'],
+  websiteChoreography: ['website-choreography.spec.ts'],
   voiceSettings: ['voice-settings.spec.ts'],
-  carousel: ['ai-carousel.spec.ts', 'retained-task-view.spec.ts'],
+  assistantEntry: ['assistant-entry-composer.spec.ts'],
+  carousel: ['ai-carousel.spec.ts'],
+  retained: ['retained-task-view.spec.ts'],
   // Source imports create several sites. Give them fresh data rather than
   // exhausting the unchanged 12-site pilot cap in the runtime group.
   tasks: ['visitor-tasks.spec.ts'],
@@ -22,9 +26,12 @@ const groups = {
   brochure: ['brochure-review.spec.ts'],
   core: ['media.spec.ts', 'media-runtime.spec.ts', 'motion.spec.ts', 'platform.spec.ts', 'shared-reveal.spec.ts'],
   voice: ['visitor-realtime.spec.ts'],
-  speed: ['visitor-speed.spec.ts'],
+  speed: ['visitor-speed.spec.ts', 'visitor-mode-motion.spec.ts'],
+  motionInteractions: ['motion-interactions.spec.ts'],
   quality: ['visitor-quality.spec.ts', 'studio-runtime.spec.ts'],
   search: ['search-explore.spec.ts'],
+  answers: ['answer-components.spec.ts'],
+  mobile: ['mobile-components.spec.ts'],
   billing: ['billing.spec.ts'],
 };
 
@@ -48,6 +55,14 @@ if (args.length) {
   }
   for (const [name, files] of Object.entries(groups)) {
     console.log(`Running browser group: ${name}`);
+    if (name === 'retained') {
+      // These scenarios each create a publisher. Split the expanded suite into
+      // fresh local workspaces rather than raising the real 12-site limit.
+      const first = '(a model-only|a related|related answers|a clarification|assistant keyboard|recorded menu)';
+      run([...files.map(file => `tests/browser/${file}`), '--grep', first, '--output=test-results/platform/retained-answers']);
+      run([...files.map(file => `tests/browser/${file}`), '--grep-invert', first, '--output=test-results/platform/retained-history']);
+      continue;
+    }
     // Each new Playwright process creates its own server and temporary demo data.
     // Separate output directories retain artifacts from both successful groups.
     run([...files.map(file => `tests/browser/${file}`), `--output=test-results/platform/${name}`]);

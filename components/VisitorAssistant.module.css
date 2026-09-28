@@ -1,17 +1,18 @@
 .assistant { width: 100%; margin: 0 auto; padding: 0; }
-.modes { display: inline-flex; position: sticky; top: calc(clamp(110px, 21svh, 220px) * .6 + 22px + env(safe-area-inset-top, 0px)); z-index: 27; gap: 3px; padding: 4px; margin: 20px auto 14px; border: 1px solid #74806435; background: var(--platform-bg, #121810); border-radius: 30px; }
-.modes button { position: relative; background: none; color: #a4ac99; border-radius: 30px; padding: 8px 17px; font-size: 12px; }
+.modes { display: inline-grid; grid-template-columns: repeat(2, minmax(0, 1fr)); isolation: isolate; position: sticky; top: calc(clamp(110px, 21svh, 220px) * .6 + 22px + env(safe-area-inset-top, 0px)); z-index: 27; gap: 0; padding: 3px; margin: 20px auto 14px; border: 1px solid #74806435; background: var(--platform-bg, #121810); border-radius: 30px; }
+.modes::before { content: ''; position: absolute; inset: 3px; border-radius: 30px; background: var(--platform-bg, #101110); pointer-events: none; z-index: 0; }
+.modes button { position: relative; z-index: 2; background: none; color: #a4ac99; border-radius: 30px; padding: 8px 17px; font-size: 12px; }
 .modes button[aria-pressed='true'] { color: #efeade; }
 .modes button:disabled { opacity: .4; cursor: default; }
-.modeSelection { position: absolute; inset: 0; background: color-mix(in srgb, var(--site-accent) 15%, #20271b); box-shadow: 0 1px 3px #0003; }
-.modeLabel { position: relative; display: flex; align-items: center; gap: 7px; }
+.modeSelection { position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / 2); z-index: 1; border-radius: 30px; pointer-events: none; background: color-mix(in srgb, var(--site-accent) 15%, #20271b); box-shadow: 0 1px 3px #0003; }
+.modeLabel { position: relative; display: flex; align-items: center; justify-content: center; gap: 7px; white-space: nowrap; }
 .composer { display: flex; align-items: flex-end; gap: 12px; padding: 14px 14px 14px 22px; border: 1px solid color-mix(in srgb, var(--site-accent) 25%, #30362b); border-radius: 19px; background: linear-gradient(115deg, #252a20, #1a2018); box-shadow: 0 10px 45px #00000020, inset 0 1px 0 #f2e5c609; transition: border-color .2s, box-shadow .2s; }
 .composer:focus-within { border-color: color-mix(in srgb, var(--site-accent) 65%, #3e4634); box-shadow: 0 0 0 3px color-mix(in srgb, var(--site-accent) 5%, transparent), 0 12px 45px #0002; }
 .composer textarea { flex: 1; min-width: 0; resize: none; border: 0; outline: none; color: #e8e9df; background: none; font: inherit; font-size: 15px; line-height: 24px; min-height: 40px; max-height: 128px; padding: 8px 0; overflow-y: auto; }
 .composer textarea::placeholder { color: #9da68f; }
 .composer textarea:disabled { opacity: .55; }
 .send { flex-shrink: 0; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; color: #172014; background: var(--site-accent); }
-.send span { display: flex; }
+.send span { display: flex; grid-area: 1 / 1; }
 .send:disabled { opacity: .3; cursor: default; }
 .suggestions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; padding-top: 14px; overflow: hidden; }
 .suggestions button { display: flex; align-items: center; gap: 7px; background: #d8d3b803; border: 1px solid #87947126; border-radius: 30px; padding: 8px 12px; color: #b4baa7; font-size: 11px; line-height: 1.45; max-width: 100%; }
@@ -19,6 +20,8 @@
 .suggestions button svg { flex-shrink: 0; color: var(--site-accent); }
 .suggestions button:disabled { opacity: .4; }
 .voiceNote { text-align: center; font-size: 12px; line-height: 1.65; color: #aab09c; margin: 6px 0; }
+.chatActivity { position: absolute; top: calc(100% + 2px); left: 12px; right: 0; height: 20px; pointer-events: none; color: var(--platform-muted, #aab09c); font-size: 12px; }
+@media (max-width: 900px) { .chatActivity { right: 170px; left: 4px; } }
 .assistant button:focus-visible { outline: 2px solid var(--site-accent); outline-offset: 4px; }
 @container (max-width: 440px) {
   .composer { padding: 10px 10px 10px 15px; gap: 8px; border-radius: 16px; }
@@ -39,13 +42,12 @@
 /* The dock stays mounted above both surfaces. Only the cards occupy the AI layer. */
 .interaction { position: sticky; top: 0; z-index: 55; width: 100%; background: var(--platform-bg, #101110); }
 .interaction .modes { position: absolute; top: 100%; right: 24px; bottom: auto; translate: 0 -50%; margin: 0; padding: 3px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-.interaction .modes button[aria-pressed=false] .modeLabel { background: var(--platform-bg, #101110); }
 .interaction .modes button { min-height: 32px; padding: 6px 12px; font-size: 11px; }
 .website { padding: 40px 28px 0; transition: filter .3s ease, opacity .3s ease; container-type: inline-size; }
 .assistant[data-ai-layer-open=true] .website { filter: blur(6px); opacity: .38; user-select: none; }
 .backdrop { position: fixed; z-index: 40; inset: 0; background: color-mix(in srgb, var(--platform-bg, #11160e) 35%, transparent); touch-action: none; }
 .interaction :global(.platform-conversation-backdrop) { display: none; }
-@media(max-width:600px) { .website { padding: 40px 18px 0; }.interaction .modes { right: 16px; }.assistant[data-ai-layer-open=true] .website { filter: none; opacity: .22; } }
+@media(max-width:600px) { .website { padding: 40px 18px 0; }.interaction .modes { right: 16px; }.assistant[data-ai-layer-open=true] .website { filter: blur(3px); opacity: .22; } }
 @media(prefers-reduced-motion:reduce) { .website { transition: none; }.assistant[data-ai-layer-open=true] .website { filter: none; } }
 
 .cancelWork { pointer-events: auto; position: absolute; left: 24px; bottom: -31px; border: 1px solid #7776; border-radius: 18px; background: #20221c; color: #deded5; padding: 5px 10px; font-size: 12px; }
@@ -85,11 +87,36 @@
 .send { width: 44px; height: 44px; }
 .cancelWork { min-height: 44px; bottom: -44px; }
 
-/* Editing stays above the persistent surface instead of floating over its answer. */
 /* Keep the chat dock's flow height consistent when opening/closing the layer,
    so a compact composer cannot clamp the website's retained scroll position. */
-.interaction :global(.platform-conversation-dock) { height: auto; min-height: 0; padding: 8px 0; }
+/* Reserve a compact status row even when idle, so progress never shifts results. */
+.interaction :global(.platform-conversation-dock) { height: auto; min-height: 0; padding: 8px 0 28px; }
 .interaction :global(.platform-conversation-dock) { background: var(--platform-bg, #101110); border-color: var(--platform-border, #32342a70); }
 .interaction :global(.platform-conversation-surface) { position: relative; top: 0; left: auto; right: auto; width: calc(100% - 36px); min-height: 0; }
 .assistant[data-ai-layer-open=true] .interaction :global(.platform-conversation-suggestions) { position: static; }
 .composer textarea:focus-visible { outline: none; box-shadow: none; }
+
+/* The invitation uses the same controls without placing the mode picker below
+   the viewport. Browsing collapses it into the existing compact dock. */
+.interaction[data-voice-invitation=true] { position: relative; }
+.interaction[data-voice-invitation=true] .modes { top: auto; bottom: max(24px, env(safe-area-inset-bottom)); translate: none; }
+
+/* Blur the contents of the fixed results rail, never its containing block.
+   This retains the answer's position, scroll, and mounted media while typing. */
+.results :global([data-information-surface]) > div { transition: filter .35s ease, opacity .35s ease; }
+.results[data-defocused=true] :global([data-information-surface]) > div { filter: blur(6px); opacity: .28; pointer-events: none; }
+.assistant[data-chat-composing=true] .interaction,
+.assistant[data-chat-composing=true] .interaction :global(.platform-conversation-dock) { background: transparent; border-color: transparent; }
+.dictate { display: grid; place-items: center; flex-shrink: 0; width: 44px; height: 44px; border-radius: 50%; background: transparent; color: var(--platform-muted); }
+.dictate:hover:not(:disabled), .dictate[aria-pressed=true] { color: var(--voice-accent, var(--site-accent)); background: color-mix(in srgb, var(--voice-accent, var(--site-accent)) 10%, transparent); }
+.dictate:disabled { opacity: .35; cursor: default; }
+.dictationStatus { position: absolute; top: calc(100% + 8px); left: 12px; right: 12px; margin: 0; font-size: 12px; line-height: 1.5; text-align: center; color: var(--platform-muted); }
+@media(prefers-reduced-motion:reduce) { .results :global([data-information-surface]) > div { transition: none; } }
+
+/* Keep the phone composer inside the safe area and avoid input-focus zoom.
+   Compact visual insets do not reduce the 44px send/mode targets. */
+@media (max-width: 600px) {
+  .interaction :global(.platform-conversation-dock) { padding-top: calc(6px + env(safe-area-inset-top, 0px)); }
+  .interaction :global(.platform-conversation-surface) { width: calc(100% - max(12px, env(safe-area-inset-left, 0px), env(safe-area-inset-right, 0px)) * 2); }
+  .interaction .composer textarea { font-size: max(16px, calc(16px * var(--platform-text-scale, 1))); }
+}

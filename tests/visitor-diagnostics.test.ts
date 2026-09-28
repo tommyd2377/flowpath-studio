@@ -25,6 +25,14 @@ test('request failures expose safe classifications and schema fields, never valu
   assert.deepEqual(diagnosticError(Object.assign(new Error('The conversation backend rejected the request.'), { status: 400 })), { httpStatus: 400, reason: 'provider' });
   assert.deepEqual(sanitizeVisitorDiagnostic({ ...event, schemaPath: 'input.private-key.0.collectionId' }, 123), { ...event, at: 123, schemaPath: 'input.*.0.collectionId' });
 });
+test('unacknowledged task and final-answer displays retain a bounded failure category', () => {
+  for (const message of ['Task display was not acknowledged.', 'The answer card was not acknowledged.']) {
+    const classified = diagnosticError(new Error(message));
+    assert.deepEqual(classified, { reason: 'display' });
+    assert.deepEqual(sanitizeVisitorDiagnostic({ ...event, ...classified }, 123), { ...event, at: 123, reason: 'display' });
+  }
+  assert.deepEqual(diagnosticError(new Error('An arbitrary private display detail')), {});
+});
 test('chat can explain without changing state, while voice tools reject answer fields', () => {
   const authority = publishedWorkspace(sampleContent('general')), state = emptyWorkspace(authority.publicationId);
   const reply = { batch: null, clarification: '', answer: 'General historical background.' };

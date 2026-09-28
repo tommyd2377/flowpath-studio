@@ -102,11 +102,16 @@ export async function createVisitorRealtimeMailbox(options: z.infer<typeof metad
   const now = dependencies.now ?? Date.now;
   if (metadata.expiresAt <= now() || metadata.expiresAt > now() + VISITOR_SESSION_MS + 30_000) throw inactive();
   const store = dependencies.backend ?? backend();
+  // Expired records cannot affect this new ID. Overlap bounded housekeeping
+  // with its creation; the local backend prunes synchronously before checking
+  // capacity. Await both even on failure so no cleanup outlives this operation.
   // No TTL policy or scheduler is assumed. Crash leftovers are invalid after expiry.
-  await store.pruneExpired(now(), 8).catch(() => undefined);
+  const pruning = store.pruneExpired(now(), 8).catch(() => undefined);
   const capability = { id: randomUUID(), token: randomBytes(32).toString('base64url') };
   const tokenHash = digest(capability.token);
-  await store.create(capability.id, { ...metadata, tokenHash, count: 0, windowAt: now(), windowCount: 0, inputHash: null, update: null });
+  try {
+    await store.create(capability.id, { ...metadata, tokenHash, count: 0, windowAt: now(), windowCount: 0, inputHash: null, update: null });
+  } finally { await pruning; }
   let closed = false;
   let closing: Promise<void> | undefined;
   const subscriptions = new Set<() => void>();

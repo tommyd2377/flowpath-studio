@@ -5,21 +5,23 @@ import type { FieldDescriptor, QueryResult, QuerySpec, SelectionState } from './
 import { z } from 'zod';
 import { canonicalRecordSchema, spaceCollectionSchema } from './collection-space.js';
 import { fieldDescriptorSchema, queryResultSchema, querySpecSchema, selectionStateSchema } from './query.js';
+import { publishedEstimateSchema, type PublishedEstimate } from './estimate.js';
 
 export type TaskRecordCard = Pick<CanonicalRecord, 'id' | 'name' | 'type' | 'summary'> & { media?: CanonicalRecord['media']; group?: { id: string; name: string }; code: string; values: { fieldId: string; label: string; text: string }[] };
 export type VisitorTaskView = {
   navigation?: 'home' | 'reset';
   clarification?: { question: string; options: string[] } | null;
-  focus?: 'query' | 'comparison' | 'detail' | 'research' | 'map' | 'artifact' | 'business' | 'clarification' | 'quote' | 'booking' | 'receipt' | 'cart' | 'slots' | 'records' | 'links';
+  focus?: 'query' | 'comparison' | 'detail' | 'research' | 'map' | 'artifact' | 'business' | 'clarification' | 'quote' | 'booking' | 'receipt' | 'cart' | 'slots' | 'records' | 'links' | 'estimate';
   sessionId: string; revision: number; generation: number; active: boolean; query: QuerySpec;
   queries: { id: string; label: string }[]; collection: SpaceCollection; children: SpaceCollection[]; breadcrumbs: { id: string; name: string }[];
   fields: FieldDescriptor[]; result: QueryResult; records: TaskRecordCard[]; selection: SelectionState; selectedRecords: Pick<CanonicalRecord, 'id' | 'name' | 'type' | 'summary'>[];
   facets?: { fieldId: string; values: { value: string | number | boolean; count: number }[]; unknown: number; coverage: 'complete' | 'partial' }[]; alternatives?: { removeNodeId: string; count: number }[]; omittedChildren?: number; omittedFields?: number; tasks?: { id: string; status: string; completed: number; total: number }[];
   browse?: { children: number; fields: number }; demoActions?: boolean; canUndo: boolean; operationId?: string; comparison?: { fields: FieldDescriptor[]; rows: { id: string; name: string; values: { fieldId: string; text: string }[] }[] };
-  detail?: { nextBlockOffset?: number | null; nextFieldOffset?: number | null; blockOffset?: number; fieldOffset?: number; record: CanonicalRecord; values: { fieldId: string; label: string; text: string }[] };
+  detail?: { priceOptions?: { fieldId: string; label: string; text: string }[]; nextBlockOffset?: number | null; nextFieldOffset?: number | null; blockOffset?: number; fieldOffset?: number; record: CanonicalRecord; values: { fieldId: string; label: string; text: string }[] };
   lookupRecords?: Pick<CanonicalRecord, 'id' | 'name' | 'type' | 'summary'>[];
   links?: CapabilityDefinition[];
   research?: ExternalSearchResult;
+  estimate?: PublishedEstimate;
   map?: { label: string; latitude: number; longitude: number; zoom: number; approximate: true; demo: boolean; sources: { title: string; url: string }[] };
   artifactSummaries?: { id: string; title: string; saved: boolean }[]; artifacts: unknown[]; business: Record<string, unknown>;
 };
@@ -30,7 +32,7 @@ const summarySchema = canonicalRecordSchema.pick({ id: true, name: true, type: t
 export const visitorTaskViewSchema: z.ZodType<VisitorTaskView> = z.object({
   navigation: z.enum(['home', 'reset']).optional(),
   clarification: z.object({ question: z.string().max(500), options: z.array(z.string().max(160)).max(4) }).strict().nullable().optional(),
-  focus: z.enum(['query', 'comparison', 'detail', 'research', 'map', 'artifact', 'business', 'clarification', 'quote', 'booking', 'receipt', 'cart', 'slots', 'records', 'links']).optional(),
+  focus: z.enum(['query', 'comparison', 'detail', 'research', 'map', 'artifact', 'business', 'clarification', 'quote', 'booking', 'receipt', 'cart', 'slots', 'records', 'links', 'estimate']).optional(),
   sessionId: z.string().uuid(), revision: z.number().int().nonnegative(), generation: z.number().int().nonnegative(), active: z.boolean(), query: querySpecSchema,
   queries: z.array(z.object({ id: z.string().max(100), label: z.string().max(160) }).strict()).max(8), collection: spaceCollectionSchema, children: z.array(spaceCollectionSchema).max(24),
   breadcrumbs: z.array(z.object({ id: z.string().max(100), name: z.string().max(180) }).strict()).max(9), fields: z.array(fieldDescriptorSchema).max(32),
@@ -40,16 +42,18 @@ export const visitorTaskViewSchema: z.ZodType<VisitorTaskView> = z.object({
   comparison: z.object({ fields: z.array(fieldDescriptorSchema).max(16), rows: z.array(z.object({ id: z.string().max(100), name: z.string().max(180), values: z.array(valueSchema.omit({ label: true })).max(16) }).strict()).max(6) }).strict().optional(),
   links: z.array(capabilityDefinitionSchema).max(20).optional(),
   research: researchSchema.optional(),
+  estimate: publishedEstimateSchema.optional(),
   lookupRecords: z.array(summarySchema).max(48).optional(),
   map: z.object({ label: z.string().max(160), latitude: z.number().min(-80).max(80), longitude: z.number().min(-180).max(180), zoom: z.number().int().min(2).max(12), approximate: z.literal(true), demo: z.boolean(), sources: z.array(z.object({ title: z.string().max(300), url: z.string().url() }).strict()).max(20) }).strict().optional(),
   artifactSummaries: z.array(z.object({ id: z.string(), title: z.string().max(160), saved: z.boolean() }).strict()).max(12).optional(),
-  detail: z.object({ nextBlockOffset: z.number().int().nullable().optional(), nextFieldOffset: z.number().int().nullable().optional(), blockOffset: z.number().int().optional(), fieldOffset: z.number().int().optional(), record: canonicalRecordSchema, values: z.array(valueSchema).max(64) }).strict().optional(), artifacts: z.array(z.unknown()).max(12), business: z.record(z.string(), z.unknown()),
+  detail: z.object({ priceOptions: z.array(z.object({ fieldId: z.string().max(100), label: z.string().max(160), text: z.string().max(160) }).strict()).max(16).optional(), nextBlockOffset: z.number().int().nullable().optional(), nextFieldOffset: z.number().int().nullable().optional(), blockOffset: z.number().int().optional(), fieldOffset: z.number().int().optional(), record: canonicalRecordSchema, values: z.array(valueSchema).max(64) }).strict().optional(), artifacts: z.array(z.unknown()).max(12), business: z.record(z.string(), z.unknown()),
 }).strict();
 
 /** Record visibility is scoped to the current task presentation, not adjacent regions. */
 export function displayedTaskRecordIds(view: VisitorTaskView): string[] {
   if (!view.active || view.focus === 'clarification') return [];
   if (view.focus === 'detail') return view.detail ? [view.detail.record.id] : [];
+  if (view.focus === 'estimate') return [...new Set(view.estimate?.lines.map(line => line.recordId) ?? [])];
   if (view.focus === 'comparison') return view.comparison?.rows.map(row => row.id) ?? [];
   if (view.focus === 'records') return view.lookupRecords?.map(record => record.id) ?? [];
   return view.records.map(record => record.id);

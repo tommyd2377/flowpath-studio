@@ -10,10 +10,6 @@ export default function VisitorSettings({ content, setContent, busy }: {
   const change = (patch: Partial<Settings>) => setContent({ ...content, visitor: { ...settings, ...patch } });
   return <section aria-label="Visitor conversations">
     <div className="section-heading"><h3>Visitor conversations</h3></div>
-    <label className="field">Assistant purpose
-      <textarea disabled={busy} rows={3} maxLength={1000} value={settings.assistantPurpose ?? ''} onChange={event => change({ assistantPurpose: event.target.value })} placeholder="Who is this site for, and what should the assistant help them discover or do?"/>
-      <span className="field-help">For example: Help visitors explore this travel guide, compare destinations, and open the places and photos they ask about. Applies to chat and voice after publishing; it does not add facts or enable services.</span>
-    </label>
     <label className="field">How visitors interact
       <select disabled={busy} value={settings.enabled ? settings.mode : 'off'} onChange={event => {
         const mode = event.target.value;
@@ -26,7 +22,7 @@ export default function VisitorSettings({ content, setContent, busy }: {
     </label>
     {settings.enabled && <>
       {settings.mode !== 'chat' && <>
-        <label className="field">Maximum voice session<select disabled={busy} value={settings.voiceSessionSeconds ?? 120} onChange={event => change({ voiceSessionSeconds: Number(event.target.value) as Settings['voiceSessionSeconds'] })}><option value={30}>30 seconds</option><option value={60}>1 minute</option><option value={120}>2 minutes</option></select><span className="field-help">Shorten the existing two-minute platform limit to manage usage. Visitors can start another session within the daily allowance.</span></label>
+        <label className="field">Maximum voice session<select disabled={busy} value={settings.voiceSessionSeconds ?? 120} onChange={event => change({ voiceSessionSeconds: Number(event.target.value) as Settings['voiceSessionSeconds'] })}><option value={30}>30 seconds</option><option value={60}>1 minute</option><option value={120}>2 minutes</option><option value={300}>5 minutes</option><option value={600}>10 minutes</option></select><span className="field-help">Choose up to ten minutes per conversation. Longer connected sessions use more voice time. The inactivity timer and daily task allowance still apply.</span></label>
         <label className="field">End voice after inactivity<select disabled={busy} value={settings.voiceIdleTimeoutSeconds} onChange={event => change({ voiceIdleTimeoutSeconds: Number(event.target.value) as Settings['voiceIdleTimeoutSeconds'] })}>
           <option value={30}>30 seconds</option><option value={60}>1 minute</option><option value={120}>2 minutes</option><option value={0}>Never</option>
         </select>

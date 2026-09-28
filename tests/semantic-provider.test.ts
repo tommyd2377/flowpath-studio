@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 import { interpretRelatedSources, parseSemanticProviderReply, semanticReplyJsonSchema } from '../lib/ingestion';
 import type { SourceProvenance } from '../lib/source-provenance';
@@ -16,6 +17,26 @@ function reply() {
     collections: [], relationships: [], facts: [], evidence: [], jobs: [] };
 }
 const parse = (value: unknown, provenance = source) => parseSemanticProviderReply(JSON.stringify(value), provenance);
+
+test('semantic prompt preserves date precision and separates visitor content from import bookkeeping', () => {
+  const implementation = readFileSync(new URL('../lib/ingestion.ts', import.meta.url), 'utf8');
+  const instructions = implementation.slice(implementation.indexOf('instructions: ['), implementation.indexOf("].join(' ')", implementation.indexOf('instructions: [')));
+  assert.match(instructions, /Use a date value only when the source supplies the complete year, month and day/);
+  assert.match(instructions, /Keep year-only or month-and-year dates as text with the same precision/);
+  assert.match(instructions, /never the invented date 2018-02-01/);
+  assert.match(instructions, /guessed dates for validFrom, validTo or observedAt/);
+  assert.match(instructions, /Catalog name and description are visitor-facing content/);
+  assert.match(instructions, /processing details only in issues, never in catalog name, description or other visitor content/);
+});
+
+test('month-only source dates remain supported as text without adding a calendar day', () => {
+  const datedSource: SourceProvenance = { anchors: [{ id: 'opening-month', format: 'text', label: 'Opening', excerpt: 'Harbor Studio opened in February 2018.', lineStart: 1, lineEnd: 1 }], fields: [] };
+  const result = parse({ ...reply(), facts: [{ id: 'opened', entityId: 'harbor', target: { scope: 'property', definition: { id: 'opened', label: 'Opened', type: 'text', unit: null, currency: null }, value: 'February 2018' }, validFrom: null, validTo: null, observedAt: null }], evidence: [{ factId: 'opened', anchorIds: ['opening-month'] }] }, datedSource);
+  assert.equal(result.catalog.facts?.[0].value, 'February 2018');
+  assert.equal(result.catalog.facts?.[0].definition?.type, 'text');
+  assert.equal(result.catalog.facts?.[0].validFrom, undefined);
+  assert.equal(result.catalog.facts?.[0].observedAt, undefined);
+});
 
 test('related prose shares one request while each file keeps its own validated evidence', async () => {
   const sources = ['one', 'two'].map(sourceId => ({ sourceId, name: sourceId + '.pdf', text: 'Harbor Studio offers classes.', provenance: { anchors: [{ ...source.anchors[0], id: sourceId + '-page' }], fields: [] } }));

@@ -1,0 +1,253 @@
+{
+  "measuredAt": "2026-09-28T13:09:49.375Z",
+  "mode": "offline-synthetic",
+  "nodeVersion": "v24.6.0",
+  "warmups": 3,
+  "iterations": 20,
+  "trustedInstructionsBytes": 6360,
+  "limitations": [
+    "No paid API calls or customer data.",
+    "Measures warm packet preparation; excludes provider/network latency and real catalog storage.",
+    "Synthetic v2 index construction is reported separately and excluded from warm timings.",
+    "Byte measurements are not provider token counts."
+  ],
+  "scenarios": [
+    {
+      "name": "small-service",
+      "description": "3 complete offerings across 1 categories, including qualified prices.",
+      "coverage": {
+        "complete": true,
+        "included": {
+          "source": 4,
+          "catalog": 1,
+          "entity": 3,
+          "collection": 1,
+          "relationship": 0,
+          "capability": 0,
+          "photo": 0,
+          "album": 0,
+          "video": 0
+        },
+        "omitted": {
+          "source": 0,
+          "catalog": 0,
+          "entity": 0,
+          "collection": 0,
+          "relationship": 0,
+          "capability": 0,
+          "photo": 0,
+          "album": 0,
+          "video": 0
+        },
+        "catalogNotLoaded": false,
+        "mediaNotLoaded": false
+      },
+      "entityCategories": {
+        "represented": 1,
+        "total": 1,
+        "names": [
+          "category-0"
+        ]
+      },
+      "inputBytes": 4396,
+      "instructionsBytes": 6360,
+      "admittedEntityIds": [
+        "item-0",
+        "item-1",
+        "item-2"
+      ],
+      "metrics": null,
+      "timingMs": {
+        "p50": 0.097,
+        "p95": 0.195,
+        "min": 0.082,
+        "max": 0.256,
+        "setupOutsideTiming": null
+      },
+      "hydration": null
+    },
+    {
+      "name": "mixed-retail-100",
+      "description": "100 complete offerings across 10 categories, including qualified prices.",
+      "coverage": {
+        "complete": false,
+        "included": {
+          "source": 4,
+          "catalog": 1,
+          "entity": 7,
+          "collection": 1,
+          "relationship": 0,
+          "capability": 0,
+          "photo": 0,
+          "album": 0,
+          "video": 0
+        },
+        "omitted": {
+          "source": 0,
+          "catalog": 0,
+          "entity": 93,
+          "collection": 9,
+          "relationship": 0,
+          "capability": 0,
+          "photo": 0,
+          "album": 0,
+          "video": 0
+        },
+        "catalogNotLoaded": false,
+        "mediaNotLoaded": false
+      },
+      "entityCategories": {
+        "represented": 1,
+        "total": 10,
+        "names": [
+          "category-0"
+        ]
+      },
+      "inputBytes": 7619,
+      "instructionsBytes": 6360,
+      "admittedEntityIds": [
+        "item-0",
+        "item-1",
+        "item-2",
+        "item-3",
+        "item-4",
+        "item-5",
+        "item-6"
+      ],
+      "metrics": null,
+      "timingMs": {
+        "p50": 1.167,
+        "p95": 2.648,
+        "min": 1.065,
+        "max": 3.235,
+        "setupOutsideTiming": null
+      },
+      "hydration": null
+    },
+    {
+      "name": "multilingual-large-prose",
+      "description": "Two oversized sections plus complete short policies; UTF-8 and whole-section safeguards.",
+      "coverage": {
+        "complete": false,
+        "included": {
+          "source": 5,
+          "catalog": 0,
+          "entity": 0,
+          "collection": 0,
+          "relationship": 0,
+          "capability": 0,
+          "photo": 0,
+          "album": 0,
+          "video": 0
+        },
+        "omitted": {
+          "source": 2,
+          "catalog": 0,
+          "entity": 0,
+          "collection": 0,
+          "relationship": 0,
+          "capability": 0,
+          "photo": 0,
+          "album": 0,
+          "video": 0
+        },
+        "catalogNotLoaded": false,
+        "mediaNotLoaded": false
+      },
+      "entityCategories": {
+        "represented": 0,
+        "total": 0,
+        "names": []
+      },
+      "inputBytes": 1852,
+      "instructionsBytes": 6360,
+      "admittedEntityIds": [],
+      "metrics": null,
+      "timingMs": {
+        "p50": 0.143,
+        "p95": 0.299,
+        "min": 0.142,
+        "max": 0.302,
+        "setupOutsideTiming": null
+      },
+      "hydration": null
+    },
+    {
+      "name": "v2-10000-records",
+      "description": "10,000 records grouped by category in storage order; cached index and mocked bounded record hydration.",
+      "coverage": {
+        "complete": false,
+        "included": {
+          "source": 2,
+          "catalog": 1,
+          "entity": 19,
+          "collection": 1,
+          "relationship": 0,
+          "capability": 0,
+          "photo": 0,
+          "album": 0,
+          "video": 0
+        },
+        "omitted": {
+          "source": 0,
+          "catalog": 0,
+          "entity": 9981,
+          "collection": 20,
+          "relationship": 0,
+          "capability": 0,
+          "photo": 0,
+          "album": 0,
+          "video": 0
+        },
+        "catalogNotLoaded": false,
+        "mediaNotLoaded": false
+      },
+      "entityCategories": {
+        "represented": 1,
+        "total": 20,
+        "names": [
+          "group-0"
+        ]
+      },
+      "inputBytes": 7678,
+      "instructionsBytes": 6360,
+      "admittedEntityIds": [
+        "record-0",
+        "record-1",
+        "record-2",
+        "record-3",
+        "record-4",
+        "record-5",
+        "record-6",
+        "record-7",
+        "record-8",
+        "record-9",
+        "record-10",
+        "record-11",
+        "record-12",
+        "record-13",
+        "record-14",
+        "record-15",
+        "record-16",
+        "record-17",
+        "record-18"
+      ],
+      "metrics": null,
+      "timingMs": {
+        "p50": 0.503,
+        "p95": 1.271,
+        "min": 0.481,
+        "max": 1.471,
+        "setupOutsideTiming": 135.147
+      },
+      "hydration": {
+        "callsPerRun": [
+          1
+        ],
+        "recordsPerRun": [
+          48
+        ]
+      }
+    }
+  ]
+}

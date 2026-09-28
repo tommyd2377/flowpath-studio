@@ -21,7 +21,7 @@ import { runVisitorTask } from '../lib/visitor-task-runner';
 import { demoExploreResult } from '../lib/explore-model';
 import { retainVisitorResearch, retainedResearchContext } from '../lib/visitor-research-cache';
 import { createVisitorRealtimeControl, type VisitorControlSocket } from '../lib/visitor-realtime-control';
-import { FakeLiveSocket, flushLive } from './helpers/live-fixture';
+import { FakeLiveSocket, flushLive, liveAnswer } from './helpers/live-fixture';
 
 const snapshot = (answer = ''): SurfaceSnapshot => ({ id: randomUUID(), tenantId: 'synthetic', publicationId: 'publication', requestId: null, workspace: emptyWorkspace('publication'), task: null, taskBookmark: null, external: [], selections: {}, answer, primaryId: null, expanded: false, scrollTop: 0 });
 test('one request coalesces multiple result updates and Back branches from the restored state', () => {
@@ -128,19 +128,34 @@ test('restored external evidence stays bound to its tenant, publication and reta
   for (let i = 0; i < 65; i++) retainVisitorResearch('bounded', 'publication', { ...result, id: randomUUID() });
   assert.deepEqual(retainedResearchContext('synthetic', 'publication-1', [result.id]).unavailableIds, [result.id]);
 });
-test('live voice receives exact facts after a long restored answer without truncation or resending facts on scroll', async t => {
+test('compact voice facts recall the complete restored answer in backend context without resending on scroll', async t => {
   const content = { ...sampleContent('general'), visitorSpeaksFirst: true, contact: '+1 212 555 0194' }, authority = publishedWorkspace(content);
   const surface = { version: 1 as const, stateId: randomUUID(), requestId: null, tenantId: 'synthetic', publicationId: authority.publicationId, revision: 1, status: 'committed' as const, layout: 'reading' as const, subject: ['contact'], regions: [{ id: 'contact', kind: 'information' as const, title: 'Contact', referenceIds: ['contact'], role: 'primary' as const, visible: true, selectedId: null }], answer: 'Retained text. '.repeat(300) + 'END_OF_RESTORED_ANSWER', pendingRequestId: null, previous: [], reading: { scrollTop: 0, blockId: null } };
   const carousel = { version: 1 as const, open: true, revision: 1, cards: [{ id: 'contact', kind: 'information' as const, title: 'Contact', referenceIds: ['contact'] }], activeId: 'contact', previousId: null, lastNarratedId: null, expanded: false, reading: surface.reading, media: null };
   const socket = new FakeLiveSocket(), availability = { enabled: true, mode: 'voice' as const, live: true, chatRemaining: 25, voiceRemaining: 5, resetsAt: '' };
-  const control = createVisitorRealtimeControl({ callId: 'surface-test', apiKey: 'synthetic', content, context: { surface, carousel }, initialAvailability: availability, reserveTurn: async () => availability, assertCurrent: async () => {}, emit() {}, onFatal() {}, signal: new AbortController().signal, socketFactory: () => socket as unknown as VisitorControlSocket, fetch: async () => { throw new Error('No model request expected'); } });
+  const requests: { input: { content: string }[] }[] = [];
+  const failures: unknown[] = []; let sequence = 0;
+  const control = createVisitorRealtimeControl({ callId: 'surface-test', apiKey: 'synthetic', content, context: { surface, carousel }, initialAvailability: availability, reserveTurn: async () => availability, assertCurrent: async () => {},
+    emit(event) { if (event.type === 'response_started') void control.applyControl({ seq: ++sequence, ready: true, interactionRevision: event.interactionRevision, viewRevision: event.revision, context: control.recordingSnapshot().context, preparationAck: { revision: event.revision, status: 'applied' } }).catch(error => failures.push(error)); },
+    onFatal(message) { failures.push(message); }, signal: new AbortController().signal, socketFactory: () => socket as unknown as VisitorControlSocket, fetch: async (_url, init) => { requests.push(JSON.parse(String(init?.body))); return Response.json({ status: 'completed', output: [liveAnswer('The retained answer remains subject to its original qualifications.')] }); } });
   t.after(() => control.close()); socket.open(); await control.ready; control.start(); await flushLive();
   const supplied = () => socket.sent.filter(event => event.type === 'session.thinking.append').map(event => String(event.content).replace(/^\[(?:screen|content|reading) \d+ part \d+\/\d+\] /, '')).join('');
-  assert.match(supplied(), /END_OF_RESTORED_ANSWER/); assert.match(supplied(), /212 555 0194/);
+  assert.match(supplied(), /complete retained answer in currentView/); assert.match(supplied(), /"omitted":true/);
+  assert.match(supplied(), /212 555 0194/); assert.doesNotMatch(supplied(), /Retained text|END_OF_RESTORED_ANSWER/);
   const before = supplied().length;
-  await control.applyControl({ seq: 1, ready: true, interactionRevision: 0, viewRevision: 1, context: { carousel, surface: { ...surface, reading: { scrollTop: 300, blockId: null } } } });
+  await control.applyControl({ seq: ++sequence, ready: true, interactionRevision: 0, viewRevision: 1, context: { carousel, surface: { ...surface, reading: { scrollTop: 300, blockId: null } } } });
   await flushLive();
   const observation = supplied().slice(before); assert.match(observation, /300/); assert.doesNotMatch(observation, /212 555 0194|END_OF_RESTORED_ANSWER/);
+  assert.equal(requests.length, 0, 'screen and reading updates do not trigger model work');
+  socket.user('Explain the qualification at the end of the restored answer.');
+  for (let tick = 0; tick < 10 && !requests.length; tick++) await flushLive();
+  assert.equal(requests.length, 1);
+  const currentView = JSON.parse(requests[0].input[0].content).currentView;
+  assert.equal(currentView.answer, surface.answer, 'the backend receives every byte, including the final qualification');
+  assert.match(currentView.answer, /END_OF_RESTORED_ANSWER$/);
+  assert.equal(currentView.reading.scrollTop, 300);
+  assert.deepEqual(currentView.regions, [{ ...surface.regions[0], title: authority.records.find(record => record.reference.id === 'contact')!.name }]);
+  assert.deepEqual(failures, []);
 });
 
 test('audio heartbeats do not resend a surface because knowledge retrieval has a new asOf time', async t => {
@@ -171,13 +186,17 @@ test('gallery paging sends current photo observations without repeating retained
     answer: 'Retained explanation. '.repeat(250) + 'EXACT_END', pendingRequestId: null, previous: [], reading: { scrollTop: 0, blockId: null } };
   const carousel = { version: 1 as const, open: true, revision: 1, cards: surface.regions.map(({ id, kind, title, referenceIds }) => ({ id, kind, title, referenceIds })), activeId: 'gallery', previousId: null, lastNarratedId: null, expanded: false, reading: surface.reading, media: null };
   const socket = new FakeLiveSocket(), availability = { enabled: true, mode: 'voice' as const, live: true, chatRemaining: 25, voiceRemaining: 5, resetsAt: '' };
-  const control = createVisitorRealtimeControl({ callId: 'gallery-context', apiKey: 'synthetic', content, media, context: { surface, carousel }, initialAvailability: availability, reserveTurn: async () => availability, assertCurrent: async () => {}, emit() {}, onFatal() {}, signal: new AbortController().signal, socketFactory: () => socket as unknown as VisitorControlSocket, fetch: async () => { throw new Error('No model request expected'); } });
+  const requests: { input: { content: string }[] }[] = [];
+  const failures: unknown[] = []; let sequence = 0;
+  const control = createVisitorRealtimeControl({ callId: 'gallery-context', apiKey: 'synthetic', content, media, context: { surface, carousel }, initialAvailability: availability, reserveTurn: async () => availability, assertCurrent: async () => {},
+    emit(event) { if (event.type === 'response_started') void control.applyControl({ seq: ++sequence, ready: true, interactionRevision: event.interactionRevision, viewRevision: event.revision, context: control.recordingSnapshot().context, preparationAck: { revision: event.revision, status: 'applied' } }).catch(error => failures.push(error)); },
+    onFatal(message) { failures.push(message); }, signal: new AbortController().signal, socketFactory: () => socket as unknown as VisitorControlSocket, fetch: async (_url, init) => { requests.push(JSON.parse(String(init?.body))); return Response.json({ status: 'completed', output: [liveAnswer('The retained answer remains subject to its original qualifications.')] }); } });
   t.after(() => control.close()); socket.open(); await control.ready; control.start(); await flushLive();
   const before = socket.sent.length;
   for (let seq = 1; seq <= 4; seq++) {
     const photoId = seq % 2 ? 'unlabeled-photo' : 'blue-photo';
     const next = { ...surface, stateId: `selection-${seq}`, regions: [{ ...surface.regions[0], referenceIds: [photoId], selectedId: photoId }, surface.regions[1]], previous: [{ stateId: surface.stateId, title: 'Previous information', subject: ['contact'] }] };
-    await control.applyControl({ seq, ready: true, interactionRevision: seq, viewRevision: 1, context: { carousel, surface: next } }); await flushLive();
+    await control.applyControl({ seq: ++sequence, ready: true, interactionRevision: seq, viewRevision: 1, context: { carousel, surface: next } }); await flushLive();
   }
   const updates = socket.sent.slice(before).filter(event => String(event.event_id).startsWith('visitor_context_'));
   const text = updates.map(event => String(event.content)).join('');
@@ -185,8 +204,19 @@ test('gallery paging sends current photo observations without repeating retained
   assert.match(text, /unlabeled-photo/); assert.match(text, /Reviewed photo of Blue Bowl/);
   assert.equal(updates.some(event => String(event.content).startsWith('[content ')), false);
   assert.ok(updates.length <= 20, 'four selections should not each retransmit many parts of old answer/history');
-  const original = socket.sent.slice(0, before).map(event => String(event.content)).join('');
-  assert.match(original, /212 555 0194/); assert.match(original, /EXACT_END/);
+  const original = socket.sent.slice(0, before).map(event => String(event.content).replace(/^\[(?:screen|photos|content|reading) \d+ part \d+\/\d+\] /, '')).join('');
+  assert.match(original, /212 555 0194/); assert.match(original, /complete retained answer in currentView/);
+  assert.match(original, /"omitted":true/); assert.doesNotMatch(original, /Retained explanation|EXACT_END/);
+  assert.equal(requests.length, 0, 'photo selection does not trigger model work');
+  socket.user('Explain the qualification at the end of the restored answer.');
+  for (let tick = 0; tick < 10 && !requests.length; tick++) await flushLive();
+  assert.equal(requests.length, 1);
+  const currentView = JSON.parse(requests[0].input[0].content).currentView;
+  assert.equal(currentView.answer, surface.answer, 'photo changes cannot clip or discard any retained answer evidence');
+  assert.match(currentView.answer, /EXACT_END$/);
+  assert.equal(currentView.stateId, 'selection-4');
+  assert.equal(currentView.regions[0].selectedId, 'blue-photo');
+  assert.deepEqual(failures, []);
   t.diagnostic(`Four gallery selections: ${updates.length} context fragments, ${Buffer.byteLength(text)} bytes; retained facts sent once.`);
 });
 

@@ -4,11 +4,11 @@ import { liveSessionUrl, liveText, type LiveAudioState, type LiveHistory, type L
 export type LiveSocket = Pick<WebSocket, 'readyState' | 'send' | 'close' | 'terminate' | 'on'>;
 export type LiveRuntimeOptions = {
   sessionId: string; apiKey: string; history?: LiveHistory; signal?: AbortSignal;
-  acceptDelegation?: () => boolean;
+  acceptDelegation?: (id: string | null) => boolean;
   delegate: (context: { transcripts: LiveTranscript[]; history: LiveHistory; report: (kind: 'thinking' | 'commentary', text: string) => void }, signal: AbortSignal) => Promise<{ text: string; silent?: boolean }>;
   onTranscript?: (fragment: LiveTranscript) => void;
   onUsage?: (usage: LiveUsage) => void; onBusy?: (busy: boolean) => void;
-  onTaskError?: (message: string) => void;
+  onTaskError?: (message: string, error: unknown) => void;
   onFatal: (message: string) => void;
   socketFactory?: (url: string, options: WebSocket.ClientOptions) => LiveSocket;
   closeTimeoutMs?: number; taskTimeoutMs?: number;
@@ -89,10 +89,10 @@ export function createLiveRuntime(options: LiveRuntimeOptions) {
     return closed;
   }
   function abort() { void close(); }
-  async function run(id: string) {
-    if (!enabled || closing) { pending = id; return; }
+  async function run(id: string | null) {
+    if (!enabled || closing) { if (id) pending = id; return; }
     // Reject status/backchannel or stale delegations before touching active work.
-    if (options.acceptDelegation?.() === false) return;
+    if (options.acceptDelegation?.(id) === false) return;
     task?.abort();
     const controller = new AbortController(); task = controller;
     const version = ++epoch;
@@ -116,7 +116,7 @@ export function createLiveRuntime(options: LiveRuntimeOptions) {
     } catch (error) {
       if (!closing && version === epoch && !controller.signal.aborted) {
         const message = liveTaskFailureMessage(error);
-        options.onTaskError?.(message);
+        options.onTaskError?.(message, error);
         // Model commentary: report the bounded backend failure and available recovery options.
         append('commentary', `${message} You can try another question or use the page controls.`, id);
       }
@@ -169,6 +169,14 @@ export function createLiveRuntime(options: LiveRuntimeOptions) {
   if (options.signal?.aborted) abort();
   return {
     ready, closed, close, append,
+    // Application-initiated work uses null, never a fabricated provider delegation ID.
+    // The same acceptance, cancellation, deadline and usage path owns both entry points.
+    request(options: { replacePending?: boolean } = {}) {
+      if (!enabled || closing || task && !options.replacePending) return false;
+      const previous = task;
+      void run(null);
+      return Boolean(task && task !== previous);
+    },
     // Model instructions: enable listening and responses once the application is ready.
     start(mode: 'listen' | 'respond' = 'respond') {
       if (closing || enabled) return;

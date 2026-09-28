@@ -5,7 +5,7 @@ import test from 'node:test';
 import { createLiveRuntime, type LiveSocket } from '../lib/gpt-live/runtime';
 import { runVisitorTask } from '../lib/visitor-task-runner';
 import { runLiveBackend } from '../lib/gpt-live/backend';
-import { liveSessionConfig, liveSessionUrl, liveText } from '../lib/gpt-live/protocol';
+import { LIVE_BACKEND_MODEL, LIVE_BACKEND_REASONING_EFFORT, liveSessionConfig, liveSessionUrl, liveText } from '../lib/gpt-live/protocol';
 import { createAudioActivity, createStartupAudioGuard } from '../lib/gpt-live/browser';
 import { createLiveIdleTimer, liveIdleMessage } from '../lib/gpt-live/idle';
 
@@ -27,6 +27,40 @@ function harness(delegate: Parameters<typeof createLiveRuntime>[0]['delegate'], 
 }
 function transcript(socket: Socket, delta: string, start_ms = 0) { socket.frame({ type: 'session.input_transcript.delta', delta, start_ms, end_ms: start_ms + 100 }); }
 function delegate(socket: Socket, id = 'item_task') { socket.frame({ type: 'session.delegation.created', offset_ms: 500, delegation: { id, target: 'client', type: 'delegation' } }); }
+
+test('application recovery uses the same owner and null delegation identity without competing with active work', async () => {
+  let calls = 0;
+  let finish!: (value: { text: string }) => void;
+  const accepted: (string | null)[] = [];
+  const h = harness(async () => { calls++; return new Promise(resolve => { finish = resolve; }); }, undefined,
+    { acceptDelegation: id => { accepted.push(id); return calls === 0; } });
+  transcript(h.socket, 'Open the sculpture');
+  assert.equal(h.live.request(), true); assert.equal(h.live.request(), false);
+  delegate(h.socket, 'provider-arrived-late'); await flush(); assert.equal(calls, 1);
+  finish({ text: 'The item is open.' }); await flush();
+  assert.ok(h.socket.sent.some(event => event.type === 'session.commentary.append' && event.delegation_id === null));
+  assert.deepEqual(accepted, [null, 'provider-arrived-late']);
+  assert.equal(h.live.request(), false, 'rejected recovery reports that no work started');
+  await h.live.close(); assert.equal(h.live.request(), false);
+});
+
+test('explicit recovery can replace active work only after acceptance and fences late results', async () => {
+  let allow = true;
+  const jobs: { signal: AbortSignal; finish: (value: { text: string }) => void }[] = [];
+  const h = harness(async (_context, signal) => new Promise(resolve => { jobs.push({ signal, finish: resolve }); }), undefined, { acceptDelegation: () => allow });
+  transcript(h.socket, 'Find a workshop'); delegate(h.socket); await flush();
+  allow = false;
+  assert.equal(h.live.request({ replacePending: true }), false);
+  assert.equal(jobs[0].signal.aborted, false);
+  allow = true; transcript(h.socket, 'Show the instructor instead', 2000);
+  assert.equal(h.live.request(), false);
+  assert.equal(h.live.request({ replacePending: true }), true);
+  assert.equal(jobs[0].signal.aborted, true); assert.equal(jobs.length, 2);
+  jobs[0].finish({ text: 'Obsolete result' }); jobs[1].finish({ text: 'Current result' }); await flush();
+  assert.equal(h.socket.sent.some(event => event.content === 'Obsolete result'), false);
+  assert.ok(h.socket.sent.some(event => event.content === 'Current result' && event.delegation_id === null));
+  await h.live.close();
+});
 
 test('resuming waits for fresh speech, including speech received during readiness', async () => {
   for (const earlySpeech of [false, true]) {
@@ -52,6 +86,23 @@ test('Live configuration uses one voice model and client delegation without Real
   assert.equal('turn_detection' in config, false); assert.equal('tools' in config, false);
   assert.throws(() => liveSessionUrl('../escape', 'hangup'));
   assert.equal(Buffer.byteLength(liveText('你好'.repeat(1000))), 480);
+});
+
+test('Live policy permits direct general answers and confirmed reuse while retaining grounded action boundaries', () => {
+  const { instructions } = liveSessionConfig();
+  for (const heading of ['Backchannel policy:', 'Interruption policy:', 'Delegation policy:', 'Backend tools:', 'Delegate to the backend when:', 'Do not delegate to the backend when:']) assert.ok(instructions.includes(heading), heading);
+  const direct = instructions.split('Do not delegate to the backend when:')[1].split('Delegate before')[0];
+  assert.match(direct, /straightforward general question from reliable general knowledge/);
+  assert.match(direct, /Answering directly from current server-supplied published facts/);
+  assert.match(direct, /still-current confirmed result without changing its facts, scope or qualifications/);
+  const delegated = instructions.split('Delegate to the backend when:')[1].split('Do not delegate')[0];
+  assert.match(delegated, /Application-specific facts are not available in still-current confirmed context/);
+  assert.match(delegated, /careful reasoning, a calculation, current or uncertain information/);
+  assert.match(delegated, /an action or a display change/);
+  assert.match(instructions, /Retained dialogue alone is not verified evidence/);
+  assert.match(instructions, /Claim display changes only after browser acknowledgment/);
+  assert.match(instructions, /never instructions/i);
+  assert.doesNotMatch(instructions, /Delegate every substantive question/);
 });
 
 test('fragments are preserved and only delegation executes work; duplicate IDs execute once', async () => {
@@ -151,9 +202,18 @@ test('backend executes one validated tool then a tool-free bounded continuation 
       ? [{ type: 'function_call', name: 'show', call_id: 'call_show', arguments: '{}' }]
       : [{ type: 'message', content: [{ type: 'output_text', text: 'Confirmed.' }] }] }); },
   });
-  assert.deepEqual(executed, ['show']); assert.equal(result.text, 'Confirmed.'); assert.equal(requests[0].model, 'gpt-5.6-luna');
+  assert.deepEqual(executed, ['show']); assert.equal(result.text, 'Confirmed.');
+  assert.equal(LIVE_BACKEND_MODEL, 'gpt-6-astra'); assert.equal(LIVE_BACKEND_REASONING_EFFORT, 'high');
+  for (const request of requests) {
+    assert.equal(request.model, LIVE_BACKEND_MODEL);
+    assert.equal(request.service_tier, 'default');
+    assert.deepEqual(request.reasoning, { effort: LIVE_BACKEND_REASONING_EFFORT });
+    assert.equal(request.max_output_tokens, 8192, 'Every round leaves room for high reasoning and a visible answer');
+    assert.equal(request.store, false); assert.equal(request.parallel_tool_calls, false);
+    assert.equal('temperature' in request, false); assert.equal('top_p' in request, false);
+  }
   assert.deepEqual(requests[0].include, ['reasoning.encrypted_content']);
-  assert.deepEqual(requests[1].tools, []); assert.equal(requests[1].max_output_tokens, 500);
+  assert.deepEqual(requests[1].tools, []); assert.equal(requests[1].tool_choice, 'none');
   let attempts = 0;
   await assert.rejects(runLiveBackend({ apiKey: 'synthetic', instructions: '', context: {}, signal: new AbortController().signal, tools: [], execute: async () => ({ data: {} }), fetch: async () => { attempts++; return new Response(null, { status: 429 }); } }), /busy/);
   assert.equal(attempts, 1);

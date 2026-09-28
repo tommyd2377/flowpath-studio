@@ -55,3 +55,16 @@ export function websiteTaskFixture(kind: 'products' | 'services', count = 40): P
   });
   return publicationSpaceSchema.parse(space);
 }
+
+/** Synthetic reproduction of a menu overview beside independently browsable offerings. */
+export function recordedMenuFixture(): PublicationSpace {
+  const base = taskFixture();
+  const names = ['Red & Blue Velvet', 'Red & Blue Velvet with Nuts', 'Blue Velvet', 'Blue Velvet with Nuts', 'Red Velvet', 'Red Velvet with Nuts', 'Vanilla Cupcake'];
+  return publicationSpaceSchema.parse({ ...base, name: 'Synthetic dessert shop', fields: [], relationshipTypes: [], relationships: [],
+    collections: ['root', 'website', 'topics', 'overview', 'cakes', 'cupcakes'].map(id => ({ id, name: ({ root: 'Dessert shop', website: 'Website', topics: 'Topics', overview: 'Menu and offerings', cakes: 'Retail / Cakes', cupcakes: 'Retail / Cupcakes' } as Record<string, string>)[id], introduction: '', kind: 'explicit', view: 'grid' })),
+    edges: [{ parentId: 'root', childId: 'website' }, { parentId: 'website', childId: 'topics' }, { parentId: 'topics', childId: 'overview' }, { parentId: 'root', childId: 'cakes' }, { parentId: 'root', childId: 'cupcakes' }],
+    records: [{ id: 'menu-article', type: 'article', name: 'Our Dessert Menu', summary: 'Read about velvet cakes and cupcakes.', aliases: [], assertions: [], blocks: [] },
+      ...names.map((name, i) => ({ id: `cake-${i}`, type: 'type-offering', name, summary: 'Published example; availability is not verified.', aliases: [], assertions: [], blocks: [] }))],
+    memberships: [{ collectionId: 'overview', recordId: 'menu-article' }, ...names.map((_, i) => ({ collectionId: i === 6 ? 'cupcakes' : 'cakes', recordId: `cake-${i}` }))],
+  });
+}

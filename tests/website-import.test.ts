@@ -28,6 +28,10 @@ function fixture(overrides: Record<string, { text: string; status?: number; type
 test('domain normalization is HTTPS-only and rejects credentials, private and transactional destinations', () => {
   assert.equal(normalizeWebsiteUrl('harbor.example/about?utm_source=share#team').toString(), 'https://harbor.example/about');
   for (const url of ['http://harbor.example', 'https://user:secret@harbor.example', 'https://127.0.0.1', 'https://harbor.example/checkout', 'https://harbor.example/?search=all', 'https://harbor.example/%61ccount']) assert.throws(() => normalizeWebsiteUrl(url));
+  for (const path of ['/my-account', '/my-account-2/', '/account-2', '/checkout-2', '/basket', '/basket-3', '/shopping-cart', '/orders', '/order-now', '/order-online-2', '/online-ordering', '/place-order', '/shop/cart-2', '/wp-login.php']) {
+    assert.throws(() => normalizeWebsiteUrl(`https://harbor.example${path}`), /cannot be imported/);
+  }
+  for (const path of ['/accounting', '/ordering-guide', '/basket-weaving', '/checkout-policy']) assert.equal(normalizeWebsiteUrl(`https://harbor.example${path}`).pathname, path);
 });
 
 test('discovery combines sitemaps with nested navigation and records robots exclusions', async () => {
@@ -39,11 +43,41 @@ test('discovery combines sitemaps with nested navigation and records robots excl
   assert.ok(!calls.some(url => /\/private|\/account/.test(url)));
 });
 
+test('discovery prioritizes primary navigation over body links and noisy sitemaps within existing bounds', async () => {
+  const primary = ['/our-menu', '/about-us', '/faq-page', '/contact-us', '/catering'];
+  const transactional = ['/my-account-2', '/checkout-2', '/basket', '/order-online-2'];
+  const bodyLinks = Array.from({ length: 30 }, (_, index) => `/archive-${index}`);
+  const sitemapPaths = [...Array.from({ length: 110 }, (_, index) => `/sample-page-${index}`), ...transactional, ...primary];
+  const anchor = (path: string) => `<a href="${path}">${path.slice(1)}</a>`;
+  const { io, calls } = fixture({
+    '/': { text: `${home}${bodyLinks.map(anchor).join('')}<nav aria-label="Main">${[...transactional, ...primary].map(anchor).join('')}</nav>` },
+    '/sitemap.xml': { text: `<urlset>${sitemapPaths.map(path => `<url><loc>https://harbor.example${path}</loc></url>`).join('')}</urlset>`, type: 'application/xml' },
+    ...Object.fromEntries([...primary, ...bodyLinks].map(path => [path, { text: about.replaceAll('About', path.slice(1)) }])),
+  });
+  const result = await discoverWebsite('harbor.example', io);
+  const selected = result.pages.filter(page => page.status === 'ready').slice(0, 24).map(page => new URL(page.url).pathname);
+  assert.deepEqual(result.pages.slice(0, primary.length + 1).map(page => new URL(page.url).pathname), ['/', ...primary]);
+  assert.ok(primary.every(path => selected.includes(path)));
+  assert.equal(result.pages.length, 100);
+  assert.equal(calls.filter(url => !['/robots.txt', '/sitemap.xml'].includes(new URL(url).pathname)).length, 12);
+  assert.ok(result.notes.some(note => note.startsWith('Discovery reached a bound')));
+  assert.ok(!result.pages.some(page => transactional.includes(new URL(page.url).pathname)));
+  assert.ok(!calls.some(url => transactional.includes(new URL(url).pathname)));
+});
+
+test('an unreadable starting page is attempted once and still falls back to sitemap discovery', async () => {
+  const { io, calls } = fixture({ '/': { text: '<div id="root"></div><script>loadContent()</script>' } });
+  const result = await discoverWebsite('harbor.example', io);
+  assert.equal(result.pages[0].status, 'failed');
+  assert.equal(result.pages.find(page => page.url.endsWith('/services'))?.status, 'ready');
+  assert.equal(calls.filter(url => new URL(url).pathname === '/').length, 1);
+});
+
 test('nested sitemaps and www redirects are bounded; redirects never fetch other hosts or blocked paths', async () => {
   const first = fixture({ '/sitemap.xml': { text: '<sitemapindex><sitemap><loc>https://harbor.example/pages.xml</loc></sitemap></sitemapindex>', type: 'application/xml' }, '/pages.xml': { text: '<urlset><url><loc>https://harbor.example/team</loc></url></urlset>', type: 'text/xml' }, '/old': { text: '', status: 301, location: 'https://www.harbor.example/about' } });
   assert.ok((await discoverWebsite('harbor.example', first.io)).pages.some(page => page.url.endsWith('/team')));
   assert.equal((await importWebsitePages('harbor.example', ['https://harbor.example/old'], first.io)).pages[0].url, 'https://www.harbor.example/about');
-  for (const location of ['https://outside.example/', 'https://harbor.example/private', 'https://harbor.example/account', 'https://127.0.0.1/']) {
+  for (const location of ['https://outside.example/', 'https://harbor.example/private', 'https://harbor.example/account', 'https://harbor.example/my-account-2', 'https://harbor.example/checkout-2', 'https://harbor.example/basket', 'https://harbor.example/order-online-2', 'https://127.0.0.1/']) {
     const { io, calls } = fixture({ '/old': { text: '', status: 302, location } });
     await assert.rejects(() => importWebsitePages('harbor.example', ['https://harbor.example/old'], io));
     assert.ok(!calls.includes(location));

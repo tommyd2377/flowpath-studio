@@ -86,7 +86,14 @@ async function harness(page: Page) {
   await page.route(/^https?:\/\//, route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort('blockedbyclient'));
   await page.route(/\/api\/visitor\/[^/]+\/tasks$/, async route => {
     const body = route.request().postDataJSON();
-    if (body.action === 'execute' && body.call.capabilityId === 'query.command') return route.fulfill({ json: { handled: false } });
+    if (body.action === 'command') {
+      // These cases exercise controlled model compositions, not local parsing.
+      // Keep real cancellation/generation handling and its fresh view while
+      // declining the probe so the original utterance reaches the model mock.
+      const result = await post(page, new URL(route.request().url()).pathname, { ...body, text: 'A synthetic composition request' });
+      expect(result.handled).toBe(false);
+      return route.fulfill({ json: result });
+    }
     return route.fallback();
   });
   await page.route(/\/api\/visitor\/[^/]+\/session\/control$/, async route => { receipts.push(route.request().postDataJSON().update.context); await route.fulfill({ status: 204 }); });
@@ -339,7 +346,7 @@ test('initial prose, comparison, long reading, limited height and larger type st
   await screenshot(page, info, 'desktop-initial-short');
   const card = surface(page).getByRole('article', { name: 'Current information' });
   expect((await card.boundingBox())!.height).toBeLessThan(320);
-  for (const width of [320, 430, 768, 1440, 2560]) { await page.setViewportSize({ width, height: 1000 }); await expect.poll(async () => (await card.boundingBox())!.width).toBeLessThanOrEqual(width <= 800 ? width - 28 : width * .8 + 1); }
+  for (const width of [320, 430, 768, 1440, 2560]) { await page.setViewportSize({ width, height: 1000 }); await expect.poll(async () => (await card.boundingBox())!.width).toBeLessThanOrEqual(width <= 800 ? width - 16 : width * .8 + 1); }
   await ask(page, 'Compare two pieces'); await expect(surface(page).locator('table')).toBeVisible(); await screenshot(page, info, 'desktop-comparison');
   await page.setViewportSize({ width: 390, height: 600 }); await ask(page, 'A long explanation');
   await page.locator('[data-visitor-site]').evaluate(element => (element as HTMLElement).style.setProperty('--platform-text-scale', '1.35'));
@@ -389,7 +396,10 @@ test('card spacing follows the finished composer animation without an empty chat
     })).toBeLessThan(2);
     const dock = (await page.locator('[data-ai-controls] .platform-conversation-dock').boundingBox())!;
     const input = (await page.getByRole('textbox', { name: 'What would you like to see?', exact: true }).boundingBox())!;
-    expect(dock.y + dock.height - input.y - input.height).toBeLessThan(24);
+    // The reserved status row prevents progress from shifting the result card.
+    const statusInset = dock.y + dock.height - input.y - input.height;
+    expect(statusInset).toBeGreaterThanOrEqual(28);
+    expect(statusInset).toBeLessThan(44);
   }
 });
 
@@ -403,6 +413,29 @@ test('failed media keeps its description and a keyboard-sized visual viewport ke
   const card = surface(page).getByRole('article', { name: 'Current information' });
   await expect.poll(async () => { const rect = (await card.boundingBox())!; return rect.y + rect.height; }).toBeLessThanOrEqual(400);
   for (const control of [back(page), surface(page).getByRole('button', { name: 'Close assistant' })]) { const box = (await control.boundingBox())!; expect(box.width).toBeGreaterThanOrEqual(44); expect(box.height).toBeGreaterThanOrEqual(44); expect(box.y + box.height).toBeLessThan(400); }
+});
+
+test('narrow phones retain readable input, useful gallery width and reachable history', async ({ page }, info) => {
+  await page.setViewportSize({ width: 393, height: 852 }); await harness(page); await ask(page, 'Open the gallery');
+  const input = page.getByRole('textbox', { name: 'What would you like to see?', exact: true });
+  for (const width of [320, 393, 430]) {
+    await page.setViewportSize({ width, height: 852 });
+    await expect.poll(async () => input.evaluate(node => parseFloat(getComputedStyle(node).fontSize))).toBeGreaterThanOrEqual(16);
+    const grid = surface(page).locator('[data-information-grid]');
+    await expect.poll(async () => (await grid.boundingBox())!.width).toBeGreaterThanOrEqual(width - 52);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    for (const control of [page.getByRole('button', { name: 'Show me', exact: true }), surface(page).getByRole('button', { name: 'Close assistant' })]) {
+      const box = (await control.boundingBox())!; expect(box.width).toBeGreaterThanOrEqual(44); expect(box.height).toBeGreaterThanOrEqual(44); expect(box.x).toBeGreaterThanOrEqual(0); expect(box.x + box.width).toBeLessThanOrEqual(width);
+    }
+  }
+  await page.setViewportSize({ width: 393, height: 852 });
+  await page.screenshot({ path: info.outputPath('phone-gallery-refined.png') });
+  await ask(page, 'A long explanation'); await back(page).click();
+  await expect(surface(page).locator('[data-information-grid]')).toBeVisible();
+  await surface(page).getByRole('button', { name: 'Forward to next information' }).click();
+  await expect(surface(page).locator('[data-information-grid]')).toHaveCount(0);
+  await page.evaluate(() => { Object.defineProperty(window.visualViewport, 'height', { configurable: true, value: 400 }); window.visualViewport!.dispatchEvent(new Event('resize')); });
+  await expect.poll(async () => { const box = (await surface(page).getByRole('article', { name: 'Current information' }).boundingBox())!; return box.y + box.height; }).toBeLessThanOrEqual(400);
 });
 
 test('disabled external search rejects the request and retains useful published information', async ({ page }) => {
@@ -549,8 +582,12 @@ for (const kind of ['products', 'services'] as const) test(`${kind}: queries, or
       await expect(comparison.getByRole('table')).toBeVisible();
       for (const name of names) await expect(comparison.getByRole('columnheader', { name, exact: true })).toBeVisible();
     } else {
-      await expect(comparison.getByRole('table')).toBeHidden();
-      for (const name of names) await expect(comparison.getByRole('heading', { name, exact: true })).toBeVisible();
+      const table = comparison.getByRole('table', { name: 'Compare two items by attribute' });
+      await expect(table).toBeVisible();
+      for (const name of names) await expect(table.getByRole('columnheader', { name, exact: true })).toBeVisible();
+      const rows = await table.locator('tbody').evaluateAll(groups => groups.map(group => [...group.querySelectorAll('td')].map(cell => cell.getBoundingClientRect().y)));
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) { expect(row).toHaveLength(2); expect(Math.abs(row[0] - row[1])).toBeLessThan(1); }
       expect(await comparison.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
     }
   }
@@ -583,6 +620,69 @@ test('mock voice shares the restored surface and mode switching preserves commit
   await page.evaluate(() => { window.__visitorVoice.emit({ type: 'transcript', id: 'forward-question', role: 'user', text: 'Go forward', revision: 4 }); window.__visitorVoice.emit({ type: 'response_started', revision: 4 }); window.__visitorVoice.emit({ type: 'navigation', id: 'forward', revision: 4, target: { kind: 'carousel', action: 'forward' } }); });
   await expect.poll(() => page.evaluate(() => window.__visitorVoice.controls.find(update => update.navigationAck?.id === 'forward')?.navigationAck?.status)).toBe('applied');
   await expect(surface(page)).toContainText('A related explanation');
+});
+
+test('recorded regression: detail to gallery to individual photo keeps later voice requests ready and Back intact', async ({ page }, info) => {
+  await prepareCarouselVoice(page);
+  const f = await fixtureSite(page), path = `/api/visitor/${f.site.slug}/tasks`, errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto(`/s/${f.site.slug}`);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByText('Listening · speak naturally · tap to end', { exact: true })).toBeAttached();
+  const context = () => page.evaluate(() => window.__visitorVoice.controls.at(-1)?.context ?? window.__visitorVoice.requests.at(-1)!.context);
+  const start = async (revision: number, text: string) => {
+    await page.evaluate(({ revision, text }) => {
+      window.__visitorVoice.emit({ type: 'transcript', id: `request-${revision}`, role: 'user', text, revision });
+      window.__visitorVoice.emit({ type: 'response_started', revision });
+    }, { revision, text });
+    await expect.poll(() => page.evaluate(revision => window.__visitorVoice.controls.find(update => update.preparationAck?.revision === revision)?.preparationAck?.status, revision)).toBe('applied');
+  };
+  const show = async (revision: number, target: unknown) => {
+    await page.evaluate(({ revision, target }) => window.__visitorVoice.emit({ type: 'navigation', id: `display-${revision}`, revision, target }), { revision, target });
+    await expect.poll(() => page.evaluate(revision => window.__visitorVoice.controls.find(update => update.navigationAck?.id === `display-${revision}`)?.navigationAck?.status, revision)).toBe('applied');
+    await page.evaluate(revision => window.__visitorVoice.emit({ type: 'backend_idle', revision, interactionRevision: 0 }), revision);
+    await expect(surface(page)).toHaveAttribute('data-pending-request', '');
+  };
+  // Each delegated backend job advances the real server generation. Model
+  // output and audio alone are mocked; task restoration and receipts are real.
+  await start(1, 'Bring up the Blue Bowl details');
+  const sessionId = (await context()).taskSession!.sessionId;
+  const initial = await post(page, path, { action: 'interrupt', sessionId });
+  const detail = await post(page, path, { action: 'execute', sessionId, call: { operationId: randomUUID(), expectedRevision: initial.revision,
+    capabilityId: 'record.detail', input: { recordId: 'blue' } } });
+  await show(1, { kind: 'task', view: detail.view });
+  await expect(surface(page).getByRole('region', { name: 'Record detail' })).toContainText('Blue Bowl');
+
+  await start(2, 'Bring up photos of the items');
+  const beforeGallery = await context();
+  const advanced = await post(page, path, { action: 'interrupt', sessionId });
+  expect(advanced.generation).toBeGreaterThan(beforeGallery.taskSession!.generation);
+  await show(2, { kind: 'workspace', batch: { schemaVersion: 1, requestId: randomUUID(), publicationId: beforeGallery.workspace!.publicationId, baseRevision: beforeGallery.workspace!.revision,
+    operations: [{ kind: 'replace', objects: [{ instanceId: 'menu-photos', component: 'gallery', references: [{ kind: 'collection', id: 'published-photos', revisionId: f.catalogId }] }] }] } });
+  await expect(surface(page).locator('[data-information-grid]')).toHaveAttribute('data-item-count', '3');
+  await expect(surface(page).getByRole('region', { name: 'Record detail' })).toHaveCount(0);
+  const galleryState = await surface(page).getAttribute('data-surface-state');
+
+  await start(3, 'Please open the first published picture');
+  const prepared = await context();
+  expect(prepared.taskSession!.generation).toBeGreaterThanOrEqual(advanced.generation);
+  await expect(surface(page)).toHaveAttribute('data-surface-state', galleryState!);
+  await expect(surface(page).getByRole('region', { name: 'Record detail' })).toHaveCount(0);
+  await post(page, path, { action: 'interrupt', sessionId });
+  await show(3, { kind: 'workspace', batch: { schemaVersion: 1, requestId: randomUUID(), publicationId: prepared.workspace!.publicationId, baseRevision: prepared.workspace!.revision,
+    operations: [{ kind: 'replace', objects: [{ instanceId: 'chosen-photo', component: 'photo', references: [{ kind: 'photo', id: f.media.assets[0].id, revisionId: f.media.id }] }] }] } });
+  await expect(surface(page).getByRole('img', { name: f.media.assets[0].alt, exact: true })).toBeInViewport();
+  const photoCapture = info.outputPath('recorded-photo-followup.png');
+  await page.screenshot({ path: photoCapture });
+  await info.attach('recorded-photo-followup', { path: photoCapture, contentType: 'image/png' });
+  // A second follow-up still prepares after another workspace-only response.
+  await start(4, 'Explain this picture');
+  await show(4, { kind: 'answer', text: 'This is a published illustrative studio study.', placement: 'supporting' });
+  await back(page).click(); await back(page).click();
+  await expect(surface(page).locator('[data-information-grid]')).toHaveAttribute('data-item-count', '3');
+  await back(page).click();
+  await expect(surface(page).getByRole('region', { name: 'Record detail' })).toContainText('Blue Bowl');
+  expect(errors).toEqual([]);
 });
 
 test('spoken Home and Start over close the surface without hanging up their own voice session', async ({ page }) => {

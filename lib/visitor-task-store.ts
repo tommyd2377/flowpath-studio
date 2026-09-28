@@ -13,7 +13,7 @@ const taskSceneSchema = z.object({ operationId: z.string().uuid().optional(), qu
 type TaskScene = z.infer<typeof taskSceneSchema>;
 const viewportSchema = taskSceneSchema.extend({ revision: z.number().int().nonnegative(), generation: z.number().int().nonnegative(), ready: z.boolean() }).strict();
 const pageSchema = z.object({ queryId: z.string(), revision: z.number().int(), cursor: z.string() }).strict().nullable();
-const presentationSchema = z.object({ type: z.enum(['records', 'comparison', 'detail', 'map', 'research', 'links']), data: z.unknown() }).strict().nullable();
+const presentationSchema = z.object({ type: z.enum(['records', 'comparison', 'detail', 'map', 'research', 'links', 'estimate']), data: z.unknown() }).strict().nullable();
 const queryHistorySchema = z.object({ current: querySpecSchema, past: z.array(querySpecSchema).max(20) }).strict();
 const navigationSchema = z.object({ queryId: z.string().nullable(), page: pageSchema, presentation: presentationSchema }).strict();
 const confirmedSchema = z.object({ scene: taskSceneSchema.nullable().default(null), activeQueryId: z.string().nullable(), queries: z.array(queryHistorySchema).max(8), page: pageSchema, presentation: presentationSchema, navigation: z.array(navigationSchema).max(8), selection: selectionStateSchema.optional(), activeArtifactId: z.string().nullable().optional(), browse: z.object({ children: z.number().int(), fields: z.number().int() }).optional() }).strict();
@@ -67,21 +67,29 @@ export class VisitorTaskStore {
       surfaceHistory: [], clarification: null, browse: { children: 0, fields: 0 }, page: null, presentation: null, navigation: [], confirmed: null, queries: [], selection: { version: 2, selectionId: randomUUID(), revision: 0, publication, members: [] }, tasks: [], receipts: [], evidence: [], researchMemory: [], operations: [], scene: null, activeArtifactId: null, artifacts: [], business: {} };
     await this.documents.create(id, session); return session;
   }
-  async read(id: string, publication: PublicationRef): Promise<VisitorTaskSession> {
+  async read(id: string, publication: PublicationRef, options?: { viewport: false | 'parallel' }): Promise<VisitorTaskSession> {
     z.string().uuid().parse(id);
-    const session = sessionSchema.parse(await this.documents.read(id));
+    // A resumed request needs both documents. Overlap their I/O only when
+    // requested; retain scene failures until the validated session needs it.
+    const [raw, observed] = await Promise.all([this.documents.read(id), options?.viewport === 'parallel'
+      ? this.documents.read(`scene-${id}`).then(value => ({ status: 'fulfilled' as const, value }), reason => ({ status: 'rejected' as const, reason })) : undefined]);
+    const session = sessionSchema.parse(raw);
     if (queryHash(publication) !== queryHash(session.publication)) throw new Error('Publication changed. Start a new visitor session.');
     if (this.now() - session.createdAt >= 2 * 60 * 60_000 || this.now() - session.touchedAt >= 30 * 60_000) throw new Error('Visitor session expired.');
     pruneVisitorConversationMemory(session, this.now());
-    return { ...session, viewport: await this.viewport(session) };
+    // Receipt/observation writes validate against the saved operation itself.
+    // A null viewport deliberately supplies no authority for visible ordinals.
+    return { ...session, viewport: options?.viewport === false ? null : await this.viewport(session, observed) };
   }
-  private async viewport(session: VisitorTaskSession): Promise<TaskScene | null> {
+  private async viewport(session: VisitorTaskSession, loaded?: PromiseSettledResult<unknown | null>): Promise<TaskScene | null> {
     const base = session.scene, query = session.queries.find(value => value.current.queryId === session.activeQueryId)?.current;
     if (!base?.operationId || base.queryId !== query?.queryId || base.queryRevision !== query.revision) return null;
-    const raw = await this.documents.read(`scene-${session.id}`);
+    if (loaded?.status === 'rejected') throw loaded.reason;
+    const raw = loaded?.status === 'fulfilled' ? loaded.value : await this.documents.read(`scene-${session.id}`);
     if (!raw) return base;
     const observed = viewportSchema.parse(raw);
-    if (observed.operationId !== base.operationId || observed.generation !== session.generation || observed.sceneRevision < base.sceneRevision) return base;
+    if (observed.operationId !== base.operationId || observed.generation !== session.generation || observed.sceneRevision < base.sceneRevision
+      || observed.queryId !== base.queryId || observed.queryRevision !== base.queryRevision || observed.resultSetId !== base.resultSetId) return base;
     return observed.ready ? taskSceneSchema.parse({ operationId: observed.operationId, queryId: observed.queryId, queryRevision: observed.queryRevision, resultSetId: observed.resultSetId, sceneRevision: observed.sceneRevision, recordIds: observed.recordIds }) : null;
   }
   /** Viewport writes do not contend with task-state revisions or create completion receipts. */

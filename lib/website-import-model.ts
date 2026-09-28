@@ -7,7 +7,7 @@ export type WebsiteDesign = z.infer<typeof websiteDesignSchema>;
 export const websitePageReportSchema = z.object({ url: z.string().max(2048), title: z.string().max(160),
   status: z.enum(['ready', 'imported', 'failed', 'skipped', 'duplicate']), message: z.string().max(500), characters: z.number().int().min(0) }).strict();
 export type WebsitePageReport = z.infer<typeof websitePageReportSchema>;
-export const websiteProposalSchema = z.object({ design: websiteDesignSchema, pages: z.array(websitePageReportSchema).max(100),
+export const websiteProposalSchema = z.object({ design: websiteDesignSchema, pages: z.array(websitePageReportSchema).max(100), incomplete: z.boolean().optional(),
   captures: z.array(z.object({ url: z.string().max(2048), title: z.string().max(160), text: z.string().max(60000), rawText: z.string().max(60000).optional() }).strict()).max(24).optional(),
   capturedAt: z.string().datetime(), notes: z.array(z.string().max(1000)).max(20) }).strict();
 export type WebsiteProposal = z.infer<typeof websiteProposalSchema>;

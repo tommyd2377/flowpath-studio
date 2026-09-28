@@ -76,6 +76,28 @@ test('cancelling a streamed response rejects promptly and ignores every late fra
   transport.close();
 });
 
+for (const readyState of [2, 3] as const) test(`a new voice request reconnects after socket state ${readyState}, without reusing its lost cache`, async () => {
+  const transport = connection(), input = [{ role: 'user', content: 'Published synthetic item' }], output = [liveAnswer('Initial answer')];
+  try {
+    const first = transport.request({ model: 'synthetic', store: false, input }, new AbortController().signal);
+    const old = transport.sockets[0]; old.open();
+    old.frame({ type: 'response.completed', response: { id: 'old-cache', status: 'completed', output } }); await first;
+    // Network state changes can be visible before ws dispatches its close event.
+    old.readyState = readyState;
+    const fullInput = [...input, ...output, { role: 'user', content: 'New independent follow-up' }];
+    const next = transport.request({ model: 'synthetic', store: false, input: fullInput }, new AbortController().signal);
+    assert.equal(transport.sockets.length, 2, 'Only the new request opens a fresh socket');
+    const current = transport.sockets[1]; current.open(); old.emit('close');
+    old.frame({ type: 'response.completed', response: { id: 'late', status: 'completed', output: [liveAnswer('Stale')] } });
+    assert.equal(old.sent.length, 1, 'The completed request is never replayed');
+    assert.equal(current.sent.length, 1); assert.equal('previous_response_id' in current.sent[0], false);
+    assert.deepEqual(current.sent[0].input, fullInput); assert.equal(current.sent[0].store, false);
+    await assert.rejects(transport.request({ input: [] }, new AbortController().signal), /temporarily unavailable/, 'Concurrent work cannot replace the pending request');
+    current.frame({ type: 'response.completed', response: { id: 'new', status: 'completed', output: [liveAnswer('New answer')] } });
+    assert.equal((await next).id, 'new');
+  } finally { transport.close(); }
+});
+
 for (const failure of ['error', 'response.incomplete', 'disconnect', 'oversized'] as const) test(`a ${failure} stream never executes partial tools or retries`, async () => {
   const transport = connection(); let executed = 0, usage = 0;
   const job = runVisitorTask({ channel: 'voice', model: 'synthetic', apiKey: 'synthetic', instructions: '', context: {}, signal: new AbortController().signal,

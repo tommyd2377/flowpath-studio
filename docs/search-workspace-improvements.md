@@ -12,7 +12,7 @@ Voice can navigate to every registered published reference using `kind:id`; ambi
 
 ## Publisher controls and visitor behavior
 
-Content → Visitor conversations includes **Assistant purpose**, an optional 1,000-character audience/outcome description. It influences both typed and voice guidance. It is not evidence of facts and cannot override source validation, enable tools or establish capabilities. Saving changes the draft; publishing activates them.
+The Voice → **Assistant role → Role and identity** contains the optional 1,000-character ongoing role/audience/outcome description, previously labeled Assistant purpose. Its stored `visitor.assistantPurpose` value remains compatible. It influences typed and voice guidance independently of welcome words and opening topics. It is not evidence of facts and cannot override source validation, enable tools or establish capabilities. Saving changes the draft; publishing activates it.
 
 Content → Search and explore retains its explicit default-off search toggle, image option, domain allowlist and shared daily limit. **Add web context to published cards** is a separate opt-in, absent/false in existing publications. It enables an Add web context button in an open information/detail card and requests such as “add web context to this card.” Voice uses the same bounded service with an exact open instance ID. A refresh is an explicit new search; one addition is retained per card, within the existing six-result-set limit.
 

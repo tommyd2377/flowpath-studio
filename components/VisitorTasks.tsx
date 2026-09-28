@@ -3,18 +3,19 @@ import { recordedVisitorFetch } from '@/lib/visitor-test-recording-client';
 import { recordBrowserTestEvent } from '@/lib/visitor-test-events';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useMemo, type ReactNode, type RefObject } from 'react';
 import { type QueryPatch } from '@thevoice/platform-ui/query';
-import { VisitorArtifacts, ActionReview, TaskResearch, TaskComparison } from '@thevoice/platform-ui/task-components';
+import { VisitorArtifacts, ActionReview, TaskResearch, TaskComparison, PublishedEstimateView } from '@thevoice/platform-ui/task-components';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { MediaImage } from '@thevoice/platform-ui';
 import { mapEmbedUrl } from '@/lib/explore-model';
 import { visitorTaskViewSchema, type VisitorTaskView } from '@thevoice/platform-ui/task-view';
-import { workspaceElementVisible } from '@/lib/workspace-screen';
+import { taskSurfaceRevisionMatches, workspaceElementVisible } from '@/lib/workspace-screen';
 import { useTaskViewport } from '@/lib/use-task-viewport';
 import { diagnosticError, visitorDiagnostic, visitorDiagnosticTimer } from '@/lib/visitor-diagnostics';
+import { captureVisitorTaskCompletion, reconcileVisitorTaskCheckpoint, visitorTaskCheckpoint } from '@/lib/visitor-task-checkpoint';
 
 type DisplayStatus = 'applied' | 'cancelled' | 'failed';
 type TaskExecute = (capabilityId: string, input: unknown, manual?: boolean, signal?: AbortSignal) => Promise<unknown>;
-type TaskControls = { snapshot: () => VisitorTaskView | null; restore: (bookmark: string, visible: boolean, signal?: AbortSignal) => Promise<DisplayStatus>; command: (text: string, signal: AbortSignal) => Promise<{ handled: boolean; message?: string } | undefined>; openOrdinal: (ordinal: number) => Promise<void>; setPending: (value: boolean) => void; reset: (signal?: AbortSignal) => Promise<DisplayStatus>; settle: () => Promise<void>; current: () => { sessionId: string; revision: number; generation: number } | undefined; show: (view: VisitorTaskView, signal?: AbortSignal, onVisible?: () => void) => Promise<'applied' | 'cancelled' | 'failed'>; interrupt: () => void; hide: () => void; home: (signal?: AbortSignal) => Promise<DisplayStatus>; back: (signal?: AbortSignal) => Promise<DisplayStatus> | undefined };
+type TaskControls = { snapshot: () => VisitorTaskView | null; restore: (bookmark: string, visible: boolean, signal?: AbortSignal) => Promise<DisplayStatus>; command: (text: string, signal: AbortSignal) => Promise<{ handled: boolean; message?: string } | undefined>; openOrdinal: (ordinal: number) => Promise<void>; setPending: (value: boolean) => void; reset: (signal?: AbortSignal) => Promise<DisplayStatus>; settle: (refresh?: boolean) => Promise<void>; current: () => { sessionId: string; revision: number; generation: number } | undefined; completion: (signal: AbortSignal) => ReturnType<typeof captureVisitorTaskCompletion>; show: (view: VisitorTaskView, signal?: AbortSignal, onVisible?: () => void) => Promise<'applied' | 'cancelled' | 'failed'>; interrupt: () => void; hide: () => void; home: (signal?: AbortSignal) => Promise<DisplayStatus>; back: (signal?: AbortSignal) => Promise<DisplayStatus> | undefined };
 type WebsiteTaskState = { attachRoot: (node: HTMLElement | null) => void; error: string; available: boolean; view: VisitorTaskView | null; busy: boolean; root: RefObject<HTMLElement | null>; render: (view: VisitorTaskView | null, execute: TaskExecute) => { header: ReactNode; foreground: ReactNode; after: ReactNode }; execute: TaskExecute; patch: (operations: QueryPatch['operations']) => void };
 const WebsiteTaskContext = createContext<WebsiteTaskState | null>(null);
 export const useWebsiteTasks = () => useContext(WebsiteTaskContext);
@@ -34,6 +35,7 @@ export function VisitorTasksProvider({ slug, children, onInteraction, homeRef, b
   useLayoutEffect(() => { beforeShowRef.current = beforeShow; }, [beforeShow]);
   const ownInteraction = useRef(false), interruptWork = useRef<Promise<void>>(Promise.resolve());
   const pending = useRef<AbortController | null>(null), generation = useRef(0), scene = useRef(0);
+  const settlement = useRef<{ refresh: boolean; generation: number; view: VisitorTaskView | null; work: Promise<void> } | null>(null);
   const reduced = useReducedMotion();
   const request = useCallback(async (input: unknown, signal?: AbortSignal) => {
     if (!slug) throw new Error('Publish to use shared visitor tasks.');
@@ -82,15 +84,19 @@ export function VisitorTasksProvider({ slug, children, onInteraction, homeRef, b
     if (!next.operationId) return 'applied';
     const surface = () => {
       if (next.navigation === 'reset' && !next.active) return root.current?.closest<HTMLElement>('[data-published-website]');
-      const selectors: Record<NonNullable<VisitorTaskView['focus']>, string> = { query: '[data-website-result-heading]', quote: '[aria-label="Synthetic quote review"]', booking: '[aria-label="Synthetic booking review"]', receipt: '.platform-action-review [role="status"]', cart: '[aria-label="Synthetic cart"]', slots: '[aria-label="Synthetic appointments"]', records: '[aria-label="Retrieved records"]', links: '[aria-label="Reviewed publisher links"]', comparison: '[aria-label="Selection comparison"]', detail: '[aria-label="Record detail"]', research: '[aria-label="Search results"]', map: '[aria-label="Evidence map"]', artifact: '.platform-task-artifact', business: '.platform-action-review', clarification: '[aria-label="Task clarification"]' };
-      return next.focus ? root.current?.querySelector<HTMLElement>(selectors[next.focus]) : root.current;
+      const selectors: Record<NonNullable<VisitorTaskView['focus']>, string> = { query: '[data-website-result-heading]', estimate: '[aria-label="Published price estimate"]', quote: '[aria-label="Synthetic quote review"]', booking: '[aria-label="Synthetic booking review"]', receipt: '.platform-action-review [role="status"]', cart: '[aria-label="Synthetic cart"]', slots: '[aria-label="Synthetic appointments"]', records: '[aria-label="Retrieved records"]', links: '[aria-label="Reviewed publisher links"]', comparison: '[aria-label="Selection comparison"]', detail: '[aria-label="Record detail"]', research: '[aria-label="Search results"]', map: '[aria-label="Evidence map"]', artifact: '.platform-task-artifact', business: '.platform-action-review', clarification: '[aria-label="Task clarification"]' };
+      const target = next.focus ? root.current?.querySelector<HTMLElement>(selectors[next.focus]) : root.current;
+      return taskSurfaceRevisionMatches(next, target) ? target : null;
     };
     // Observe committed result identity after React renders; the server verifies exact bindings.
     let settled = false;
+    let observation: Record<string, unknown> = {};
     await new Promise<void>(resolve => {
       let stable = 0, position = '';
       let frame = 0; const finish = () => { clearTimeout(timeout); cancelAnimationFrame(frame); signal?.removeEventListener('abort', finish); resolve(); };
-      const timeout = setTimeout(finish, 1500); signal?.addEventListener('abort', finish, { once: true });
+      // Exit and width/height reflow can be sequential; the frame tracks Motion completion.
+      // This is a ceiling, not a delay: exact visible results settle immediately.
+      const timeout = setTimeout(finish, 2500); signal?.addEventListener('abort', finish, { once: true });
       const tick = () => {
         if (signal?.aborted || version !== generation.current) return finish();
         root.current?.setAttribute('data-website-transition', 'pending');
@@ -99,13 +105,16 @@ export function VisitorTasksProvider({ slug, children, onInteraction, homeRef, b
         const rect = card?.getBoundingClientRect();
         const nextPosition = rect ? `${Math.round(rect.left)}:${Math.round(rect.top)}:${Math.round(rect.width)}:${Math.round(rect.height)}` : ''; stable = nextPosition === position ? stable + 1 : 0; position = nextPosition;
         if (!root.current?.matches('[data-ai-carousel]') && (next.active || next.navigation === 'reset') && rect && (rect.top >= innerHeight || rect.bottom <= 0 || next.focus && rect.top < 0)) target?.scrollIntoView({ block: 'start', behavior: 'instant' });
-        if (stable > 2 && (!root.current?.matches('[data-ai-carousel]') || root.current.dataset.workspaceTransition === 'settled') && (!card || Number(getComputedStyle(card).opacity) >= .99) && (next.active ? target && root.current?.dataset.resultSet === next.result.resultSetId && workspaceElementVisible(target) : root.current?.dataset.resultSet !== next.result.resultSetId)) { settled = true; root.current?.setAttribute('data-website-transition', 'settled'); return finish(); }
+        const visible = !!target && workspaceElementVisible(target);
+        const opacity = card ? Number(getComputedStyle(card).opacity) : 1;
+        observation = { focus: next.focus, stableFrames: stable, position, transition: root.current?.dataset.workspaceTransition, targetFound: !!target, visible, opacity, resultMatches: root.current?.dataset.resultSet === next.result.resultSetId };
+        if (stable > 2 && (!root.current?.matches('[data-ai-carousel]') || root.current.dataset.workspaceTransition === 'settled') && opacity >= .99 && (next.active ? visible && root.current?.dataset.resultSet === next.result.resultSetId : root.current?.dataset.resultSet !== next.result.resultSetId)) { settled = true; root.current?.setAttribute('data-website-transition', 'settled'); return finish(); }
         frame = requestAnimationFrame(tick);
       };
       frame = requestAnimationFrame(() => { frame = requestAnimationFrame(tick); });
     });
     if (signal?.aborted || document.visibilityState !== 'visible' || generation.current !== version || next.active && root.current?.dataset.resultSet !== next.result.resultSetId) return restore('cancelled');
-    if (!settled) return restore('failed');
+    if (!settled) { recordBrowserTestEvent('task.display.unsettled', observation, next.operationId); return restore('failed'); }
     const target = surface();
     if (next.active && next.focus && (!target || !workspaceElementVisible(target))) return restore('failed');
     if (!next.active && root.current?.dataset.resultSet === next.result.resultSetId) return restore('failed');
@@ -125,6 +134,7 @@ export function VisitorTasksProvider({ slug, children, onInteraction, homeRef, b
   const execute = useCallback(async (capabilityId: string, input: unknown, manual = true, signal?: AbortSignal, display = true) => {
     if (signal?.aborted) return;
     pauseViewport();
+    if (capabilityId === 'query.command') { generation.current++; pending.current?.abort(); }
     if (manual) { generation.current++; pending.current?.abort(); ownInteraction.current = true; onInteraction(); ownInteraction.current = false; }
     if (capabilityId === 'record.detail') returnRecord.current = (input as { recordId: string }).recordId;
     const priorFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -138,7 +148,10 @@ export function VisitorTasksProvider({ slug, children, onInteraction, homeRef, b
       pauseViewport();
       let current = viewRef.current;
       if (!current) { current = await initialize(); if (version !== generation.current || controller.signal.aborted) return; viewRef.current = current; confirmed.current ??= current; setView(current); }
-      if (manual) {
+      if (capabilityId === 'query.command') {
+        // The command endpoint owns cancellation and the authoritative revision.
+        // It rejects a changed generation instead of targeting a newer view.
+      } else if (manual) {
         const interrupted = await request({ action: 'interrupt', sessionId: current.sessionId }, controller.signal);
         if (version !== generation.current || controller.signal.aborted) return;
         current = { ...current, revision: interrupted.revision, generation: interrupted.generation }; viewRef.current = current;
@@ -151,9 +164,16 @@ export function VisitorTasksProvider({ slug, children, onInteraction, homeRef, b
       }
       if (version !== generation.current || controller.signal.aborted) return;
       if (capabilityId === 'query.create' && current.queries.length === 1 && !current.active) { capabilityId = 'query.activate'; input = { queryId: current.query.queryId }; }
-      const result = await request({ action: 'execute', sessionId: current.sessionId, call: { operationId: crypto.randomUUID(), capabilityId, expectedRevision: current.revision, input } }, controller.signal);
+      const result = await request(capabilityId === 'query.command'
+        ? { action: 'command', sessionId: current.sessionId, generation: current.generation, operationId: crypto.randomUUID(), text: (input as { text: string }).text }
+        : { action: 'execute', sessionId: current.sessionId, call: { operationId: crypto.randomUUID(), capabilityId, expectedRevision: current.revision, input } }, controller.signal);
       if (version !== generation.current || controller.signal.aborted) return;
-      if (result.handled === false) return { handled: false };
+      if (result.handled === false) {
+        const fresh = visitorTaskViewSchema.parse(result.view);
+        viewRef.current = fresh; confirmed.current = fresh; setView(fresh);
+        if (activeRef.current && openRef.current) await acceptViewport(fresh);
+        return { handled: false };
+      }
       if (!display) { viewRef.current = { ...current, revision: result.view.revision, generation: result.view.generation }; return result.data as unknown; }
       const status = await show(result.view, controller.signal);
       if (status === 'cancelled') return;
@@ -164,8 +184,8 @@ export function VisitorTasksProvider({ slug, children, onInteraction, homeRef, b
       return capabilityId === 'query.command' ? { handled: true, message: result.view.clarification?.question } : result.data as unknown;
     } catch (error) { if (!controller.signal.aborted && version === generation.current) setError(error instanceof Error ? error.message : 'Task unavailable.'); }
     finally { signal?.removeEventListener('abort', abort); if (pending.current === controller) pending.current = null; if (version === generation.current) setBusy(false); }
-  }, [onInteraction, request, show, pauseViewport, initialize]);
-  const interrupt = useCallback(() => {
+  }, [onInteraction, request, show, pauseViewport, initialize, acceptViewport]);
+  const interrupt = useCallback((preserveConfirmed = false) => {
     if (ownInteraction.current) return;
     pauseViewport(); generation.current++; pending.current?.abort(); setBusy(false);
     const current = confirmed.current ?? viewRef.current;
@@ -174,22 +194,48 @@ export function VisitorTasksProvider({ slug, children, onInteraction, homeRef, b
       if (viewRef.current?.sessionId !== current.sessionId || viewRef.current.revision > result.revision) return;
       // An ACK can finish on the server just as its client request is cancelled.
       // Resume that confirmed composition, not an older local receipt projection.
-      const restored = visitorTaskViewSchema.parse(result.view);
+      const authoritative = visitorTaskViewSchema.parse(result.view);
+      // Completion cleanup can rebuild the same receipt without its transient
+      // clarification/focus. Preserve that displayed content only on an exact
+      // identity match; a late ACK for a different view still uses server state.
+      const preserved = preserveConfirmed ? reconcileVisitorTaskCheckpoint(current, visitorTaskCheckpoint(authoritative)) : null;
+      const restored = preserved ?? authoritative;
+      if (preserved && historical.current === current) historical.current = restored;
       viewRef.current = restored; confirmed.current = restored; setView(restored);
       await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-      if (activeRef.current && openRef.current && viewRef.current === restored) await acceptViewport(restored);
+      if (activeRef.current && openRef.current && viewRef.current === restored && restored !== historical.current) await acceptViewport(restored);
     }).catch(() => undefined);
   }, [request, pauseViewport, acceptViewport]);
-  const settle = useCallback(async () => {
-    await interruptWork.current;
-    if (slug && !viewRef.current) { const initial = await initialize(); viewRef.current = initial; confirmed.current ??= initial; setView(initial); }
-    await settleViewport();
-    const current = viewRef.current;
-    if (slug && current?.active) {
-      const refreshed = await request({ action: 'refresh', sessionId: current.sessionId });
-      const fresh = visitorTaskViewSchema.parse(refreshed.view);
-      if (fresh.generation !== current.generation) { pauseViewport(); throw new Error('The task generation changed; restore the visible result before continuing.'); }
-    }
+  const settle = useCallback((refresh = true) => {
+    // Hover, keyboard focus and activation may arrive together. Share only
+    // in-flight synchronization of the same view/generation, never a cached result.
+    const existing = settlement.current;
+    if (existing?.refresh === refresh && existing.generation === generation.current && existing.view === viewRef.current) return existing.work;
+    const version = generation.current;
+    const work = (async () => {
+      await interruptWork.current;
+      if (version !== generation.current) throw new Error('The view changed while preparing the request.');
+      if (slug && !viewRef.current) {
+        const initial = await initialize();
+        if (version !== generation.current) throw new Error('The view changed while preparing the request.');
+        viewRef.current = initial; confirmed.current ??= initial; setView(initial);
+      }
+      await settleViewport();
+      if (version !== generation.current) throw new Error('The view changed while preparing the request.');
+      const current = viewRef.current;
+      if (refresh && slug && current?.active) {
+        const refreshed = await request({ action: 'refresh', sessionId: current.sessionId });
+        // A stale warm-up must not pause observations of a newer manual view.
+        if (version !== generation.current || current !== viewRef.current) throw new Error('The view changed while preparing the request.');
+        const fresh = visitorTaskViewSchema.parse(refreshed.view);
+        if (fresh.generation !== current.generation) { pauseViewport(); throw new Error('The task generation changed; restore the visible result before continuing.'); }
+      }
+    })();
+    const entry = { refresh, generation: version, view: viewRef.current, work };
+    settlement.current = entry;
+    const release = () => { if (settlement.current === entry) settlement.current = null; };
+    void work.then(release, release);
+    return work;
   }, [initialize, slug, settleViewport, request, pauseViewport]);
   const controls: TaskControls = useMemo(() => ({ snapshot: () => confirmed.current, restore: async (bookmark, visible, signal) => {
     pauseViewport(); generation.current++; pending.current?.abort();
@@ -197,15 +243,24 @@ export function VisitorTasksProvider({ slug, children, onInteraction, homeRef, b
     await interruptWork.current;
     // Interrupt may have resumed observations of the departing view.
     pauseViewport();
+    if (signal?.aborted || generation.current !== version) return 'cancelled';
     const current = viewRef.current; if (!current) return 'applied';
     try {
-      // A cancelled voice job may have advanced the server generation without
-      // displaying a new result. Refresh once; never retry a model operation.
-      const fresh = await request({ action: 'refresh', sessionId: current.sessionId }, signal);
-      if (signal?.aborted || generation.current !== version) return 'cancelled';
-      const authoritative = visitorTaskViewSchema.parse(fresh.view);
-      if (authoritative.sessionId !== current.sessionId || authoritative.generation < current.generation) return 'failed';
-      const result = await request({ action: 'restore', sessionId: current.sessionId, bookmark, generation: authoritative.generation }, signal);
+      let result;
+      try {
+        result = await request({ action: 'restore', sessionId: current.sessionId, bookmark, generation: current.generation }, signal);
+      } catch (error) {
+        // Usually the acknowledged generation is already current. Only this
+        // pre-write rejection needs a fresh read: an undisplayed voice turn can
+        // advance it. One bounded restoration retry; never repeat a paid task.
+        if (!(error instanceof Error) || !('status' in error) || error.status !== 409 || error.message !== 'A newer request replaced this restoration.') throw error;
+        if (signal?.aborted || generation.current !== version) return 'cancelled';
+        const fresh = await request({ action: 'refresh', sessionId: current.sessionId }, signal);
+        if (signal?.aborted || generation.current !== version) return 'cancelled';
+        const authoritative = visitorTaskViewSchema.parse(fresh.view);
+        if (authoritative.sessionId !== current.sessionId || authoritative.generation < current.generation) return 'failed';
+        result = await request({ action: 'restore', sessionId: current.sessionId, bookmark, generation: authoritative.generation }, signal);
+      }
       if (signal?.aborted || generation.current !== version) return 'cancelled';
       const restored = visitorTaskViewSchema.parse(result.view);
       historical.current = restored;
@@ -224,7 +279,14 @@ export function VisitorTasksProvider({ slug, children, onInteraction, homeRef, b
       if (records?.length === 1 && version === generation.current) await execute('record.detail', { recordId: records[0].id }, false);
     } catch { setError('Which item? Bring the results into view or use its name.'); }
   }, setPending: setConversationPending, reset: async signal => await execute('view.reset', {}, !signal, signal) ? 'applied' : signal?.aborted ? 'cancelled' : 'failed', settle, current: () => viewRef.current ? { sessionId: viewRef.current.sessionId, revision: viewRef.current.revision, generation: viewRef.current.generation } : undefined,
-    show, interrupt, hide: () => {
+    completion: signal => captureVisitorTaskCompletion({ signal, pause: pauseViewport,
+      current: () => ({ interaction: generation.current, view: viewRef.current, confirmed: confirmed.current }),
+      accept: async (next, nextConfirmed) => {
+        if (historical.current === confirmed.current) historical.current = nextConfirmed;
+        viewRef.current = next; confirmed.current = nextConfirmed; setView(next);
+        if (activeRef.current && openRef.current && nextConfirmed !== historical.current) await acceptViewport(nextConfirmed);
+      }, interrupt: async () => { interrupt(true); await interruptWork.current; },
+    }), show, interrupt, hide: () => {
       generation.current++; pending.current?.abort(); openRef.current = false; setOpen(false); setBusy(false); setError(''); pauseViewport();
     }, home: async signal => {
       if (signal?.aborted) return 'cancelled';
@@ -235,7 +297,7 @@ export function VisitorTasksProvider({ slug, children, onInteraction, homeRef, b
       const current = viewRef.current;
       if (!openRef.current || !current) return;
       return execute('view.back', { target: 'results' }, false, signal).then(data => data ? 'applied' : signal?.aborted ? 'cancelled' : 'failed');
-    } }), [execute, interrupt, show, settle, pauseViewport, request]);
+    } }), [execute, interrupt, show, settle, pauseViewport, request, acceptViewport]);
   useEffect(() => () => pending.current?.abort(), []);
   useEffect(() => { if (!homeRef) return; homeRef.current = controls.home; return () => { homeRef.current = null; }; }, [homeRef, controls]);
   function patch(operations: QueryPatch['operations']) { if (view) void execute('query.patch', { queryId: view.query.queryId, baseRevision: view.query.revision, operations }); }
@@ -243,16 +305,18 @@ export function VisitorTasksProvider({ slug, children, onInteraction, homeRef, b
   // snapshot. Its caller binds actions to that same snapshot before execution.
   function render(view: VisitorTaskView | null, execute: TaskExecute) {
     const header = <>
-      {(busy || conversationPending) && <p aria-live="polite">Updating your cards…</p>}
+      {busy && !conversationPending && <p aria-live="polite">Updating results…</p>}
       {error && <p role="alert">{error} <button type="button" onClick={() => { if (view) void execute('query.activate', { queryId: view.query.queryId }); }}>Try again</button></p>}
       {!view && <button type="button" className="platform-website-text-link" onClick={() => void execute('query.create', {})}>Explore published items</button>}
       {view && <>
           {view.clarification && <aside aria-label="Task clarification"><p>{view.clarification.question}</p>{view.clarification.options.length > 0 && <ul>{view.clarification.options.map(option => <li key={option}>{option}</li>)}</ul>}<p>Tell me what you would like to change in chat or voice.</p></aside>}
+          {view.focus !== 'estimate' && (view.business.estimate as { lines?: unknown[] } | undefined)?.lines?.length ? <button type="button" className="platform-website-text-link" disabled={busy} onClick={() => void execute('estimate.show', {})}>View estimate</button> : null}
           {!view.records.length && <p>No published items match yet. Ask me to remove a constraint, try a broader search, or show everything again.</p>}
           {!!view.links?.length && <nav aria-label="Reviewed publisher links">{view.links.map(link => <a key={link.id} href={link.url} target="_blank" rel="noopener noreferrer" onClick={() => { interrupt(); onInteraction(); }}>{link.label}</a>)}</nav>}
       </>}
     </>;
     const foreground = view && <>
+          {view.estimate && <PublishedEstimateView estimate={view.estimate} busy={busy} historical={view.estimate.revision !== (viewRef.current?.business.estimate as { revision?: number } | undefined)?.revision}/>}
           {view.comparison && <TaskComparison comparison={view.comparison}/>}
           <AnimatePresence initial={false} mode="wait">{view.detail && <motion.section key={view.detail.record.id} aria-label="Record detail" data-task-record={view.detail.record.id} initial={{ opacity: 0, y: reduced ? 0 : 8 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, height: 0, overflow: 'hidden' }} transition={{ duration: reduced ? 0 : .22, ease: [.22, 1, .36, 1] }}>
             <h3>{view.detail.record.name}</h3>

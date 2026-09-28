@@ -9,6 +9,7 @@ import { compileQueryIndex } from '../lib/catalog-query-index';
 import { VisitorTaskStore } from '../lib/visitor-task-store';
 import { localTaskDocuments } from '../lib/task-persistence';
 import { acknowledgeTaskDisplay, observeTaskScene, executeVisitorCapability, buildVisitorTaskView } from '../lib/visitor-capabilities';
+import { visitorTaskPublication, visitorTaskContext } from '../lib/visitor-task-context';
 
 test('actual source migration preserves edited records, structure and rejected memberships across source updates', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'source-remigration-')), previous = process.env;
@@ -64,7 +65,8 @@ test('actual source migration preserves edited records, structure and rejected m
 test('viewport observations reject stale ordinals and evidence without changing task revisions or display receipts', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'task-viewport-'));
   try {
-    const index = compileQueryIndex(taskFixture()), publication = index.space.publication, store = new VisitorTaskStore(localTaskDocuments(directory));
+    const documents = localTaskDocuments(directory), reads: string[] = [];
+    const index = compileQueryIndex(taskFixture()), publication = index.space.publication, store = new VisitorTaskStore({ ...documents, read: async id => { reads.push(id); return documents.read(id); } });
     let session = await store.create(publication);
     buildVisitorTaskView({ session, index, signal: new AbortController().signal }); session = await store.save(session, session.revision);
     const execute = async (capabilityId: string, input: unknown, bindings?: { input: string; handleId: string; outputType: string }[]) => {
@@ -88,10 +90,53 @@ test('viewport observations reject stale ordinals and evidence without changing 
     await assert.rejects(() => observeTaskScene(store, session.id, publication, { ...observed, sceneRevision: 2 }), /stale/);
     await assert.rejects(() => observeTaskScene(store, session.id, publication, { ...observed, sceneRevision: 4, recordIds: ['invented'] }), /does not match/);
     await observeTaskScene(store, session.id, publication, { ...observed, sceneRevision: 4, recordIds: ['record-00007'] });
+    reads.length = 0;
     await acknowledgeTaskDisplay(store, session.id, publication, ack);
+    assert.deepEqual(reads, [session.id], 'duplicate ACK checks the saved operation without fetching the separate viewport');
     assert.deepEqual((await store.read(session.id, publication)).viewport?.recordIds, ['record-00007'], 'duplicate completion ACK cannot rewind the viewport');
+    assert.equal((await store.read(session.id, publication, { viewport: false })).viewport, null, 'a lightweight read cannot authorize visible ordinals');
     await assert.rejects(() => execute('records.filter', { records: [], where: { kind: 'all', id: 'all', children: [] } }, [{ input: 'records', handleId: result.handleId, outputType: 'records' }]), /stale/);
     await execute('home', {});
     await assert.rejects(() => observeTaskScene(store, session.id, publication, { ...observed, sceneRevision: 5 }), /does not match/);
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('receipt route needs fresh publication authority, not catalog hydration, and rejects republished results', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'task-receipt-route-')), previous = process.env;
+  process.env = { NODE_ENV: 'test', VOICE_BACKEND: 'demo', VOICE_AI_MODE: 'demo', VOICE_DATA_DIR: directory };
+  try {
+    const { newSite, modifySite } = await import('../lib/site-store');
+    const { publicationContent } = await import('../lib/site-opening');
+    const { POST } = await import('../app/api/visitor/[slug]/tasks/route');
+    const user = { uid: 'local-demo', mode: 'demo' as const, email: null, displayName: null };
+    let site = await newSite(user, { name: 'Receipt fixture', slug: 'receipt-fixture', kind: 'general' });
+    // A previously executed result can still be confirmed during an independent
+    // catalog-storage outage. Only current publication + saved result authorize it.
+    site = await modifySite(user, site.id, site.revision, stored => {
+      stored.published = { ...publicationContent(stored.draft), catalogPublicationId: randomUUID() };
+      stored.publishedAt = new Date().toISOString();
+    });
+    const { publication } = await visitorTaskPublication(site.slug);
+    await assert.rejects(visitorTaskContext(site.slug), 'The absent catalog must not hydrate');
+    const space = taskFixture(); space.publication = publication;
+    const index = compileQueryIndex(space), store = new VisitorTaskStore();
+    let session = await store.create(publication);
+    buildVisitorTaskView({ session, index, signal: new AbortController().signal });
+    session = await store.save(session, session.revision);
+    const displayed = await executeVisitorCapability({ sessionId: session.id, store, index, signal: new AbortController().signal, assertCurrent: async () => {},
+      call: { capabilityId: 'query.activate', input: { queryId: session.queries[0].current.queryId }, operationId: randomUUID(), expectedRevision: session.revision } });
+    const ack = { action: 'ack', sessionId: session.id, operationId: displayed.view.operationId, generation: displayed.view.generation, queryId: displayed.view.query.queryId,
+      queryRevision: displayed.view.query.revision, resultSetId: displayed.view.result.resultSetId, sceneRevision: 1, recordIds: ['record-00000'] };
+    const send = (input: unknown, origin = 'http://127.0.0.1:3225') => POST(new Request(`http://127.0.0.1:3225/api/visitor/${site.slug}/tasks`, {
+      method: 'POST', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify(input),
+    }), { params: Promise.resolve({ slug: site.slug }) });
+    assert.equal((await send(ack, 'https://foreign.example')).status, 403);
+    assert.equal((await send({ ...ack, recordIds: ['invented'] })).status, 409);
+    const response = await send(ack); assert.equal(response.status, 200, await response.text());
+    const scene = { ...ack, action: 'scene', sceneRevision: 2, ready: true, recordIds: ['record-00001'] };
+    assert.equal((await send(scene)).status, 200);
+    site = await modifySite(user, site.id, site.revision, stored => { stored.published!.headline = 'New publication'; });
+    assert.equal((await send(ack)).status, 409);
+    assert.equal((await send({ ...scene, sceneRevision: 3 })).status, 409);
+  } finally { process.env = previous; await rm(directory, { recursive: true, force: true }); }
 });

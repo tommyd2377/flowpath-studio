@@ -26,6 +26,7 @@ export function effectiveWebsiteTemplate(style?: Pick<SiteDesign, 'template' | '
 export function websiteValueRole(field: { label: string; aliases?: string[] }): 'price' | 'price-terms' | undefined {
   const names = [field.label, ...(field.aliases ?? [])].map(name => name.trim());
   if (names.some(name => /^(?:(?:price|pricing|size|rate|fee|cost)[\s/]+)+(?:terms|conditions|qualifications)$/i.test(name))) return 'price-terms';
+  if (names.some(name => /^listed [\p{L}\p{N}][\p{L}\p{N} /()-]{0,31} price\s*\([A-Z]{3}\)$/iu.test(name))) return 'price';
   if (names.some(name => /^(?:(?:listed|starting|base|unit|hourly|daily|monthly|annual)\s+)?(?:price|rate|fee|cost)(?:\s*\([^)]*\)|\s*\[[^\]]*\])?$/i.test(name))) return 'price';
   return undefined;
 }

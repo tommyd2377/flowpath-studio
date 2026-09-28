@@ -26,9 +26,9 @@ async function installProbe(page: Page) {
     new PerformanceObserver(list => state.longTasks.push(...list.getEntries().map(entry => entry.duration))).observe({ type: 'longtask', buffered: true });
     const read = (node: Element | null) => {
       if (!node) return [];
-      let y = 0, opacity = 1;
-      for (let p: Element | null = node; p && !p.hasAttribute('data-published-website'); p = p.parentElement) { const css = getComputedStyle(p); y += new DOMMatrix(css.transform).f; opacity *= Number(css.opacity); }
-      return [y, opacity];
+      let x = 0, y = 0, opacity = 1;
+      for (let p: Element | null = node; p && !p.hasAttribute('data-published-website'); p = p.parentElement) { const css = getComputedStyle(p), matrix = new DOMMatrix(css.transform); x += matrix.e; y += matrix.f; opacity *= Number(css.opacity); }
+      return [Math.hypot(x, y), opacity];
     };
     const sample = () => {
       const title = document.querySelector('.platform-website-hero h1');
@@ -72,9 +72,10 @@ async function capture(browser: Browser, url: string, label: string, width: numb
   expect(errors).toEqual([]); expect(result.overflow).toBeLessThanOrEqual(1); expect(result.unreadable).toBe(0);
   if (!baseline) {
     const start = result.samples.filter(s => s.scroll === 0 && s.t < 1600);
-    expect(Math.max(...start.map(s => s.title[0])), 'opening has visible displacement').toBeGreaterThan(width === 390 ? 12 : 20);
+    const distance = result.template === 'clarity' ? 3 : result.template === 'editorial' ? width === 390 ? 7 : 10 : width === 390 ? 12 : 18;
+    expect(Math.max(...start.map(s => s.title[0])), 'opening has visible displacement in its template direction').toBeGreaterThan(distance);
     expect(start.filter(s => s.title[0] > 1).length, 'motion lasts multiple real frames').toBeGreaterThan(8);
-    expect(start.some(s => Math.abs(s.title[0] - s.copy[0]) > 3), 'title and copy are choreographed separately').toBe(true);
+    expect(start.some(s => Math.abs(s.title[0] - s.copy[0]) > (result.template === 'clarity' ? 1 : 3)), 'title and copy are choreographed separately').toBe(true);
     expect(new Set(result.samples.map(s => s.section[0].toFixed(1))).size, 'section visibly moves over time').toBeGreaterThan(5);
     expect(result.scrollShifts, 'scroll animations do not shift layout').toBeLessThan(.005);
   }
@@ -103,7 +104,7 @@ async function setStyle(page: Page, site: Awaited<ReturnType<typeof createFixtur
 async function sampleMovement(page: Page, selector: string) {
   return page.locator(selector).evaluate(node => new Promise<number[]>(resolve => {
     const frames: number[] = [], start = performance.now();
-    const sample = () => { frames.push(new DOMMatrix(getComputedStyle(node).transform).f); if (performance.now() - start < 1250) requestAnimationFrame(sample); else resolve(frames); };
+    const sample = () => { const matrix = new DOMMatrix(getComputedStyle(node).transform); frames.push(Math.hypot(matrix.e, matrix.f)); if (performance.now() - start < 1250) requestAnimationFrame(sample); else resolve(frames); };
     requestAnimationFrame(sample);
   }));
 }

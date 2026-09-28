@@ -1,0 +1,36 @@
+# September 21, 9:21 recording follow-up
+
+Recording `2308a71a-1295-4718-b859-bf47e95a77e5` ran from 09:18:51 to 09:21:39 America/New_York and contains 3,024 events. All eight recorded source hashes matched the working checkout at the start of this investigation, including the earlier menu-path and gallery-preparation repair. The recording contains transcripts and state observations, not screenshots or proof that output audio was heard.
+
+## Findings
+
+| Time / events | Evidence | Cause and response |
+| --- | --- | --- |
+| 09:19:12, #348; first session ends #686 | Live delegated before any user transcript was captured. No backend request or reply to that delegation followed. Later captions contain “Did you bring up” and two “Hello” attempts; the visitor restarted voice. | The application rejects missing/stale speech before starting work but previously discarded the handoff silently. Rejected handoffs now receive a response tied to the delegation ID. An introductory handoff with no request gets one request-to-repeat message; stale/duplicate work remains blocked. This fixes the application omission; live provider recovery still needs verification. The recording cannot establish what was said before the first captured caption. |
+| 09:19:58–09:20:02, #975–#1085 | “Can you bring up the menu” selected the nested **Menu and offerings** collection. Its path resolved correctly, but it contained only **Our Dessert Menu**, a reference article. | The prior breadcrumb exception is resolved. Selection semantics remained wrong. Plain menu commands now choose a validated union of published offering collections, excluding articles. Compound menu requests receive the same offering scope as model context. |
+| 09:20:28–09:20:39, #1610–#1831 | The velvet refinement first searched the reference article, then changed scope to **Retail / Cakes** and returned six actual offerings. | Starting in the correct offering scope removes that wrong intermediate result and extra correction step. Text refinement continues through the ordinary typed query path. |
+| 09:20:45–09:20:55, #1993, #2066, #2131–#2219 | Captions include “open up … red-and-blue velvet” and then “Open up the red and blue.” The deterministic shortcut issued `task.clarify`; the backend completion text was literally `Showing .` | `open up` was parsed as a name beginning with “up,” and spoken “and” did not match `&`. Unresolved names were forced into a clarification before the model could use the earlier transcript. Name normalization now handles these variants; partial or ambiguous references defer with full dialogue context. Confirmed clarifications return their actual question as speech, and the screen/history title is meaningful. |
+| 09:21:03–09:21:13, #2355–#2564 | “I don't see it anywhere” led to an acknowledged **Red & Blue Velvet** detail, with its published illustrative media reference. | This recovery succeeded according to the display receipt. The user subsequently confirmed that the card did appear. |
+| 09:21:18, #2696 | A final problem marker has no explanatory note. | The user no longer recalls its specific cause. Leave it unresolved; do not invent a missing-card diagnosis. |
+| 09:21:25, #2849 | Back restored the earlier clarification, which had an empty recorded title. | Clarification titles now carry the bounded question so screen context and history cannot describe an empty item. |
+
+## Implementation boundaries
+
+- Menu selection uses only canonical published offering/product/service kinds and existing collection memberships. It returns a scope only if that scope covers the complete offering set without unrelated records. Mixed, unrepresented, oversized or ambiguously rooted sets defer to the existing assistant path. It does not rewrite the publication or infer inventory.
+- Name matching preserves variant qualifiers such as “with nuts.” It never chooses an arbitrary partial match; the model can use prior dialogue or ask a genuine clarification.
+- Confirmations still wait for the browser and publication-bound receipt. A clarification is not reported as an opened product.
+- Rejected handoffs do not reserve a turn, start a model request, retry work, or interrupt an existing task. The missing-request prompt is sent at most once per session. Later substantive speech remains eligible for a new delegation.
+- The shared runtime's optional acceptance callback now receives the delegation ID. The same two-line interface change was applied to the sibling FlowPath runtime without replacing its other uncommitted work. Existing broader sibling differences remain outside this repair.
+- Greeting settings and introduction presentation are being changed independently in the same checkout. Their edits are preserved; the clarification and handoff repairs do not replace that work.
+
+The client-delegation contract is checked against [official OpenAI documentation](https://developers.openai.com/api/docs/guides/live-delegation): delegation carries an ID and timing rather than task text; the application supplies transcript context and returns results associated with that ID. No live provider calls were made for this investigation.
+
+## Verification
+
+- All 103 focused command, voice-control and task-binding tests pass with synthetic publications and mocked providers. They cover the recording's missing-caption handoff, menu/article collision, punctuation variants, partial-name dialogue, truthful clarification, receipt ordering, and explicit full-menu reset versus retained ordinary-menu criteria.
+- Production build, typecheck and lint pass; all 30 rendering tests pass. Six focused isolated browser checks pass, covering the new menu/clarification sequence, the earlier gallery-to-photo regression, restored voice state, Home, and cancelled-generation recovery.
+- The browser regression uses real isolated local task execution to show the menu, filter six velvet offerings, open the exact variant, render a clarification and restore detail/results through Back and Forward. Audio/model output is mocked.
+- The final two menu/clarification browser checks also pass against the latest combined production build after removing the duplicate heading. The screenshot at `test-results/recording-0921-final/retained-task-view-recorde-dc1be-ngful-clarification-history/recorded-menu-clarification.png` was visually inspected.
+- One existing clarification browser test originally sent its next request before the detail had actually opened, producing a cancellation race. Its assertion now waits for the real detail view before testing replacement; separate cancellation coverage remains enabled. Visual inspection also caught a duplicated question heading; clarification metadata retains the question while the existing visible question renders once.
+- No live speech retest, publishing, deployment, commit or push was performed. Provider behavior and the unexplained final marker remain unverified.
+- The full server run after the concurrent greeting fixture correction passed 682 of 683 tests; the only failure is the previously documented sibling byte-parity assertion (`protocol.ts`). FlowPath's runtime tests passed 13 of 14 with the same parity failure, and its typecheck passed. These results do not claim that the independent application's broader changes were verified here.

@@ -16,7 +16,7 @@ export function createVisitorLiveContext(socket: LiveSocket) {
   function pump() {
     if (stopped || pending || socket.readyState !== 1) return;
     // A concise new view takes precedence over remaining reference prose.
-    const key = (['screen', 'photos', 'content', 'memory', 'reading'] as const).find(key => queued.has(key));
+    const key = (['screen', 'photos', 'memory', 'content', 'reading'] as const).find(key => queued.has(key));
     if (!key) return;
     const snapshot = queued.get(key)!;
     const id = `visitor_context_${++sequence}`;

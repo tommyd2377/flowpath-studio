@@ -21,6 +21,23 @@ import type { VisitorChatEvent } from '../lib/visitor-chat-protocol';
 import { FakeLiveSocket, flushLive, liveAnswer, liveTool } from './helpers/live-fixture';
 import { VisitorConversationHistory } from '../lib/visitor-conversation-history';
 import { visitorHistorySchema, type VisitorHistory } from '../lib/visitor-request';
+import { expandPromptData } from './helpers/prompt-context-fixture';
+
+// Provider cache framing can move developer guidance out of body.instructions;
+// factual data may now live in the self-contained current-request envelope.
+type ModelRequest = { instructions?: unknown; input?: unknown };
+function inputOf(request: ModelRequest) {
+  const user = (request.input as { role?: string; content?: string | { text?: string }[] }[]).find(item => item.role === 'user');
+  return JSON.parse(typeof user?.content === 'string' ? user.content : user?.content?.find(part => part.text)?.text ?? '{}');
+}
+function guideOf(request: ModelRequest) {
+  const developers = (request.input as { role?: string; content?: string | { text?: string }[] }[]).filter(item => item.role === 'developer');
+  return [String(request.instructions), ...developers.map(item => typeof item.content === 'string' ? item.content : item.content?.map(part => part.text ?? '').join('\n') ?? '')].join('\n');
+}
+function referenceTextOf(request: ModelRequest) {
+  const input = inputOf(request);
+  return `${guideOf(request)}\n${JSON.stringify(input.promptData ? expandPromptData(input) : input)}`;
+}
 
 const availability = { enabled: true, mode: 'voice' as const, live: true, chatRemaining: 25, voiceRemaining: 5, resetsAt: '' };
 async function fixture(slug: string) {
@@ -109,17 +126,22 @@ test('voice background lookup preserves cited evidence for synthesis and recall 
       await h.ask(query);
       assert.equal(h.requests.length, 2, 'An exact lookup must still pass its complete citations to synthesis');
       const toolOutput = (h.requests[1].input as { type: string; output?: string }[]).find(item => item.type === 'function_call_output');
-      assert.deepEqual(JSON.parse(toolOutput!.output!).result, result);
+      const { evidenceExcerpts, omittedEvidenceExcerpts, ...returnedResult } = JSON.parse(toolOutput!.output!).result;
+      assert.deepEqual(returnedResult, result, 'The original answer, conditions, source and citation offsets remain intact');
+      assert.equal(omittedEvidenceExcerpts, 0);
+      assert.equal(evidenceExcerpts.length, 1);
+      assert.match(evidenceExcerpts[0].excerptId, /^excerpt_/);
+      assert.deepEqual({ ...evidenceExcerpts[0], excerptId: undefined }, { excerptId: undefined, resultId: result.id, start: 0, end: answer.length, excerpt: answer, url: source.url });
       assert.deepEqual(h.completed.map(event => event.text), [synthesis]);
       assert.equal(h.events.some(event => event.type === 'navigation' || event.type === 'plan'), false, 'Background lookup must not open a search panel');
       assert.ok(h.events.some(event => event.type === 'progress' && event.stage === 'searching'), 'Visual status may report research without displaying results');
-      const guide = String(h.requests[0].instructions);
+      const guide = guideOf(h.requests[0]);
       assert.match(guide, /research\.lookup capability for background evidence/);
       assert.doesNotMatch(guide, /Use search_explore when external information is requested or needed/);
       assert.doesNotMatch(guide, /Briefly distinguish it as general background/);
       await h.ask('Use the same conditions for another sealed sample.');
-      assert.ok(String(h.requests.at(-1)!.instructions).includes(answer));
-      assert.ok(String(h.requests.at(-1)!.instructions).includes(source.url));
+      assert.ok(referenceTextOf(h.requests.at(-1)!).includes(answer));
+      assert.ok(referenceTextOf(h.requests.at(-1)!).includes(source.url));
       assert.equal(searches, 1);
       assert.deepEqual(h.failures, []);
     } finally { await h.control.close(); }
@@ -139,9 +161,9 @@ test('chat background lookup produces a sourced answer without displaying retrie
     globalThis.fetch = async (url, init) => {
       assert.equal(String(url), 'https://api.openai.com/v1/responses', 'No live network is allowed');
       const body = JSON.parse(String(init?.body));
-      assert.match(body.instructions, /research\.lookup to gather a missing fact/);
-      assert.match(body.instructions, /Never use it to invent this publisher.s prices/);
-      assert.doesNotMatch(body.instructions, /Briefly distinguish it as general background/);
+      assert.match(guideOf(body), /research\.lookup to gather a missing fact/);
+      assert.match(guideOf(body), /Never use it to invent this publisher.s prices/);
+      assert.doesNotMatch(guideOf(body), /Briefly distinguish it as general background/);
       if (++calls === 1) return Response.json({ status: 'completed', output: [liveTool('visitor_task', { capabilityId: 'research.lookup', input: { query, kind: 'web' } })] });
       assert.equal(calls, 2, 'The background result requires one synthesis round, not another lookup');
       const evidence = JSON.parse(body.input.find((item: { type: string }) => item.type === 'function_call_output').output).result as ExploreResult;
@@ -173,10 +195,10 @@ test('a hypothetical assumption survives twelve voice exchanges, a typed follow-
         await first.ask(text);
         history.append([{ role: 'user', text }, { role: 'assistant', text: first.completed.at(-1)!.text }]);
       }
-      const finalInput = JSON.parse((first.requests.at(-1)!.input as { content: string }[])[0].content);
+      const finalInput = inputOf(first.requests.at(-1)!);
       assert.equal(finalInput.history.length, 24, 'The thirteenth request receives all twelve completed exchanges');
       assert.deepEqual(finalInput.history[0], { role: 'user', text: assumption });
-      assert.match(String(first.requests.at(-1)!.instructions), /do not turn a hypothetical value or a prior assistant answer into a verified publisher fact/);
+      assert.match(guideOf(first.requests.at(-1)!), /do not turn a hypothetical value or a prior assistant answer into a verified publisher fact/);
       assert.equal(first.requests.length, 13, 'Retention causes no summary or extra model call');
       assert.deepEqual(first.failures, []);
     } finally { await first.control.close(); }
@@ -189,10 +211,10 @@ test('a hypothetical assumption survives twelve voice exchanges, a typed follow-
     let chatCalls = 0;
     globalThis.fetch = async (url, init) => {
       assert.equal(String(url), 'https://api.openai.com/v1/responses', 'No live network is allowed');
-      const body = JSON.parse(String(init?.body)), input = JSON.parse(body.input[0].content);
+      const body = JSON.parse(String(init?.body)), input = inputOf(body);
       assert.equal(input.history.length, 26);
       assert.deepEqual(input.history[0], { role: 'user', text: assumption });
-      assert.match(body.instructions, /A later correction supersedes an earlier assumption/);
+      assert.match(guideOf(body), /A later correction supersedes an earlier assumption/);
       chatCalls++;
       return Response.json({ status: 'completed', output: [liveAnswer('The hypothetical guest count is now 9; the hypothetical allowance remains 12%.')] });
     };
@@ -204,14 +226,16 @@ test('a hypothetical assumption survives twelve voice exchanges, a typed follow-
     const resumed = await voice(f, [liveAnswer('The next example uses those same hypothetical assumptions.')], noSearch, visitorHistorySchema.parse(history.snapshot()));
     try {
       const frontline = resumed.socket.sent.filter(event => event.type === 'session.thinking.append').map(event => event.content).join('');
-      assert.ok(frontline.includes(assumption)); assert.ok(frontline.includes(correction));
       await resumed.ask('Apply those hypothetical assumptions to the next example.');
-      const input = JSON.parse((resumed.requests[0].input as { content: string }[])[0].content);
+      const input = inputOf(resumed.requests[0]);
       assert.equal(input.history.length, 28);
       assert.equal(input.history[0].text, assumption);
       assert.equal(input.history.at(-2).text, correction);
       assert.deepEqual((await readVisitorConversationMemory(f.slug, f.sessionId)).available, [], 'Dialogue did not become sourced research');
       assert.deepEqual(resumed.failures, []);
+      // Frontline recall is independent of the full bounded backend history.
+      assert.ok(frontline.includes(assumption), 'Resumed frontline voice must retain the original hypothetical assumption');
+      assert.ok(frontline.includes(correction));
     } finally { await resumed.control.close(); }
     t.diagnostic('Synthetic providers verify full model inputs and no extra calls, not live interpretation or speech.');
   } finally { globalThis.fetch = originalFetch; process.env = previous; await rm(directory, { recursive: true, force: true }); }
@@ -233,9 +257,9 @@ test('one voice lookup survives an empty view, typed follow-up and reconnect wit
       await first.ask('Look up the surcharge for this destination.');
       assert.deepEqual(first.completed.map(event => event.text), [firstAnswer], 'the final backend answer is emitted once, independently of a display change');
       await first.ask('Use that same surcharge for a larger order.');
-      assert.match(String(first.requests.at(-1)?.instructions), /7\.625%/);
-      assert.ok(String(first.requests.at(-1)?.instructions).includes('Delivery elsewhere is excluded.'));
-      const nextInput = JSON.parse((first.requests.at(-1)?.input as { content: string }[])[0].content);
+      assert.match(referenceTextOf(first.requests.at(-1)!), /7\.625%/);
+      assert.ok(referenceTextOf(first.requests.at(-1)!).includes('Delivery elsewhere is excluded.'));
+      const nextInput = inputOf(first.requests.at(-1)!);
       assert.deepEqual(nextInput.history, [
         { role: 'user', text: 'Look up the surcharge for this destination.' },
         { role: 'assistant', text: firstAnswer },
@@ -249,7 +273,7 @@ test('one voice lookup survives an empty view, typed follow-up and reconnect wit
     globalThis.fetch = async (url, init) => {
       assert.equal(String(url), 'https://api.openai.com/v1/responses', 'No live network is allowed');
       const body = JSON.parse(String(init?.body)); chatRequests.push(body);
-      assert.ok(body.instructions.includes(answer)); assert.ok(body.instructions.includes(source.url)); assert.ok(body.instructions.includes(result.fetchedAt));
+      assert.ok(referenceTextOf(body).includes(answer)); assert.ok(referenceTextOf(body).includes(source.url)); assert.ok(referenceTextOf(body).includes(result.fetchedAt));
       return Response.json({ status: 'completed', output: [liveAnswer('The new estimate uses the retained rate.')] });
     };
     try { await chat(f, 'What about two items instead of one?'); } finally { globalThis.fetch = originalFetch; }
@@ -257,7 +281,7 @@ test('one voice lookup survives an empty view, typed follow-up and reconnect wit
     const reconnected = await voice(f, [liveAnswer('I still have the applicable sourced rate.')], async () => { searches++; throw new Error('Unexpected repeat search'); });
     try {
       await reconnected.ask('Do you still have the rate we just looked up?');
-      assert.ok(String(reconnected.requests[0].instructions).includes(answer));
+      assert.ok(referenceTextOf(reconnected.requests[0]).includes(answer));
       await flushLive();
       const memoryText = reconnected.socket.sent.filter(event => String(event.content).startsWith('[memory ')).map(event => String(event.content).replace(/^\[memory \d+ part \d+\/\d+\] /, '')).join('');
       assert.ok(memoryText.includes(answer), 'Frontline voice also receives complete historical research');
@@ -295,7 +319,7 @@ test('a cancelled late answer never enters later same-connection dialogue or emi
   socket.frame({ type: 'session.input_transcript.delta', delta: 'What was the confirmed group limit?', start_ms: 3000, end_ms: 3200 });
   socket.frame({ type: 'session.delegation.created', offset_ms: 3200, delegation: { id: 'fresh-after-navigation', target: 'client' } });
   await freshCompletion; await flushLive();
-  const input = JSON.parse((requests[1].input as { content: string }[])[0].content);
+  const input = inputOf(requests[1]);
   assert.deepEqual(input.history, history);
   assert.equal(JSON.stringify(input).includes('987.65'), false);
   assert.deepEqual(events.filter(event => event.type === 'answer_completed').map(event => event.text), ['Fresh confirmed answer.']);
@@ -319,8 +343,8 @@ test('chat search retains its result for voice even when no external card refere
     const resumed = await voice(f, [liveAnswer('The earlier source is available.')], async () => { throw new Error('Recall must not search'); });
     try {
       await resumed.ask('What did that earlier source say?');
-      assert.ok(String(resumed.requests[0].instructions).includes(stored.available[0].answer));
-      assert.ok(String(resumed.requests[0].instructions).includes(stored.available[0].query));
+      assert.ok(referenceTextOf(resumed.requests[0]).includes(stored.available[0].answer));
+      assert.ok(referenceTextOf(resumed.requests[0]).includes(stored.available[0].query));
     } finally { await resumed.control.close(); }
   } finally { process.env = previous; await rm(directory, { recursive: true, force: true }); }
 });

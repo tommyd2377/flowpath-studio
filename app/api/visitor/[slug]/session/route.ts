@@ -35,6 +35,8 @@ const globals = globalThis as typeof globalThis & {
 };
 const gate = globals.visitorRealtimeGate ??= { active: 0, blocked: false, until: 0, starts: 0 };
 
+import { loadGreetingRecords } from '@/lib/greeting-record-store';
+
 export async function POST(request: Request, { params }: { params: Promise<{ slug: string }> }) {
   let traceId: string = randomUUID();
   const startedAt = performance.now();
@@ -54,9 +56,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
     const preview = await visitorAccess(slug);
     if (!preview.availability.live) throw new AppError('Continuous voice is unavailable in the demo preview.', 503);
     await assertNoStripeTestPaidAi(preview.siteId);
-    const [catalog, media] = await Promise.all([
+    const [catalog, media, greetingRecords] = await Promise.all([
       preview.content.catalogPublicationId ? Promise.resolve(null) : getPublishedKnowledgeSnapshot(preview.siteId, preview.content.knowledgeRevisionId),
       getPublishedMedia(preview.siteId, preview.content.mediaRevisionId),
+      loadGreetingRecords(preview.siteId, preview.content),
     ]);
     const context = validateVisitorContext(input.context ?? (input.catalogState ? { catalogState: input.catalogState } : {}), preview.content, catalog ?? undefined, media ?? undefined, slug);
     if (input.context?.catalogState && input.catalogState && JSON.stringify(input.catalogState) !== JSON.stringify(input.context.catalogState)) throw new AppError('The current view is inconsistent. Reload and try again.', 400);
@@ -99,14 +102,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
     return visitorRealtimeSession({
       record,
       offer: input.sdp, apiKey: key, signal: request.signal, traceId: input.requestId,
-      content: preview.content, catalog: catalog ?? undefined, media: media ?? undefined, catalogState,
+      content: preview.content, catalog: catalog ?? undefined, media: media ?? undefined, catalogState, greetingRecords,
       context, history: input.history,
       idleTimeoutMs: visitorSettings(preview.content).voiceIdleTimeoutSeconds * 1000,
       mailbox: { slug, siteId: preview.siteId, publicationKey: createHash('sha256').update(snapshot).digest('hex') },
       availability, reservationChecksPublication: true, reserveTurn: () => reserve(randomUUID()), assertCurrent,
       search: async (query, kind, signal, annotationTarget) => (await authorizedExplore(slug, { query, kind, requestId: randomUUID(), parentTraceId: input.requestId, ...(annotationTarget ? { annotationTarget } : {}) }, signal, snapshot, record)).result,
       onTiming: (stage, durationMs) => { void recordPlatformEvent(preview.siteId, { ...observed, type: 'provider_usage', status: 'observed', operationId: `latency_${stage}`, durationMs }).catch(() => undefined); },
-      onUsage: (usage, source) => { void recordPlatformEvent(preview.siteId, { ...observed, type: 'provider_usage', status: 'observed', operationId: source === 'live' ? 'gpt_live_duration' : source === 'backend' ? 'luna_backend' : 'input_transcription', requestId: currentRequestId, usage }).catch(() => undefined); },
+      onUsage: (usage, source) => { void recordPlatformEvent(preview.siteId, { ...observed, type: 'provider_usage', status: 'observed', operationId: source === 'live' ? 'gpt_live_duration' : source === 'backend' ? 'astra_backend' : 'input_transcription', requestId: currentRequestId, usage }).catch(() => undefined); },
       onCleanupFailure: () => { gate.blocked = true; }, onClosed: release,
       retainCleanup: work => { after(() => work); },
     });

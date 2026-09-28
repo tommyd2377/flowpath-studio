@@ -135,6 +135,48 @@ test('invalid schemas, unsupported capabilities and concurrent state fail before
     await assert.rejects(() => run('query.create', { scope: {} }), /Conflicting/);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+test('a reused server snapshot cannot execute after a newer visitor edit', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'visitor-capability-snapshot-'));
+  try {
+    const index = compileQueryIndex(taskFixture()), store = new VisitorTaskStore(localTaskDocuments(directory));
+    const session = await store.create(index.space.publication), snapshot = structuredClone(session);
+    session.generation++; await store.save(session, session.revision);
+    const saved = await store.read(session.id, index.space.publication);
+    let calls = 0;
+    const registry = new Map(visitorCapabilities), original = registry.get('query.create')!;
+    registry.set('query.create', { ...original, execute: async (...args) => { calls++; return original.execute(...args); } });
+    await assert.rejects(executeVisitorCapability({ sessionId: session.id, sessionSnapshot: snapshot, index, store, registry, signal: new AbortController().signal, assertCurrent: async () => {},
+      call: { operationId: randomUUID(), capabilityId: 'query.create', expectedRevision: snapshot.revision, input: {} } }), /State changed/);
+    assert.equal(calls, 0);
+    assert.deepEqual(await store.read(session.id, index.space.publication), saved);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('pure query updates commit once and a competing edit cannot leak partial results', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'visitor-atomic-query-'));
+  try {
+    const index = compileQueryIndex(taskFixture()), documents = localTaskDocuments(directory);
+    let writes = 0;
+    const store = new VisitorTaskStore({ ...documents, compareAndSwap: async (...args) => { writes++; await documents.compareAndSwap(...args); } });
+    let session = await store.create(index.space.publication);
+    buildVisitorTaskView({ index, session, signal: new AbortController().signal }); session = await store.save(session, session.revision);
+    const apply = (operationId: string, expectedRevision: number, queryRevision: number, text: string) => executeVisitorCapability({ sessionId: session.id, index, store, signal: new AbortController().signal, assertCurrent: async () => {},
+      call: { operationId, capabilityId: 'query.patch', expectedRevision, input: { queryId: session.queries[0].current.queryId, baseRevision: queryRevision, operations: [{ op: 'setSearch', text }] } } });
+    const beforeWrites = writes, operationId = randomUUID();
+    const first = await apply(operationId, session.revision, 0, 'record');
+    assert.equal(writes - beforeWrites, 1, 'Operation and complete result share one atomic write');
+    session = await store.read(session.id, index.space.publication);
+    assert.equal(session.operations[0].status, 'completed');
+    assert.deepEqual(await apply(operationId, session.revision, 0, 'record'), first, 'An identical replay returns the stored result');
+    const competing = await Promise.allSettled([apply(randomUUID(), session.revision, 1, 'first'), apply(randomUUID(), session.revision, 1, 'second')]);
+    assert.equal(competing.filter(result => result.status === 'fulfilled').length, 1);
+    const saved = await store.read(session.id, index.space.publication);
+    assert.equal(saved.operations.length, 2); assert.equal(saved.queries[0].current.revision, 2);
+    assert.ok(saved.operations.every(operation => operation.status === 'completed'));
+    assert.equal(saved.receipts.length, 0, 'Persistence is not a browser display acknowledgment');
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
 test('synthetic quotes invalidate on edits/expiry; duplicate confirmation and timeout reconciliation have one effect', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'visitor-synthetic-'));
   try {

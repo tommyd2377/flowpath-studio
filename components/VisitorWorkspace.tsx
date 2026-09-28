@@ -1,8 +1,9 @@
 'use client';
+import type { GreetingRecordTopic } from '@/lib/greeting-records';
 import { recordBrowserTestEvent } from '@/lib/visitor-test-events';
 
 import { useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type Ref, type ReactNode } from 'react';
-import { AnimatePresence } from 'motion/react';
+import { AnimatePresence, motion } from 'motion/react';
 import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { MediaImage, MediaVideo, InformationRegion, InformationFrame, InformationGrid, InformationGridItem, PublishedChart, type PlaybackState, type ExternalSearchResult, ExternalSearchResults, PresentationView } from '@thevoice/platform-ui';
 import { initialInteraction } from '@thevoice/platform-ui/interaction';
@@ -20,6 +21,7 @@ import { objectInput, openingWorkspace, planWorkspaceIntent, publishedWorkspace,
 import { annotationTargetForObject, exploreContextForResult, exploreResultSchema, type AnnotationTarget, type ExploreCommand, type ExploreContext } from '@/lib/explore-model';
 import { visitorRecordSummary } from '@/lib/visitor-record-summary';
 import { knowledgeValueText } from '@/lib/knowledge-display';
+import { greetingVisuals, type GreetingVisual } from '@/lib/greeting-presentation';
 import { workspaceElementVisible } from '@/lib/workspace-screen';
 import type { SiteContent } from '@/lib/site-model';
 import type { SitePresentation } from '@/lib/site-presentation';
@@ -31,7 +33,7 @@ type Status = 'applied' | 'failed' | 'cancelled';
 export type VisitorWorkspaceHandle = {
   context: () => { workspace: WorkspaceState; scene?: WorkspaceScene; carousel: CarouselContext; surface: InformationSurfaceContext; externalResults?: ExploreContext[]; explore?: ExploreContext };
   prepare: (signal?: AbortSignal) => Promise<Status>;
-  begin: (requestId: string, prepareTask?: boolean) => Promise<Status>;
+  begin: (requestId: string, prepareTask?: boolean, refreshTask?: boolean) => Promise<Status>;
   finish: (requestId: string) => void;
   cancel: () => Promise<Status>;
   answer: (text: string, signal?: AbortSignal, relationship?: 'related' | 'new-subject', placement?: 'supporting') => Promise<Status>;
@@ -54,21 +56,23 @@ export type VisitorWorkspaceHandle = {
   reset: () => void;
   narrate: () => void;
 };
-type Card = Omit<CarouselCard, 'kind'> & { kind: SurfaceRegion['kind']; object?: WorkspaceObject; objectIds?: string[]; itemCount?: number; record?: WorkspaceRecord; content?: ReactNode; recordId?: string; videoId?: string; selectionKey?: string };
+type Card = Omit<CarouselCard, 'kind'> & { kind: SurfaceRegion['kind']; object?: WorkspaceObject; objectIds?: string[]; itemCount?: number; record?: WorkspaceRecord; content?: ReactNode; recordId?: string; videoId?: string; selectionKey?: string; placeholderOnly?: boolean };
 const frame = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 
 function snapshotTitle(value: SurfaceSnapshot, authority: ReturnType<typeof publishedWorkspace>) { return (value.task?.detail?.record.name ?? value.task?.research?.query ?? value.workspace.objects.flatMap(object => object.references.map(ref => workspaceRecord(authority, ref)?.name)).filter(Boolean).join(' · ').slice(0, 120)) || value.answer.split(/\n/)[0].replace(/^#+\s*/, '').slice(0, 90) || 'Earlier information'; }
 
 /** One persistent composition; only validated data/references enter per-visit history. */
-export default function VisitorWorkspace({ content, catalog, media, handleRef, onInteraction, onContext, onInvoke, onPhotoView, active = true, pending = false, notice = '', onDismiss, onMediaAudible, tenantId = 'preview', onRestore }: {
-  content: SiteContent; catalog?: KnowledgeCatalog | null; media?: MediaLibrary | null; handleRef?: Ref<VisitorWorkspaceHandle>;
+export default function VisitorWorkspace({ content, catalog, media, greetingRecords, handleRef, onInteraction, onContext, onInvoke, onPhotoView, active = true, pending = false, notice = '', onDismiss, onMediaAudible, tenantId = 'preview', onRestore, hideEmpty = false, onContentChange }: {
+  content: SiteContent; catalog?: KnowledgeCatalog | null; media?: MediaLibrary | null; greetingRecords?: GreetingRecordTopic[]; handleRef?: Ref<VisitorWorkspaceHandle>;
   onInteraction: () => void; onContext?: () => void; onInvoke?: () => void; onPhotoView?: (id: string) => void;
   onMediaAudible?: () => void; onRestore?: () => void; tenantId?: string;
+  hideEmpty?: boolean; onContentChange?: (hasInformation: boolean) => void;
   active?: boolean; notice?: string; pending?: boolean; onDismiss?: (preserveConversation?: boolean) => void;
 }) {
   const tasks = useVisitorTasks(), taskSurface = useWebsiteTasks();
   const initialId = useId();
   const baseAuthority = useMemo(() => publishedWorkspace(content, catalog, media), [content, catalog, media]);
+  const greetingTopics = useMemo(() => greetingVisuals(content, baseAuthority, catalog, greetingRecords), [content, baseAuthority, catalog, greetingRecords]);
   const [surface, setSurface] = useState<SurfaceSnapshot>(() => ({ id: `surface:${initialId}`, requestId: null, tenantId, publicationId: baseAuthority.publicationId,
     workspace: openingWorkspace(baseAuthority, content), task: null, taskBookmark: null, external: [], selections: {}, answer: '', primaryId: null, expanded: false, scrollTop: 0 }));
   const current = useRef(surface);
@@ -99,33 +103,35 @@ export default function VisitorWorkspace({ content, catalog, media, handleRef, o
   const [restorationPending, setRestorationPending] = useState(false);
   function capture() { callback.current?.(); recordBrowserTestEvent('surface.observed', { stateId: current.current.id, requestId: current.current.requestId, revision: revision.current, pending: history.current.pending?.id, regions: regionsRef.current.map(region => ({ id: region.id, role: region.role })) }); }
   function snapshot(): SurfaceSnapshot { return { ...current.current, scrollTop: Math.round(reading.current?.scrollTop ?? 0), taskBookmark: current.current.taskBookmark ?? tasks?.snapshot()?.operationId ?? (tasks?.current() ? 'initial' : null) }; }
-  async function begin(requestId: string, prepareTask = true): Promise<Status> {
+  async function begin(requestId: string, prepareTask = true, refreshTask = true): Promise<Status> {
     if (restoreWork.current) await restoreWork.current;
     if (history.current.pending?.id === requestId) return 'applied';
     if (history.current.pending) { const status = await restore(history.current.pending.before); if (status !== 'applied') return status; }
-    if (prepareTask) { const status = await prepare(); if (status !== 'applied') return status; }
+    if (prepareTask) { const status = await prepare(undefined, refreshTask); if (status !== 'applied') return status; }
     history.current.begin(requestId, snapshot()); publishHistory();
     recordBrowserTestEvent('surface.request.started', { stateId: current.current.id, requestId });
     return 'applied';
   }
   // Home resets the live query but retains this composition. Rebind it before
   // a new request or a manual action, never while applying a backend response.
-  async function prepare(signal?: AbortSignal): Promise<Status> {
+  async function prepare(signal?: AbortSignal, refresh = true): Promise<Status> {
     if (restoreWork.current) { const status = await restoreWork.current; if (status !== 'applied') return status; }
     if (signal?.aborted) return 'cancelled';
-    if (!tasks?.current() || !current.current.task) return 'applied';
+    if (!tasks?.current()) return 'applied';
     let synchronized = true;
-    try { await tasks.settle(); } catch { synchronized = false; }
+    try { await tasks.settle(refresh); } catch { synchronized = false; }
     const saved = snapshot(), actual = tasks.snapshot();
-    if (synchronized && actual?.active && surfaceFingerprint({ ...saved, task: actual }) === surfaceFingerprint(saved)) return 'applied';
+    if (synchronized && (!saved.task || actual?.active && surfaceFingerprint({ ...saved, task: actual }) === surfaceFingerprint(saved))) return 'applied';
     setRestorationPending(true); restoring.current = true;
     const expected = ++version.current;
     const operation = (async (): Promise<Status> => {
       try {
-        const status = await tasks.restore(saved.taskBookmark ?? saved.task?.operationId ?? 'initial', true, signal);
+        // A gallery can hide the task view after the backend advances its
+        // generation. Rebind the retained query without reopening that view.
+        const status = await tasks.restore(saved.taskBookmark ?? saved.task?.operationId ?? 'initial', !!saved.task, signal);
         if (status !== 'applied') { setError('That saved result has expired or changed. Your current information remains available.'); return status; }
         if (signal?.aborted || version.current !== expected) return 'cancelled';
-        const next = { ...saved, task: tasks.snapshot() ?? saved.task };
+        const next = { ...saved, task: saved.task ? tasks.snapshot() ?? saved.task : null };
         current.current = next; setSurface(next); revision.current++; setError('');
         await frame(); capture(); return 'applied';
       } finally { restoring.current = false; }
@@ -370,16 +376,37 @@ export default function VisitorWorkspace({ content, catalog, media, handleRef, o
       {expanded && entity && catalog?.capabilities?.filter(link => !link.entityIds.length || link.entityIds.includes(entity.id)).map(link => <p key={link.id}><a href={link.url} target="_blank" rel="noopener noreferrer">{link.label} ↗</a></p>)}
     </>;
   }
+  function greetingContent(point: GreetingVisual): ReactNode {
+    const reference = point.record.parent ?? point.record.reference;
+    const photo = media?.associations.filter(link => media.assets.some(asset => asset.id === link.assetId) &&
+      (reference.kind === 'entity' && link.targetType === 'entity' && link.targetId === reference.id || reference.kind === 'source' && link.targetType === 'section' && `section:${link.targetId}` === reference.id))
+      .sort((a, b) => Number(b.primary) - Number(a.primary))[0];
+    return <div className={styles.greetingTopic} data-greeting-topic={point.slot + 1} data-has-photo={!!photo}>
+      <div>{point.topic.body.split(/\n\s*\n/).map((paragraph, index) => <p key={index}>{paragraph}</p>)}{point.record.reference.kind === 'entity' && <button type="button" className={styles.textButton} onClick={() => {
+        onInteraction(); void apply(workspaceBatch(current.current.workspace, [{ kind: 'replace', objects: [objectInput(point.record)] }]));
+      }}>Read more<span className={styles.srOnly}> about {point.topic.title}</span> ↗</button>}</div>
+      {photo && <figure className={styles.photo}><MediaImage assetId={photo.assetId} size="display" fit="contain" interactive={false}/>{photo.role === 'example' && <figcaption>Illustrative example</figcaption>}</figure>}
+    </div>;
+  }
   const taskContent = taskSurface?.render(view, execute);
   let cards: Card[] = [];
   if (view) {
+    // An empty query is useful as the primary result or a history destination,
+    // but it supplies no support for a later standalone answer. Rich task
+    // content and actionable context must never be classified as placeholders.
+    const placeholderOnly = !view.records.length && view.result.count.kind === 'exact' && view.result.count.value === 0 && !view.result.nextCursor
+      && !view.clarification && !view.links?.length && !view.selectedRecords.length && !view.lookupRecords?.length
+      && !view.detail && !view.comparison && !view.estimate && !view.research && !view.map
+      && !view.artifacts.length && !view.artifactSummaries?.length && !Object.keys(view.business).length && !view.demoActions
+      && !Object.values(view.result.exclusions).some(count => count > 0) && !taskSurface?.error;
     const taskVideo = view.focus === 'detail' && view.detail?.record.type === 'published-video' ? view.detail.record.media?.assetId : view.focus === 'query' && view.records.length === 1 && view.records[0].type === 'published-video' ? view.records[0].media?.assetId : undefined;
-    if (view.focus === 'clarification') cards.push({ id: 'clarification', title: '', kind: 'information', referenceIds: [], content: taskContent?.header });
+    if (view.focus === 'clarification') cards.push({ id: 'clarification', title: view.clarification?.question.slice(0, 200) || 'A little more detail', kind: 'information', referenceIds: [], content: taskContent?.header });
+    else if (view.focus === 'estimate' && view.estimate) cards.push({ id: `estimate:${view.operationId}`, title: '', kind: 'artifact', referenceIds: [...new Set(view.estimate.lines.map(line => line.recordId))], content: taskContent?.foreground });
     else if (taskVideo) cards.push({ id: `video:${taskVideo}`, title: view.detail?.record.name ?? view.records[0].name, kind: 'video', videoId: taskVideo, referenceIds: [view.detail?.record.id ?? view.records[0].id], recordId: view.detail?.record.id ?? view.records[0].id, content: videoCard(taskVideo) });
     else if (view.focus === 'detail' && view.detail || view.focus === 'comparison' && view.comparison) cards.push({ id: view.focus === 'detail' ? `detail:${view.detail!.record.id}` : `comparison:${view.result.resultSetId}`, title: view.focus === 'detail' ? view.detail!.record.name : 'Comparison', kind: view.focus === 'detail' ? view.detail!.record.type === 'published-photo' ? 'photo' : 'record' : 'comparison', referenceIds: view.focus === 'detail' ? [view.detail!.record.id] : view.comparison!.rows.map(row => row.id), content: taskContent?.foreground });
     else if (view.research && view.focus === 'research') cards.push({ id: `research:${view.research.id}`, title: view.research.query, kind: view.research.kind === 'map' ? 'map' : 'research', selectionKey: view.research.id, referenceIds: [`research:${view.research.id}`], content: researchContent(view.research) });
     else if (view.focus && ['research', 'map', 'artifact', 'business', 'quote', 'booking', 'receipt', 'cart', 'slots'].includes(view.focus)) cards.push({ id: view.research ? `research:${view.research.id}` : `${view.focus}:${view.operationId}`, title: view.research?.query ?? view.map?.label ?? '', kind: view.map ? 'map' : view.research ? 'research' : 'artifact', referenceIds: [], content: taskContent?.after });
-    else cards.push({ id: 'collection:results', kind: 'collection', title: view.clarification ? 'A little more detail' : view.records.length ? `${view.result.count.value} ${view.result.count.value === 1 ? 'item' : 'items'}` : 'No matches yet', referenceIds: view.records.map(record => record.id), content: <>
+    else cards.push({ id: 'collection:results', kind: 'collection', placeholderOnly, title: view.clarification ? 'A little more detail' : view.records.length ? `${view.result.count.value} ${view.result.count.value === 1 ? 'item' : 'items'}` : 'No matches yet', referenceIds: view.records.map(record => record.id), content: <>
       <div className={styles.criteria}>{taskContent?.header}</div>
       <InformationGrid className={styles.collection} direction={direction} photos={view.records.every(record => record.type === 'published-photo')}>{view.records.map(record => { const concise = visitorRecordSummary(record); return <InformationGridItem key={record.id} id={record.id} className={styles.result}>
         {record.media && record.type !== 'published-video' && <figure className={styles.resultPhoto}><MediaImage assetId={record.media.assetId} size="display" fit="contain" aspectRatio="4 / 3" interactive={false}/>{record.media.role === 'example' && <figcaption>Illustrative example</figcaption>}</figure>}
@@ -430,13 +457,22 @@ export default function VisitorWorkspace({ content, catalog, media, handleRef, o
           {record.reference.kind !== 'photo' && <p>{record.body}</p>}
         </InformationGridItem>)}</InformationGrid>
       }); }
-    } else records.forEach(record => { const videoId = record.reference.id.startsWith('video:') ? record.reference.id.slice(6) : undefined; cards.push({ id: videoId ? `video:${videoId}` : referenceKey(record.reference), title: record.name, kind: videoId ? 'video' : record.reference.kind === 'photo' ? 'photo' : record.reference.kind === 'external' ? external.find(result => result.id === record.reference.id)?.kind === 'map' ? 'map' : 'research' : 'information', referenceIds: [referenceKey(record.reference)], ...(record.reference.kind === 'external' ? { selectionKey: record.reference.id } : {}), record, object, videoId }); });
+    } else records.forEach(record => {
+      const greeting = greetingTopics.find(point => object.instanceId === `greeting-topic-${point.slot + 1}` && referenceKey(point.record.reference) === referenceKey(record.reference));
+      const videoId = record.reference.id.startsWith('video:') ? record.reference.id.slice(6) : undefined;
+      cards.push({ id: videoId ? `video:${videoId}` : referenceKey(record.reference), title: greeting ? greeting.topic.title : record.name, kind: videoId ? 'video' : record.reference.kind === 'photo' ? 'photo' : record.reference.kind === 'external' ? external.find(result => result.id === record.reference.id)?.kind === 'map' ? 'map' : 'research' : 'information', referenceIds: [referenceKey(record.reference)], ...(record.reference.kind === 'external' ? { selectionKey: record.reference.id } : {}), ...(greeting ? { content: greetingContent(greeting) } : {}), record, object, videoId });
+    });
   }
   cards = [...new Map(cards.map(card => [card.id, card])).values()];
   const supportingAnswer = !!answer && surface.answerPlacement === 'supporting' && cards.length > 0;
   if (answer && !supportingAnswer) cards.push({ id: 'answer', title: '', kind: 'answer', referenceIds: [], content: <AssistantAnswer text={answer}/> });
+  const hasInformation = cards.length > 0;
+  useEffect(() => { onContentChange?.(hasInformation); }, [hasInformation, onContentChange]);
   if (!cards.length) cards.push({ id: 'welcome', title: 'What would you like to explore?', kind: 'information', referenceIds: [], content: <p>Ask a question or take a closer look.</p> });
   const selected = cards.find(card => card.id === surface.primaryId) ?? cards.at(-1)!;
+  // Keep current-screen receipts consistent with the visible composition. The
+  // task and its history bookmark remain intact for refinement and Back.
+  if (selected.kind === 'answer') cards = cards.filter(card => !card.placeholderOnly);
   const supporting = cards.filter(card => card.id !== selected.id && (selected.kind !== 'collection' || card.kind === 'collection' || card.kind === 'video')).reverse().sort((a, b) => Number(b.kind === 'video') - Number(a.kind === 'video')).slice(0, 2);
   // Primary first in the DOM for reading order. CSS moves support left on desktop;
   // videos keep the same parent/key even when their role changes.
@@ -479,7 +515,33 @@ export default function VisitorWorkspace({ content, catalog, media, handleRef, o
     },
     intent: async (text, signal) => { if (await command(text, signal)) return true; const result = planWorkspaceIntent(text, current.current.workspace, authorityRef.current, context().scene, catalog, media); if (!result.batch) { setError(result.message); return false; } return await apply(result.batch, signal) === 'applied'; },
     plan: (plan, signal) => apply('schemaVersion' in plan && catalog ? workspaceFromPlan(plan, current.current.workspace, authorityRef.current, catalog, media) : workspaceFromSources(plan as SitePresentation, current.current.workspace, authorityRef.current, content, media), signal),
-    greeting: async (index, signal) => { const card = cardsRef.current[index ?? 0]; if (card) change({ primaryId: card.id }, false); lastNarrated.current = card?.id ?? null; return confirm(signal); },
+    greeting: async (index, signal) => {
+      if (signal.aborted) return 'cancelled';
+      // Finishing leaves the last introduced subject available for questions.
+      // Each topic is a real, validated history state, not an index into unrelated cards.
+      if (index === null) return 'applied';
+      const point = greetingTopics[index];
+      if (!point) return 'failed';
+      if (point.recordId) {
+        const requestId = crypto.randomUUID();
+        if (await begin(requestId, true) !== 'applied' || signal.aborted) return 'cancelled';
+        try {
+          if (taskSurface?.available) {
+            const result = await taskSurface.execute('record.detail', { recordId: point.recordId }, false, signal);
+            if (signal.aborted) return 'cancelled';
+            if (!result) return 'failed';
+          } else {
+            // Draft previews use the same approved topic text without starting
+            // a public task session or inventing a workspace reference.
+            change({ workspace: emptyWorkspace(authorityRef.current.publicationId), task: null, answer: `## ${point.topic.title}\n\n${point.topic.body}`, primaryId: 'answer', scrollTop: 0 });
+          }
+          await frame();
+          return confirm(signal);
+        } finally { await frame(); finish(requestId); }
+      }
+      lastNarrated.current = referenceKey(point.record.reference);
+      return apply(workspaceBatch(current.current.workspace, [{ kind: 'replace', objects: [objectInput(point.record, point.record.component, `greeting-topic-${point.slot + 1}`)] }]), signal);
+    },
     showExternal: async (input, signal) => {
       if (signal?.aborted) return 'cancelled'; const result = exploreResultSchema.parse(input), next = [...current.current.external.filter(item => item.id !== result.id), result].slice(-6);
       const nextAuthority = publishedWorkspace(content, catalog, media, next.map(result => exploreContextForResult(result, result.kind, null)));
@@ -493,24 +555,24 @@ export default function VisitorWorkspace({ content, catalog, media, handleRef, o
     browse: signal => navigate('browse', undefined, undefined, signal), home: signal => navigate('home', undefined, undefined, signal), clear: signal => navigate('clear', undefined, undefined, signal), restoreWebsite: async () => { onDismiss?.(); return 'applied'; }, releaseFocus: async () => 'applied', beforeSearch: () => {}, reset: () => { void navigate('clear'); }, narrate: () => { lastNarrated.current = current.current.primaryId; capture(); },
   }));
   const destination = historyView.destination;
-  return <section ref={root} className={styles.rail} data-information-surface data-ai-carousel data-active-card={selected.id} data-result-set={view?.result.resultSetId} data-workspace-transition="settled" data-carousel-active={active} data-surface-state={surface.id} data-history-depth={historyView.depth} data-forward-depth={history.current.future.length} data-history-direction={direction} aria-label="Assistant information" data-pending-request={historyView.pendingId ?? ''} aria-busy={!!(pending || taskSurface?.busy || historyView.pendingId || restorationPending)}>
+  return <section ref={root} className={styles.rail} hidden={hideEmpty && !hasInformation && !error && !notice} data-has-information={hasInformation} data-information-surface data-ai-carousel data-active-card={selected.id} data-result-set={view?.result.resultSetId} data-workspace-transition="settled" data-carousel-active={active} data-surface-state={surface.id} data-history-depth={historyView.depth} data-forward-depth={history.current.future.length} data-history-direction={direction} aria-label="Assistant information" data-pending-request={historyView.pendingId ?? ''} aria-busy={!!(pending || taskSurface?.busy || historyView.pendingId || restorationPending)}>
     <div className={styles.shell} data-layout={layout} data-expanded={surface.expanded}>
       {destination && <button type="button" className={styles.back} data-surface-back disabled={restorationPending} aria-label="Back to previous information" title={`Back to ${snapshotTitle(destination, authority)}`} onClick={() => { onInteraction(); void back(); }}><ArrowLeft size={18}/><span className={styles.srOnly}>Back</span></button>}
       {historyView.forward && <button type="button" className={styles.forward} data-surface-forward disabled={restorationPending} aria-label="Forward to next information" title={`Forward to ${snapshotTitle(historyView.forward, authority)}`} onClick={() => { onInteraction(); void navigate('forward'); }}><ArrowRight size={18}/><span className={styles.srOnly}>Forward</span></button>}
       <InformationFrame className={styles.card} ref={cardRoot} transitionKey={compositionKey} onSettled={settled => { if (root.current) root.current.dataset.workspaceTransition = settled ? 'settled' : 'moving'; }}>
         <button type="button" className={styles.dismiss} aria-label="Close assistant" title="Return to website" onClick={() => onDismiss?.()}><X size={16}/></button>
-        <div className={styles.reading} ref={reading} data-workspace-scroll onScroll={() => { current.current = { ...current.current, scrollTop: Math.round(reading.current?.scrollTop ?? 0) }; capture(); }}>
+        <motion.div layoutScroll className={styles.reading} ref={reading} data-workspace-scroll onScroll={() => { current.current = { ...current.current, scrollTop: Math.round(reading.current?.scrollTop ?? 0) }; capture(); }}>
           {(error || notice || (selected.kind !== 'collection' && taskSurface?.error)) && <p className={styles.notice} role="status">{error || notice || taskSurface?.error}</p>}
           <div className={styles.composition} data-layout={layout}>
             <AnimatePresence initial={false} mode="popLayout" custom={direction}>{[...regions].sort((a, b) => Number(b.kind === 'video') - Number(a.kind === 'video') || (a.kind === 'video' && b.kind === 'video' ? a.id.localeCompare(b.id) : 0)).map(region => <InformationRegion key={region.id} id={region.id} role={region.role} kind={region.kind} reverse={direction === 'back'} className={styles.region}>
               <div data-task-record={region.recordId}>
-                {region.title && !['video', 'photo', 'comparison', 'research', 'map'].includes(region.kind) && !(view?.detail && region.id.startsWith('detail:')) && <h2 className={region.kind === 'collection' ? styles.resultCount : undefined} data-website-result-heading={region.kind === 'collection' ? true : undefined}>{region.title}</h2>}
+                {region.title && region.id !== 'clarification' && !['video', 'photo', 'comparison', 'research', 'map'].includes(region.kind) && !(view?.detail && region.id.startsWith('detail:')) && <h2 className={region.kind === 'collection' ? styles.resultCount : undefined} data-website-result-heading={region.kind === 'collection' ? true : undefined}>{region.title}</h2>}
                 {region.content ?? (region.record ? recordContent(region.record, surface.expanded) : null)}
                 {supportingAnswer && region.role === 'primary' && <div className={styles.supportingAnswer} data-surface-supplement><AssistantAnswer text={answer}/></div>}
               </div>
             </InformationRegion>)}</AnimatePresence>
           </div>
-        </div>
+        </motion.div>
       </InformationFrame>
     </div>
   </section>;

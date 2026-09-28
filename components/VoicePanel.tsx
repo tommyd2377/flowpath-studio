@@ -16,6 +16,7 @@ export default function VoicePanel({ siteId, content, setContent, busy, unsaved,
   siteId: string; content: SiteContent; setContent: (content: SiteContent) => void; busy: boolean; unsaved: boolean; save: () => void;
 }) {
   const settings = conversationSettings(content);
+  const openingExperience = visitorSettings(content).openingExperience;
   const update = (patch: Partial<ConversationSettings>) => setContent({ ...content, visitor: { ...visitorSettings(visitorDraft(content)), conversation: { ...content.visitor?.conversation, ...patch } } });
   const colorTokens = voiceDesignTokens(settings.color, '#f7f7f8', '#ffffff');
   const activePreset = Object.entries(CONVERSATION_PRESETS).find(([, preset]) => Object.entries(preset.settings).every(([key, value]) => settings[key as keyof ConversationSettings] === value))?.[0];
@@ -23,6 +24,24 @@ export default function VoicePanel({ siteId, content, setContent, busy, unsaved,
     <div className="panel-heading"><span className="eyebrow">A voice of your own</span><h2>The Voice</h2><p>Choose how your assistant sounds, listens and responds. Make it feel at home on your site.</p></div>
     <div className={styles.model}><AudioLines size={22}/><div><strong>GPT Live 1</strong><span>One model. Your personality.</span></div><span className="badge">Voice model</span></div>
     <p className="field-help">Settings belong to this site and its published address. Save your draft, then Publish to use them with visitors. Switching sites keeps each assistant’s choices separate.</p>
+
+    <section aria-label="Visitor arrival"><div className="section-heading"><h3>Visitor arrival</h3><span>First view</span></div>
+      <p className="field-help">Choose what visitors see before they start a conversation.</p>
+      <div className={styles.openingChoices} role="group" aria-label="Opening experience">
+        <button type="button" disabled={busy} aria-pressed={openingExperience === 'website'} onClick={() => setContent({ ...content, visitor: { ...visitorSettings(visitorDraft(content)), openingExperience: 'website' } })}><strong>Website first</strong><span>Open your regular website with conversation controls ready.</span></button>
+        <button type="button" disabled={busy} aria-pressed={openingExperience === 'voice'} onClick={() => setContent({ ...content, visitor: { ...visitorSettings(visitorDraft(content)), openingExperience: 'voice' } })}><strong>Voice invitation</strong><span>Welcome visitors with your logo and a prominent waveform.</span></button>
+      </div>
+      <p className="field-help">The voice invitation includes a Browse website button. It appears only when voice is enabled, and never starts a conversation automatically.</p>
+    </section>
+
+    <section aria-label="Assistant role"><div className="section-heading"><h3>Assistant role</h3><span>Voice & chat</span></div>
+      <p className="field-help">Define who your assistant is, who it helps, and what it helps them do throughout the conversation.</p>
+      <label className="field">Role and identity<textarea disabled={busy} rows={3} maxLength={1000} value={content.visitor?.assistantPurpose ?? ''} onChange={event => setContent({ ...content, visitor: { ...visitorSettings(visitorDraft(content)), assistantPurpose: event.target.value } })} placeholder="For example: Be a knowledgeable travel guide. Help curious visitors understand the places in this guide and compare their options."/>
+        <span className="field-help">Leave blank for a helpful website guide. This role applies to both voice and chat after publishing. It does not add business facts, credentials or services.</span>
+      </label>
+      <p className="field-help">Your welcome words and up to three opening topics are separate. Set those in Conversation opening below.</p>
+    </section>
+    <GreetingSettings key={siteId} siteId={siteId} content={content} setContent={setContent} busy={busy}/>
 
     <section aria-label="Voice and language"><div className="section-heading"><h3>Voice & language</h3></div>
       <label className="field">Speaking voice<select disabled={busy} value={settings.voice} onChange={event => update({ voice: event.target.value as ConversationSettings['voice'] })}>{Object.entries(LIVE_VOICE_CHOICES).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select><span className="field-help">Choose from documented GPT Live voices. Regional descriptions are influences, not guaranteed accents. Voice changes apply to the next conversation after publishing.</span></label>
@@ -44,9 +63,7 @@ export default function VoicePanel({ siteId, content, setContent, busy, unsaved,
       <div className={styles.colorPreview} style={colorTokens as CSSProperties} aria-label="Voice color illustration"><div className={styles.wave}><Waveform phase="idle" inputAnalyser={null} outputAnalyser={null} color={colorTokens['--voice-accent']}/></div><div className={styles.bubble}><span>What would you like to explore?</span><AudioLines size={17}/></div><small>Color illustration · no audio or AI calls</small></div>
     </section>
 
-    <GreetingSettings siteId={siteId} content={content} setContent={setContent} busy={busy}/>
     <VisitorSettings content={content} setContent={setContent} busy={busy}/>
-    <label className="field">Website / assistant preference<select disabled={busy} value={content.style?.entry ?? 'assistant'} onChange={event => setContent({ ...content, style: { layout: 'balanced', palette: 'midnight', ...content.style, entry: event.target.value as 'website' | 'assistant' } })}><option value="website">Website</option><option value="assistant">Assistant</option></select><span className="field-help">Choose the initial experience. Visitors can browse and use the enabled conversation options. All website styling is preserved.</span></label>
     <ExploreSettings content={content} setContent={setContent} busy={busy}/>
     <div className="save-bar"><span>{unsaved ? 'Save these choices, then Publish when ready.' : 'Your draft is up to date.'}</span><button className="button primary" disabled={busy || !unsaved} onClick={save}><Check size={16}/>Save draft</button></div>
   </div>;

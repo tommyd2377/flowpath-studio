@@ -107,6 +107,70 @@ test('research cache is session-local, scoped, abortable and bypasses freshness 
   await lookup(search, 'failed', 'web', signal()); assert.equal(calls, 6);
 });
 
-for (const effort of ['none', 'low'] as const) test(`reasoning experiment can explicitly select ${effort} without changing defaults`, async () => {
+for (const effort of ['none', 'low', 'high'] as const) test(`reasoning experiment can explicitly select ${effort} without changing defaults`, async () => {
   await runVisitorTask({ model: 'synthetic', apiKey: 'synthetic', channel: 'chat', reasoningEffort: effort, context: {}, instructions: '', tools: [], signal: signal(), execute: async () => ({ data: {} }), fetch: async (_url, init) => { assert.equal(JSON.parse(String(init?.body)).reasoning.effort, effort); return Response.json({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Synthetic answer' }] }] }); } });
+});
+
+
+test('Astra high reasoning preserves encrypted reasoning and tool results on bounded follow-up rounds', async () => {
+  const reasoning = { type: 'reasoning', id: 'r1', encrypted_content: 'synthetic-opaque-state', summary: [] };
+  let calls = 0, executions = 0;
+  await runVisitorTask({ model: 'gpt-6-astra', apiKey: 'synthetic', channel: 'chat', context: {}, instructions: '',
+    tools: [{ type: 'function', name: 'lookup', description: '', parameters: {} }], signal: signal(),
+    execute: async () => { executions++; return { data: { price: 17, unit: 'day', currency: 'USD' } }; },
+    fetch: async (_url, init) => {
+      const body = JSON.parse(String(init?.body)); calls++;
+      assert.deepEqual(body.reasoning, { effort: 'high' }); assert.equal(body.service_tier, 'default'); assert.equal(body.max_output_tokens, 8192);
+      assert.equal(body.store, false); assert.ok(body.include.includes('reasoning.encrypted_content'));
+      if (calls === 2) {
+        assert.deepEqual(body.input[1], reasoning);
+        assert.equal(body.input[2].call_id, 'lookup-1');
+        assert.deepEqual(JSON.parse(body.input[3].output), { price: 17, unit: 'day', currency: 'USD' });
+      }
+      return Response.json({ status: 'completed', output: calls === 1
+        ? [reasoning, { type: 'function_call', name: 'lookup', call_id: 'lookup-1', arguments: '{}' }]
+        : [{ type: 'message', content: [{ type: 'output_text', text: 'The published price is USD 17 per day.' }] }] });
+    } });
+  assert.equal(calls, 2); assert.equal(executions, 1);
+});
+
+test('incomplete Astra reasoning cannot execute a tool or trigger an automatic retry', async () => {
+  let calls = 0, executions = 0;
+  await assert.rejects(runVisitorTask({ model: 'gpt-6-astra', apiKey: 'synthetic', channel: 'voice', context: {}, instructions: '',
+    tools: [{ type: 'function', name: 'change', description: '', parameters: {} }], signal: signal(), execute: async () => { executions++; return { data: {} }; },
+    fetch: async () => { calls++; return Response.json({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' },
+      output: [{ type: 'function_call', name: 'change', call_id: 'incomplete', arguments: '{}' }] }); },
+  }), /did not finish/);
+  assert.equal(calls, 1); assert.equal(executions, 0);
+});
+
+test('chat and voice cache stable developer schemas while keeping each round current', async () => {
+  for (const channel of ['chat', 'voice'] as const) for (const model of ['gpt-6-astra', 'gpt-5.6-luna']) {
+    const prefix = 'Shared registered schemas and evidence policy.\n';
+    let round = 0;
+    const bodies: Record<string, unknown>[] = [];
+    await runVisitorTask({ model, apiKey: 'synthetic', channel, qaSlug: 'synthetic-cache',
+      context: () => ({ revision: round, history: [{ role: 'user', text: 'Below seven, ascending.' }] }), latestRequest: 'Below eight, descending.', instructions: () => `${prefix}Current revision: ${round}`,
+      instructionPrefix: () => prefix, tools: [{ type: 'function', name: 'lookup', description: '', parameters: {} }], signal: signal(),
+      execute: async () => ({ data: { verified: true } }),
+      fetch: async (_url, init) => {
+        const body = JSON.parse(String(init?.body)); bodies.push(body);
+        return Response.json({ status: 'completed', output: round++ === 0
+          ? [{ type: 'function_call', name: 'lookup', call_id: 'first', arguments: '{}' }]
+          : [{ type: 'message', content: [{ type: 'output_text', text: 'Verified answer.' }] }] });
+      },
+    });
+    assert.equal(bodies.length, 2);
+    const first = bodies[0].input as { role: string; content: unknown }[], next = bodies[1].input as typeof first;
+    assert.deepEqual(first[0], next[0]);
+    assert.deepEqual(first[0], { role: 'developer', content: [{ type: 'input_text', text: prefix, prompt_cache_breakpoint: { mode: 'explicit' } }] });
+    assert.match(String(first[1].content), /Current revision: 0/);
+    assert.match(String(next[1].content), /Current revision: 1/);
+    assert.match(String(next[2].content), /"revision":1/);
+    assert.deepEqual(first[3], { role: 'user', content: 'Below eight, descending.' }, 'The current request is distinct from old dialogue');
+    assert.deepEqual(next[3], first[3], 'Tool follow-ups preserve the same requested outcome');
+    assert.equal(next.at(-1)?.role, undefined, 'Prior tool output remains in the request');
+    assert.deepEqual(bodies[0].prompt_cache_options, { mode: 'explicit' });
+    assert.equal(bodies[0].instructions, bodies[1].instructions);
+  }
 });

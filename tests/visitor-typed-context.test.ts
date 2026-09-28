@@ -35,7 +35,7 @@ test('typed provider receives the current legacy view and cross-mode history wit
   const responsePlan = { layout: 'detail', sources: ['section:weddings'], status: 'ready' };
   const fetch = context.mock.method(globalThis, 'fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body)); instructions = body.instructions;
-    assert.equal(body.model, 'gpt-5.6-luna'); assert.equal(body.max_output_tokens, 700); assert.equal(body.store, false);
+    assert.equal(body.model, 'gpt-6-astra'); assert.deepEqual(body.reasoning, { effort: 'high' }); assert.equal(body.service_tier, 'default'); assert.equal(body.max_output_tokens, 8192); assert.equal(body.store, false);
     return Response.json({ status: 'completed', output: [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: JSON.stringify(responsePlan) }] }] });
   });
   try {

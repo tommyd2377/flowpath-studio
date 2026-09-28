@@ -1,545 +1,545 @@
 [
   {
-    "ms": 9,
+    "ms": 5,
     "width": 860,
     "height": 602.109375,
     "regions": 1,
     "moving": "settled"
   },
   {
-    "ms": 26,
+    "ms": 31,
     "width": 860,
     "height": 602.109375,
     "regions": 1,
     "moving": "settled"
   },
   {
-    "ms": 41,
+    "ms": 39,
     "width": 860,
     "height": 602.109375,
     "regions": 1,
     "moving": "settled"
   },
   {
-    "ms": 61,
-    "width": 860,
-    "height": 602.109375,
-    "regions": 1,
-    "moving": "settled"
-  },
-  {
-    "ms": 73,
-    "width": 860,
-    "height": 602.109375,
-    "regions": 1,
-    "moving": "settled"
-  },
-  {
-    "ms": 91,
-    "width": 860,
-    "height": 602.109375,
-    "regions": 1,
-    "moving": "settled"
-  },
-  {
-    "ms": 106,
-    "width": 860,
-    "height": 602.109375,
-    "regions": 1,
-    "moving": "settled"
-  },
-  {
-    "ms": 124,
-    "width": 860,
-    "height": 602.109375,
-    "regions": 1,
-    "moving": "settled"
-  },
-  {
-    "ms": 141,
-    "width": 860,
-    "height": 602.109375,
-    "regions": 1,
-    "moving": "settled"
-  },
-  {
-    "ms": 158,
-    "width": 860,
-    "height": 602.109375,
-    "regions": 1,
-    "moving": "settled"
-  },
-  {
-    "ms": 175,
+    "ms": 67,
     "width": 860,
     "height": 602.109375,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 191,
-    "width": 888.078125,
-    "height": 604.359375,
+    "ms": 84,
+    "width": 887.921875,
+    "height": 604.21875,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 208,
+    "ms": 90,
     "width": 915.515625,
-    "height": 604.390625,
+    "height": 604.765625,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 225,
+    "ms": 105,
     "width": 942.09375,
-    "height": 601.859375,
+    "height": 602.546875,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 241,
-    "width": 967.140625,
-    "height": 597.546875,
+    "ms": 122,
+    "width": 967,
+    "height": 598.40625,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 258,
-    "width": 990.28125,
-    "height": 592.15625,
+    "ms": 139,
+    "width": 990.15625,
+    "height": 592.875,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 275,
+    "ms": 155,
     "width": 1011.1875,
-    "height": 585.734375,
+    "height": 586.484375,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 291,
-    "width": 1030.046875,
-    "height": 578.828125,
+    "ms": 172,
+    "width": 1029.9375,
+    "height": 579.890625,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 306,
-    "width": 1044.984375,
-    "height": 572.515625,
+    "ms": 189,
+    "width": 1046.6875,
+    "height": 572.765625,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 325,
-    "width": 1061.5625,
-    "height": 564.484375,
+    "ms": 206,
+    "width": 1061.390625,
+    "height": 565.90625,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 341,
+    "ms": 222,
     "width": 1074.40625,
-    "height": 557.4375,
+    "height": 558.734375,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 358,
-    "width": 1085.8125,
-    "height": 550.4375,
+    "ms": 239,
+    "width": 1085.75,
+    "height": 551.75,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 375,
-    "width": 1095.84375,
-    "height": 544.125,
+    "ms": 267,
+    "width": 1095.734375,
+    "height": 540.40625,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 391,
+    "ms": 276,
     "width": 1104.46875,
-    "height": 537.78125,
+    "height": 537.15625,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 406,
-    "width": 1111.28125,
-    "height": 532.515625,
+    "ms": 289,
+    "width": 1112.09375,
+    "height": 532.9375,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 425,
-    "width": 1118.75,
-    "height": 526.140625,
+    "ms": 305,
+    "width": 1118.71875,
+    "height": 527.15625,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 443,
-    "width": 1124.53125,
-    "height": 520.21875,
+    "ms": 322,
+    "width": 1124.5,
+    "height": 521.796875,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 458,
-    "width": 1129.5625,
-    "height": 515.90625,
+    "ms": 339,
+    "width": 1129.53125,
+    "height": 516.75,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 475,
-    "width": 1133.890625,
-    "height": 511.203125,
+    "ms": 355,
+    "width": 1133.84375,
+    "height": 512.015625,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 491,
-    "width": 1137.609375,
-    "height": 506.90625,
+    "ms": 372,
+    "width": 1137.578125,
+    "height": 507.640625,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 508,
-    "width": 1140.671875,
-    "height": 502.921875,
+    "ms": 389,
+    "width": 1140.703125,
+    "height": 503.578125,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 524,
-    "width": 1143.46875,
-    "height": 499.234375,
+    "ms": 405,
+    "width": 1143.453125,
+    "height": 499.828125,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 541,
-    "width": 1145.734375,
-    "height": 495.984375,
+    "ms": 422,
+    "width": 1145.703125,
+    "height": 496.53125,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 556,
-    "width": 1147.421875,
-    "height": 493,
+    "ms": 439,
+    "width": 1147.5625,
+    "height": 493.109375,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 574,
-    "width": 1149.0625,
-    "height": 489.921875,
+    "ms": 468,
+    "width": 1149.046875,
+    "height": 488.125,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 591,
+    "ms": 473,
     "width": 1150.203125,
-    "height": 487.0625,
+    "height": 487.296875,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 608,
+    "ms": 489,
     "width": 1151.046875,
-    "height": 484.59375,
+    "height": 484.953125,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 624,
+    "ms": 505,
     "width": 1151.609375,
-    "height": 482.21875,
+    "height": 482.546875,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 641,
+    "ms": 522,
     "width": 1151.921875,
-    "height": 480.046875,
+    "height": 480.21875,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 658,
+    "ms": 539,
     "width": 1152,
-    "height": 477.875,
+    "height": 478.15625,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 674,
+    "ms": 555,
     "width": 1152,
-    "height": 475.875,
+    "height": 476.125,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 691,
+    "ms": 572,
     "width": 1152,
-    "height": 474.15625,
+    "height": 474.390625,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 708,
+    "ms": 588,
     "width": 1152,
-    "height": 472.515625,
+    "height": 472.71875,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 724,
+    "ms": 606,
     "width": 1152,
-    "height": 471.0625,
+    "height": 471.234375,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 741,
+    "ms": 622,
     "width": 1152,
-    "height": 469.875,
+    "height": 470.015625,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 758,
+    "ms": 650,
     "width": 1152,
-    "height": 468.734375,
+    "height": 468.140625,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 775,
+    "ms": 660,
     "width": 1152,
-    "height": 467.75,
+    "height": 467.578125,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 791,
+    "ms": 672,
     "width": 1152,
-    "height": 466.921875,
+    "height": 467.015625,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 808,
+    "ms": 688,
     "width": 1152,
-    "height": 466.171875,
+    "height": 466.25,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 824,
+    "ms": 705,
     "width": 1152,
-    "height": 465.5,
+    "height": 465.578125,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 841,
+    "ms": 722,
     "width": 1152,
-    "height": 464.953125,
+    "height": 465.015625,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 858,
+    "ms": 739,
     "width": 1152,
-    "height": 464.453125,
+    "height": 464.515625,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 874,
+    "ms": 755,
     "width": 1152,
-    "height": 464.03125,
+    "height": 464.0625,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 891,
+    "ms": 772,
     "width": 1152,
-    "height": 463.671875,
+    "height": 463.703125,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 908,
+    "ms": 789,
     "width": 1152,
-    "height": 463.34375,
+    "height": 463.375,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 924,
+    "ms": 805,
     "width": 1152,
-    "height": 463.078125,
+    "height": 463.09375,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 941,
+    "ms": 822,
     "width": 1152,
-    "height": 462.84375,
+    "height": 462.859375,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 958,
+    "ms": 838,
     "width": 1152,
-    "height": 462.65625,
+    "height": 462.671875,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 972,
+    "ms": 855,
     "width": 1152,
-    "height": 462.515625,
+    "height": 462.5,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 989,
+    "ms": 872,
     "width": 1152,
     "height": 462.375,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 1007,
+    "ms": 889,
     "width": 1152,
-    "height": 462.265625,
+    "height": 462.28125,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 1024,
+    "ms": 905,
     "width": 1152,
-    "height": 462.1875,
+    "height": 462.203125,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 1041,
+    "ms": 922,
     "width": 1152,
-    "height": 462.140625,
+    "height": 462.15625,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 1058,
+    "ms": 938,
     "width": 1152,
     "height": 462.125,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 1074,
+    "ms": 955,
     "width": 1152,
     "height": 462.109375,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 1091,
+    "ms": 972,
     "width": 1152,
     "height": 462.109375,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 1107,
+    "ms": 988,
     "width": 1152,
     "height": 462.109375,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 1124,
+    "ms": 1005,
     "width": 1152,
     "height": 462.109375,
     "regions": 2,
     "moving": "moving"
   },
   {
-    "ms": 1140,
-    "width": 1152,
-    "height": 462.109375,
-    "regions": 2,
-    "moving": "moving"
-  },
-  {
-    "ms": 1157,
-    "width": 1152,
-    "height": 462.109375,
-    "regions": 2,
-    "moving": "moving"
-  },
-  {
-    "ms": 1174,
-    "width": 1152,
-    "height": 462.109375,
-    "regions": 2,
-    "moving": "moving"
-  },
-  {
-    "ms": 1190,
+    "ms": 1021,
     "width": 1152,
     "height": 462.109375,
     "regions": 2,
     "moving": "settled"
   },
   {
-    "ms": 1208,
+    "ms": 1038,
     "width": 1152,
     "height": 462.109375,
     "regions": 2,
     "moving": "settled"
   },
   {
-    "ms": 1224,
+    "ms": 1055,
     "width": 1152,
     "height": 462.109375,
     "regions": 2,
     "moving": "settled"
   },
   {
-    "ms": 1241,
+    "ms": 1071,
     "width": 1152,
     "height": 462.109375,
     "regions": 2,
     "moving": "settled"
   },
   {
-    "ms": 1258,
+    "ms": 1088,
     "width": 1152,
     "height": 462.109375,
     "regions": 2,
     "moving": "settled"
   },
   {
-    "ms": 1274,
+    "ms": 1105,
     "width": 1152,
     "height": 462.109375,
     "regions": 2,
     "moving": "settled"
   },
   {
-    "ms": 1291,
+    "ms": 1121,
+    "width": 1152,
+    "height": 462.109375,
+    "regions": 2,
+    "moving": "settled"
+  },
+  {
+    "ms": 1138,
+    "width": 1152,
+    "height": 462.109375,
+    "regions": 2,
+    "moving": "settled"
+  },
+  {
+    "ms": 1154,
+    "width": 1152,
+    "height": 462.109375,
+    "regions": 2,
+    "moving": "settled"
+  },
+  {
+    "ms": 1171,
+    "width": 1152,
+    "height": 462.109375,
+    "regions": 2,
+    "moving": "settled"
+  },
+  {
+    "ms": 1188,
+    "width": 1152,
+    "height": 462.109375,
+    "regions": 2,
+    "moving": "settled"
+  },
+  {
+    "ms": 1205,
+    "width": 1152,
+    "height": 462.109375,
+    "regions": 2,
+    "moving": "settled"
+  },
+  {
+    "ms": 1221,
+    "width": 1152,
+    "height": 462.109375,
+    "regions": 2,
+    "moving": "settled"
+  },
+  {
+    "ms": 1238,
+    "width": 1152,
+    "height": 462.109375,
+    "regions": 2,
+    "moving": "settled"
+  },
+  {
+    "ms": 1255,
+    "width": 1152,
+    "height": 462.109375,
+    "regions": 2,
+    "moving": "settled"
+  },
+  {
+    "ms": 1271,
+    "width": 1152,
+    "height": 462.109375,
+    "regions": 2,
+    "moving": "settled"
+  },
+  {
+    "ms": 1288,
     "width": 1152,
     "height": 462.109375,
     "regions": 2,
@@ -553,28 +553,35 @@
     "moving": "settled"
   },
   {
-    "ms": 1324,
+    "ms": 1321,
     "width": 1152,
     "height": 462.109375,
     "regions": 2,
     "moving": "settled"
   },
   {
-    "ms": 1341,
+    "ms": 1338,
     "width": 1152,
     "height": 462.109375,
     "regions": 2,
     "moving": "settled"
   },
   {
-    "ms": 1357,
+    "ms": 1355,
     "width": 1152,
     "height": 462.109375,
     "regions": 2,
     "moving": "settled"
   },
   {
-    "ms": 1374,
+    "ms": 1371,
+    "width": 1152,
+    "height": 462.109375,
+    "regions": 2,
+    "moving": "settled"
+  },
+  {
+    "ms": 1387,
     "width": 1152,
     "height": 462.109375,
     "regions": 2,

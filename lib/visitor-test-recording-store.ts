@@ -3,6 +3,7 @@ import { mkdir, readdir, readFile, writeFile, appendFile, stat, unlink, open } f
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { safeTestRecorder, sanitizeTestObservation, RECORDING_HEADER, LOCAL_TEST_HEADER, type TestEvent, type TestRecorder } from './visitor-test-events';
+import { phoneRecordingPairings, phoneRecordingRequest } from './visitor-phone-recording';
 
 const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export const recordingLimits = { sessions: 10, active: 4, durationMs: 60 * 60_000, retentionMs: 7 * 86400_000, bytes: 20_000_000, queueBytes: 2_000_000 };
@@ -86,11 +87,11 @@ export function createTestRecordingStore(directory: string, limits = recordingLi
   }
   return {
     active(id: string) { return sessions.get(id)?.active === true; },
-    start: (label: string, metadata: unknown) => exclusive(async () => {
+    start: (label: string, metadata: unknown, id: string = randomUUID()) => exclusive(async () => {
       for (const state of sessions.values()) if (state.active && Date.now() - state.startedAt > limits.durationMs) await stop(state.id, 'Recording limit reached');
       if ([...sessions.values()].filter(item => item.active).length >= limits.active) throw new Error('Stop a recording before starting another.');
       await prune(1);
-      const id = randomUUID(), startedAt = Date.now();
+      const startedAt = Date.now();
       await writeFile(path(id), '', { flag: 'wx', mode: 0o600 });
       const state: State = { id, startedAt, sequence: 0, bytes: 0, queuedBytes: 0, queue: [], dropped: 0, browserDropped: 0, active: true, writing: Promise.resolve() };
       sessions.set(id, state); enqueue(state, 'server', { type: 'recording.started', data: { label: label.slice(0, 160), metadata, limits } });
@@ -138,7 +139,11 @@ export function createTestRecordingStore(directory: string, limits = recordingLi
 const globals = globalThis as typeof globalThis & { visitorTestRecordings?: ReturnType<typeof createTestRecordingStore> };
 export function testRecordingStore() { return globals.visitorTestRecordings ??= createTestRecordingStore(join(process.cwd(), '.visitor-recordings')); }
 export function requestTestRecorder(request: Request, traceId?: string): TestRecorder | undefined {
-  if (!localRecordingRequest(request)) return undefined;
+  if (!localRecordingRequest(request)) {
+    if (!phoneRecordingRequest(request)) return undefined;
+    const match = new URL(request.url).pathname.match(/^\/api\/visitor\/([a-z0-9]+(?:-[a-z0-9]+)*)(?:\/(?:tasks|explore|dictation|session(?:\/control)?))?$/);
+    return match ? phoneRecordingPairings(testRecordingStore()).observer(request, request.headers.get(RECORDING_HEADER) ?? '', match[1], traceId) : undefined;
+  }
   const id = request.headers.get(RECORDING_HEADER) ?? '', store = testRecordingStore();
   // A global store can survive HMR with an older observer implementation.
   // Attach validated request scope here as well, rather than relying on its age.

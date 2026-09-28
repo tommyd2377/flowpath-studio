@@ -20,19 +20,29 @@ function preparedRepository() {
   return { storage, repository };
 }
 const stored = new WeakMap<ReturnType<typeof compileQueryIndex>, { ids: Set<string>; manifest: CatalogManifest }>();
-export async function visitorTaskContext(slug: string, traceId?: string) {
-  const started = performance.now();
+/** Fresh publication authorization without preparing a catalog for receipt-only work. */
+export async function visitorTaskPublication(slug: string) {
   const site = await getPublished(slug);
   if (!site) throw new AppError('Published site not found.', 404);
-  const { storage, repository } = preparedRepository();
   const publication = { siteId: site.siteId, revisionId: queryHash(site.content), indexRevision: site.content.catalogPublicationId ?? site.content.knowledgeRevisionId ?? queryHash(site.content) };
+  return { site, publication };
+}
+export async function visitorTaskContext(slug: string, traceId?: string) {
+  const started = performance.now();
+  const { site, publication } = await visitorTaskPublication(slug);
+  const { storage, repository } = preparedRepository();
   const key = queryHash([storage, publication]);
   const hit = Boolean(cache.get(key));
   if (traceId) visitorDiagnostic({ traceId, channel: 'server', stage: 'cache', status: 'observed', cacheHit: hit });
   const index = await cache.prepare(key, async () => {
-    const catalog = site.content.catalogPublicationId ? null : await getPublishedKnowledgeSnapshot(site.siteId, site.content.knowledgeRevisionId);
-    const media = await getPublishedMedia(site.siteId, site.content.mediaRevisionId);
-    let space = site.content.catalogPublicationId ? structuredClone((await repository.index(site.siteId, site.content.catalogPublicationId)).space) : catalog ? adaptV1Catalog(catalog, publication, media).space : validatePublicationSpace({ version: 2, publication, name: site.content.name, rootId: 'publication-root', fields: [], relationshipTypes: [], collections: [{ id: 'publication-root', name: site.content.name, introduction: site.content.description.slice(0, 1600), kind: 'explicit', view: 'grid' }], edges: [], records: [], memberships: [], relationships: [], links: [] });
+    // Immutable inputs share the same publication identity but no I/O dependency.
+    // The fresh-publication check below still gates a completed cold build.
+    const [catalog, media, catalogIndex] = await Promise.all([
+      site.content.catalogPublicationId ? null : getPublishedKnowledgeSnapshot(site.siteId, site.content.knowledgeRevisionId),
+      getPublishedMedia(site.siteId, site.content.mediaRevisionId),
+      site.content.catalogPublicationId ? repository.index(site.siteId, site.content.catalogPublicationId) : null,
+    ]);
+    let space = catalogIndex ? structuredClone(catalogIndex.space) : catalog ? adaptV1Catalog(catalog, publication, media).space : validatePublicationSpace({ version: 2, publication, name: site.content.name, rootId: 'publication-root', fields: [], relationshipTypes: [], collections: [{ id: 'publication-root', name: site.content.name, introduction: site.content.description.slice(0, 1600), kind: 'explicit', view: 'grid' }], edges: [], records: [], memberships: [], relationships: [], links: [] });
     const storedIds = new Set(space.records.map(record => record.id));
     if (!catalog && media) space = addPublishedMedia(space, media);
     const sources = presentationSources(site.content);

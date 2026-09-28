@@ -3,15 +3,20 @@ import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import type { Firestore } from 'firebase-admin/firestore';
 import { AppError } from '../lib/errors';
-import { createFirestoreVisitorMailboxBackend, createVisitorRealtimeMailbox, submitVisitorRealtimeControl, type VisitorMailboxRecord } from '../lib/visitor-realtime-mailbox';
+import { createFirestoreVisitorMailboxBackend, createVisitorRealtimeMailbox, submitVisitorRealtimeControl, type VisitorMailboxRecord, type VisitorMailboxBackend, type VisitorRealtimeMailbox } from '../lib/visitor-realtime-mailbox';
 import type { VisitorControlUpdate } from '../lib/visitor-realtime-context';
 
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));
 const update = (seq: number, extras: Partial<VisitorControlUpdate> = {}): VisitorControlUpdate => ({ seq, interactionRevision: 0, viewRevision: 0, ready: false, context: {}, ...extras });
 const status = (code: number) => (error: unknown) => error instanceof AppError && error.status === code;
+const deferred = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+};
 
 /** Separate adapters share this fake database, never an application-worker map. */
-function fixture() {
+function fixture(delays: { beforeCreate?: () => Promise<void>; beforePrune?: () => Promise<void> } = {}) {
   let clock = Date.now(), writes = 0, deletes = 0;
   let queue = Promise.resolve();
   const records = new Map<string, VisitorMailboxRecord>();
@@ -22,7 +27,7 @@ function fixture() {
   };
   const ref = (id: string) => ({
     id,
-    async create(value: VisitorMailboxRecord) { assert.ok(!records.has(id)); records.set(id, structuredClone(value)); writes++; },
+    async create(value: VisitorMailboxRecord) { if (delays.beforeCreate) await delays.beforeCreate(); assert.ok(!records.has(id)); records.set(id, structuredClone(value)); writes++; },
     async delete() { records.delete(id); deletes++; publish(id); },
     onSnapshot(next: (value: unknown) => void, error: (error: Error) => void) {
       const listener = { next, error }, set = watchers.get(id) ?? new Set(); watchers.set(id, set); set.add(listener);
@@ -36,6 +41,7 @@ function fixture() {
       return { doc: ref, where(field: string, operation: string, until: number) {
         assert.equal(field, 'expiresAt'); assert.equal(operation, '<=');
         return { limit(maximum: number) { assert.equal(maximum, 8); return { async get() {
+          if (delays.beforePrune) await delays.beforePrune();
           return { docs: [...records].filter(([, value]) => value.expiresAt <= until).slice(0, maximum).map(([id]) => ({ ref: ref(id), updateTime: 1 })) };
         } }; } };
       } };
@@ -58,6 +64,66 @@ function fixture() {
   const metadata = () => ({ slug: 'synthetic-site', siteId: randomUUID(), publicationKey: 'synthetic-publication-hash', expiresAt: clock + 120_000 });
   return { records, watchers, owner, worker, metadata, writes: () => writes, deletes: () => deletes, advance: (ms: number) => { clock += ms; } };
 }
+
+for (const first of ['create', 'prune'] as const) test(`mailbox creation overlaps expired cleanup and waits for both when ${first} finishes first`, async t => {
+  const creating = deferred(), pruning = deferred();
+  let createStarted = false, pruneStarted = false, returned = false;
+  const f = fixture({
+    beforeCreate: async () => { createStarted = true; await creating.promise; },
+    beforePrune: async () => { pruneStarted = true; await pruning.promise; },
+  });
+  const attempt = createVisitorRealtimeMailbox(f.metadata(), f.owner).then(box => { returned = true; return box; });
+  t.after(async () => { creating.resolve(); pruning.resolve(); await (await attempt).close(); });
+  await flush();
+  assert.equal(pruneStarted, true); assert.equal(createStarted, true);
+  (first === 'create' ? creating : pruning).resolve(); await flush();
+  assert.equal(returned, false);
+  assert.equal(f.writes(), first === 'create' ? 1 : 0);
+  (first === 'create' ? pruning : creating).resolve();
+  const box = await attempt;
+  assert.equal(f.records.has(box.capability.id), true);
+  assert.equal(f.writes(), 1);
+});
+
+test('a rejected cleanup stays best effort while failed creation drains pending cleanup before rejecting', async t => {
+  const f = fixture({ beforePrune: async () => { throw new Error('Synthetic expired-record query failure'); } });
+  const box = await createVisitorRealtimeMailbox(f.metadata(), f.owner); t.after(() => box.close());
+  assert.equal(f.records.has(box.capability.id), true);
+
+  const pruning = deferred(), failure = new Error('Synthetic mailbox creation failure');
+  let createStarted = false, rejected = false;
+  const failed = fixture({
+    beforeCreate: async () => { createStarted = true; throw failure; },
+    beforePrune: () => pruning.promise,
+  });
+  const attempt = createVisitorRealtimeMailbox(failed.metadata(), failed.owner).then(() => assert.fail('Creation must not succeed.'), error => { rejected = true; return error; });
+  t.after(async () => { pruning.resolve(); await attempt; });
+  await flush(); assert.equal(createStarted, true); assert.equal(rejected, false);
+  pruning.resolve(); assert.equal(await attempt, failure);
+  assert.equal(failed.writes(), 0); assert.equal(failed.records.size, 0);
+});
+
+test('local capacity remains bounded and expired slots are pruned before a new mailbox is created', async () => {
+  const globals = globalThis as typeof globalThis & { visitorLocalMailbox?: VisitorMailboxBackend };
+  const previousBackend = process.env.VOICE_BACKEND, previousStore = globals.visitorLocalMailbox;
+  process.env.VOICE_BACKEND = 'demo'; delete globals.visitorLocalMailbox;
+  const boxes: VisitorRealtimeMailbox[] = [];
+  let clock = Date.now();
+  const metadata = () => ({ slug: 'synthetic-capacity', siteId: randomUUID(), publicationKey: 'synthetic-publication', expiresAt: clock + 120_000 });
+  const create = () => createVisitorRealtimeMailbox(metadata(), { now: () => clock });
+  try {
+    for (let i = 0; i < 64; i++) boxes.push(await create());
+    await assert.rejects(create(), status(503));
+    clock += 120_001;
+    const replacement = await create(); boxes.push(replacement);
+    await submitVisitorRealtimeControl('synthetic-capacity', replacement.capability, update(1), { now: () => clock });
+    await assert.rejects(submitVisitorRealtimeControl('synthetic-capacity', boxes[0].capability, update(1), { now: () => clock }), status(410));
+  } finally {
+    await Promise.all(boxes.map(box => box.close()));
+    if (previousStore === undefined) delete globals.visitorLocalMailbox; else globals.visitorLocalMailbox = previousStore;
+    if (previousBackend === undefined) delete process.env.VOICE_BACKEND; else process.env.VOICE_BACKEND = previousBackend;
+  }
+});
 
 test('independent Firebase workers deliver bounded reference state, sticky readiness, and view revisions without storing the capability', async t => {
   const f = fixture(), box = await createVisitorRealtimeMailbox(f.metadata(), f.owner); t.after(() => box.close());

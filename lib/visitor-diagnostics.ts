@@ -5,7 +5,7 @@ export type VisitorDiagnostic = {
   stage: 'start' | 'audio' | 'microphone' | 'offer' | 'session_request' | 'session_answer' | 'control_ready' | 'ready' | 'first_audio' | 'context' | 'navigation' | 'backend' | 'search' | 'stop' | 'acknowledgment' | 'model' | 'model_output' | 'result' | 'turn_audio' | 'preflight' | 'input_ready' | 'result_audio_candidate' | 'visual_result' | 'display_receipt' | 'retrieval' | 'cache' | 'image_prepare' | 'search_provider_done';
   status: 'started' | 'succeeded' | 'failed' | 'cancelled' | 'observed';
   cacheHit?: boolean; httpStatus?: number; durationMs?: number; sessionElapsedMs?: number; revision?: number; interactionRevision?: number; objects?: number; visible?: number; images?: number; sources?: number;
-  reason?: 'schema' | 'auth' | 'quota' | 'model' | 'provider' | 'reference' | 'stale' | 'capacity' | 'timeout';
+  reason?: 'schema' | 'auth' | 'quota' | 'model' | 'provider' | 'reference' | 'stale' | 'capacity' | 'timeout' | 'display';
   schemaPath?: string;
   operation?: 'chat' | 'voice' | 'web' | 'images' | 'map' | 'open' | 'expand' | 'close' | 'home' | 'browse' | 'workspace' | 'explore' | 'other';
 };
@@ -28,7 +28,7 @@ export function sanitizeVisitorDiagnostic(value: Input, now = Date.now()): Visit
   for (const key of ['httpStatus','durationMs','sessionElapsedMs','revision','interactionRevision','objects','visible','images','sources'] as const) {
     const number = value[key]; if (typeof number === 'number' && Number.isFinite(number)) result[key] = Math.max(0, Math.min(3_600_000, Math.round(number)));
   }
-  if (value.reason && ['schema','auth','quota','model','provider','reference','stale','capacity','timeout'].includes(value.reason)) result.reason = value.reason;
+  if (value.reason && ['schema','auth','quota','model','provider','reference','stale','capacity','timeout','display'].includes(value.reason)) result.reason = value.reason;
   if (value.schemaPath) result.schemaPath = diagnosticSchemaPath(value.schemaPath.split('.').map(part => /^\d{1,2}$/.test(part) ? Number(part) : part));
   if (value.operation && operations.includes(value.operation)) result.operation = value.operation;
   return result;
@@ -57,7 +57,8 @@ export function diagnosticError(error: unknown): Pick<VisitorDiagnostic, 'httpSt
     }
     else if (/capacity|too many|workspace.*full|context exceeds/i.test(error.message)) result.reason = 'capacity';
     else if (/publication.*changed|stale|out of order/i.test(error.message)) result.reason = 'stale';
-    else if (/reference|not.*published|unknown.*(id|item)/i.test(error.message)) result.reason = 'reference';
+    else if (/reference|not.*published|unknown.*(id|item)/i.test(error.message) || error.message === 'This content is not in the current publication.') result.reason = 'reference';
+    else if (/^(?:Task display|The answer card) was not acknowledged\.$/.test(error.message)) result.reason = 'display';
     else if (/timeout|timed out/i.test(error.message)) result.reason = 'timeout';
     else if (/backend.*(?:rejected|busy|unavailable)/i.test(error.message)) result.reason = 'provider';
     else if (/backend.*(?:finish|answer|tool|limit|data)/i.test(error.message)) result.reason = 'model';

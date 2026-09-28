@@ -1,4 +1,6 @@
+import { loadGreetingRecords } from '@/lib/greeting-record-store';
 import { visitorChatTask } from '@/lib/visitor-chat-task';
+import { after } from 'next/server';
 import { requestTestRecorder } from '@/lib/visitor-test-recording-store';
 import { ZodError } from 'zod';
 import { AppError } from '@/lib/errors';
@@ -15,7 +17,7 @@ import { getWelcomeMessage } from '@/lib/site-greeting';
 import { demoPresentation, presentationSummary } from '@/lib/site-presentation';
 import { getPublishedMedia } from '@/lib/media-store';
 import { getPublishedKnowledgeSnapshot } from '@/lib/knowledge-store';
-import { recordPlatformEvent } from '@/lib/platform-events';
+import { recordPlatformEvent, recordPlatformEvents } from '@/lib/platform-events';
 import { planForIntent } from '@thevoice/platform-ui/interaction';
 import { meterDemoUsage } from '@/lib/billing-store';
 import { assertNoStripeTestPaidAi } from '@/lib/billing-ai-guard';
@@ -57,6 +59,8 @@ export async function POST(request: Request, { params }: Context) {
     const input = visitorRequestSchema.parse(raw);
     const record = requestTestRecorder(request, input.requestId);
     record?.({ type: 'chat.received', data: input });
+    let preparationStarted = performance.now();
+    const prepared = (stage: string) => { const now = performance.now(); record?.({ type: 'chat.preparation', data: { stage, durationMs: now - preparationStarted } }); preparationStarted = now; };
     if (input.kind === 'voice') {
       const audio = Buffer.from(input.audio, 'base64');
       if (audio.length < 9600 || audio.length > MAX_PCM_BYTES || audio.length % 2) throw new AppError('Record between 0.2 and 20 seconds of audio.');
@@ -64,19 +68,24 @@ export async function POST(request: Request, { params }: Context) {
     if (request.signal.aborted) throw new AppError('Request cancelled.', 499);
     // Validate client state against the published snapshot before reserving an attempt.
     const preview = await visitorAccess(slug);
-    const catalog = preview.content.catalogPublicationId ? null : await getPublishedKnowledgeSnapshot(preview.siteId, preview.content.knowledgeRevisionId);
-    const media = await getPublishedMedia(preview.siteId, preview.content.mediaRevisionId);
+    prepared('publication_access');
+    const [catalog, media] = await Promise.all([
+      preview.content.catalogPublicationId ? null : getPublishedKnowledgeSnapshot(preview.siteId, preview.content.knowledgeRevisionId),
+      getPublishedMedia(preview.siteId, preview.content.mediaRevisionId),
+      preview.availability.live ? assertNoStripeTestPaidAi(preview.siteId) : undefined,
+    ]);
     input.context = visitorRequestContext(preview.content, input, catalog ?? undefined, media ?? undefined, slug);
     input.catalogState = input.context.catalogState;
-    if (preview.availability.live) await assertNoStripeTestPaidAi(preview.siteId);
+    prepared('published_context');
     const { content, siteId, availability } = await visitorAccess(slug, { requestId: input.requestId, kind: input.kind === 'chat' ? 'chat' : 'voice', greeting: input.kind === 'greeting' });
+    prepared('quota_reservation');
     const observed = { surface: 'public' as const, requestId: input.requestId, snapshotId: content.knowledgeRevisionId, kind: input.kind === 'chat' ? 'chat' as const : 'voice' as const };
     try {
       if (JSON.stringify(content) !== JSON.stringify(preview.content)) throw new AppError('The publication changed during this request. Reload to continue.', 409);
-      await recordPlatformEvent(siteId, { ...observed, type: 'visitor_intent', status: 'started' }).catch(() => undefined);
       if (!availability.live) {
+        await recordPlatformEvent(siteId, { ...observed, type: 'visitor_intent', status: 'started' }).catch(() => undefined);
         await meterDemoUsage(siteId, input.kind === 'chat' ? 'chat' : 'voice', input.requestId);
-        if (input.kind === 'greeting') return { text: getWelcomeMessage(content, catalog), demo: true, availability };
+        if (input.kind === 'greeting') return { text: getWelcomeMessage(content, catalog, await loadGreetingRecords(siteId, content)), demo: true, availability };
         if (input.kind === 'chat' && input.context.taskSession && /^(?:show|find|search|only|include|sort|remove|under|below|over|above|at least|at most|open|go back|back|clear)\b/i.test(input.text)) return visitorChatTask({ record, preview: true, slug, siteId, content, catalog: catalog ?? undefined, media: media ?? undefined, request: input, availability, signal: request.signal, onUsage: () => {} });
         if (input.context.workspace) {
           const reply = planWorkspaceIntent(input.kind === 'chat' ? input.text : '', input.context.workspace, publishedWorkspace(content, catalog, media, input.context.externalResults), input.context.scene, catalog, media);
@@ -89,7 +98,13 @@ export async function POST(request: Request, { params }: Context) {
         const presentation = demoPresentation(content, input.kind === 'chat' ? input.text : '', history, media);
         return { text: input.kind === 'chat' ? presentationSummary(presentation, content, media) : demoVisitorReply(content, ''), presentation, demo: true, availability };
       }
-      await recordPlatformEvent(siteId, { ...observed, type: 'provider_usage', status: 'reserved', count: 1 }).catch(() => undefined);
+      // These are observations, not the authoritative quota/budget reservation
+      // above. Start their write now and keep it alive after the response, so
+      // activity-ledger latency cannot delay the first useful model result.
+      const observation = recordPlatformEvents(siteId, [{ ...observed, type: 'visitor_intent', status: 'started' }, { ...observed, type: 'provider_usage', status: 'reserved', count: 1 }])
+        .catch(() => undefined);
+      after(() => observation);
+      prepared('operational_events_scheduled');
       if (input.kind === 'chat' && input.context.workspace) return visitorChatTask({ record, slug, siteId, content, catalog: catalog ?? undefined, media: media ?? undefined, request: input, availability, signal: request.signal,
         onUsage: usage => { void recordPlatformEvent(siteId, { ...observed, requestId: `${input.requestId}-${crypto.randomUUID()}`, type: 'provider_usage', status: 'confirmed', count: 1, usage }).catch(() => undefined); },
       });

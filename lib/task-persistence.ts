@@ -2,7 +2,7 @@ import 'server-only';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { getFirestore } from 'firebase-admin/firestore';
+import { getFirestore, type CollectionReference, type Timestamp } from 'firebase-admin/firestore';
 import { getFirebaseAdminApp } from './firebase/admin';
 import { getBackendMode } from './firebase/config';
 
@@ -39,13 +39,50 @@ export function cloudTaskDocuments(transport: CloudTaskTransport): TaskDocuments
 export function taskDocuments(namespace: 'visitorTaskSessions' | 'visitorTaskAdapters' | 'catalogPublications' | 'catalogReviews') {
   if (getBackendMode() === 'demo') return localTaskDocuments(process.env.VOICE_DATA_DIR ? join(/* turbopackIgnore: true */ process.env.VOICE_DATA_DIR, namespace) : join(process.cwd(), 'data', namespace));
   const collection = getFirestore(getFirebaseAdminApp()).collection(namespace);
+  return firestoreTaskDocuments(collection, namespace === 'visitorTaskSessions');
+}
+
+/** Reuse only Firestore's version token, never cached visitor data. */
+export function firestoreTaskDocuments(collection: CollectionReference, conditionalWrites = false): TaskDocuments {
+  const versions = new Map<string, { revision: number; updateTime: Timestamp }>();
+  const remember = (key: string, revision: number, updateTime: Timestamp) => {
+    if (!conditionalWrites) return;
+    versions.delete(key); versions.set(key, { revision, updateTime });
+    if (versions.size > 32) versions.delete(versions.keys().next().value!);
+  };
   return cloudTaskDocuments({
-    get: async key => (await collection.doc(key).get()).data()?.value ?? null,
-    create: async (key, value) => { await collection.doc(key).create({ revision: (value as { revision?: number })?.revision ?? 0, value: JSON.parse(documentText(value)) }); },
-    cas: async (key, revision, value) => { await collection.firestore.runTransaction(async transaction => {
+    get: async key => {
+      const snapshot = await collection.doc(key).get(), data = snapshot.data();
+      if (snapshot.updateTime && typeof data?.revision === 'number') remember(key, data.revision, snapshot.updateTime);
+      else versions.delete(key);
+      return data?.value ?? null;
+    },
+    create: async (key, value) => {
+      const revision = (value as { revision?: number })?.revision ?? 0;
+      const result = await collection.doc(key).create({ revision, value: JSON.parse(documentText(value)) });
+      remember(key, revision, result.writeTime);
+    },
+    cas: async (key, revision, value) => {
+      const version = versions.get(key), next = { revision: (value as { revision?: number })?.revision ?? 0, value: JSON.parse(documentText(value)) };
+      if (version?.revision === revision) {
+        try {
+          // The exact read's update time guards against edits, deletion and
+          // recreation, even if another writer reuses an application revision.
+          const result = await collection.doc(key).update(next, { lastUpdateTime: version.updateTime });
+          remember(key, next.revision, result.writeTime); return;
+        } catch (error) {
+          versions.delete(key);
+          if ([5, 9, 'not-found', 'failed-precondition'].includes((error as { code?: string | number }).code ?? '')) throw new Error('State changed in another request. Reload.');
+          throw error; // No automatic write/provider retry after an uncertain result.
+        }
+      }
+      // A different process or an evicted token uses the existing transaction.
+      await collection.firestore.runTransaction(async transaction => {
       const reference = collection.doc(key), existing = (await transaction.get(reference)).data();
       if (existing?.revision !== revision) throw new Error('State changed in another request. Reload.');
-      transaction.set(reference, { revision: (value as { revision?: number })?.revision ?? 0, value: JSON.parse(documentText(value)) });
-    }); },
+      transaction.set(reference, next);
+      });
+      versions.delete(key);
+    },
   });
 }

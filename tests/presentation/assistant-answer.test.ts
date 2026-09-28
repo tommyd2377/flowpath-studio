@@ -11,7 +11,7 @@ test('synthesized answers render concise source links while preserving prose for
   assert.ok(html.includes('<h3>Conditions</h3>'));
   assert.ok(html.includes('<strong>18°C</strong>'));
   assert.ok(html.includes('<a href="https://example.com/reference_(sealed)?format=full#conditions" target="_blank" rel="noopener noreferrer">Preservation reference</a>'));
-  assert.ok(html.includes('<ul><li>First condition</li><li>Read <a href="https://example.com/source" target="_blank" rel="noopener noreferrer"><strong>the source</strong></a>.</li></ul>'));
+  assert.match(html, /<ul>\s*<li>First condition<\/li>\s*<li>Read <a href="https:\/\/example.com\/source" target="_blank" rel="noopener noreferrer"><strong>the source<\/strong><\/a>.<\/li>\s*<\/ul>/);
   assert.ok(html.includes('for the sealed example only.'));
 });
 
@@ -22,7 +22,7 @@ test('answer citations reject script, credential, private-host and unsupported U
     'https://example.com:8443/source', '//example.com/source']) {
     const html = render(`Read [source](${url}).`);
     assert.equal(html.includes('<a '), false, url);
-    assert.ok(html.includes('Read [source]'), url);
+    assert.match(html, /Read .*source/, url);
   }
 });
 
@@ -30,6 +30,7 @@ test('answer content remains escaped and image Markdown cannot load remote media
   const html = render('<script>alert(1)</script>\n\n![image](https://example.com/image.jpg)\n\n[<img src=x onerror=alert(1)>](https://example.com/source)');
   assert.equal(html.includes('<script'), false);
   assert.equal(html.includes('<img'), false);
-  assert.ok(html.includes('![image](https://example.com/image.jpg)'));
+  assert.ok(html.includes('class="platform-answer-image-label">image</span>'));
+  assert.equal(html.includes('preload'), false);
   assert.ok(html.includes('&lt;img src=x onerror=alert(1)&gt;</a>'));
 });

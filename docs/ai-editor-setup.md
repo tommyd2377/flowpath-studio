@@ -1,6 +1,6 @@
 # AI editor setup
 
-The AI editor is implemented as an optional server feature. It uses OpenAI's Responses API with the cost-focused `gpt-5.6-luna` model, low reasoning effort, and a strict structured response. No new SDK dependency is required. [Model documentation](https://developers.openai.com/api/docs/models/gpt-5.6-luna), [structured responses](https://developers.openai.com/api/docs/guides/structured-outputs).
+The AI editor is implemented as an optional server feature. It uses OpenAI's Responses API with `gpt-6-astra`, high reasoning effort, Standard processing, and a strict structured response. Shared defaults live in `lib/ai-model.ts`; the editor allows up to 16,384 output tokens including reasoning, while the existing proposal schema keeps visitor-facing content bounded. No new SDK dependency is required. [Model documentation](https://developers.openai.com/api/docs/models/gpt-6-astra), [structured responses](https://developers.openai.com/api/docs/guides/structured-outputs).
 
 ## Enable it locally
 
