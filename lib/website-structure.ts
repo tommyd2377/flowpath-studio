@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { validateCatalog, type KnowledgeCatalog, type CatalogEntity, type AttributeDefinition } from '@thevoice/platform-ui/contracts';
 import type { ExtractedWebsitePage } from './website-import';
 import { AppError } from './errors';
+import { textBlocks } from './html-document';
 
 const key = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 24);
 const currencyCodes = 'USD|CAD|AUD|GBP|EUR';
@@ -71,6 +72,15 @@ const priceDefinition = (price: ListedPrice): AttributeDefinition => ({ id: pric
   ...(price.currency ? { type: 'money' as const, currency: price.currency, ...(price.unit ? { unit: price.unit } : {}) } : { type: 'text' as const }) });
 export type WebsiteOfferingEvidence = { entityId: string; pageUrl: string; fields: { field: string; lineStart: number; lineEnd: number; excerpt: string }[] };
 type OfferingOptions = { strict?: boolean };
+// Comparison fields stay compact; a long source description belongs in the
+// reader. Never truncate its later qualifications to fit a displayed price.
+function offeringTerms(literal: string, name: string, category: string) {
+  const extended = literal.length > 1000;
+  const terms = extended ? 'Price and conditions require review. Read the complete source terms in the item details.' : literal;
+  return { terms,
+    summary: `${category ? category + '. ' : ''}${extended ? name + '. ' : ''}${terms}${/[.!?]$/.test(terms) ? '' : '.'} Listed information; availability is not verified.`,
+    ...(extended ? { blocks: textBlocks(literal) } : {}) };
+}
 /** Explicit price headings/tiers and adjacent prices only. No inferred stock, booking or ordering capability. */
 export function websiteOfferings(pages: Pick<ExtractedWebsitePage, 'url' | 'text'>[], options: OfferingOptions = {}) {
   const entities: CatalogEntity[] = [], attributes = new Map<string, AttributeDefinition>(), groups = new Map<string, string[]>();
@@ -115,13 +125,14 @@ export function websiteOfferings(pages: Pick<ExtractedWebsitePage, 'url' | 'text
           const footnoteIndexes = lines[index + 1].includes('*') ? lines.flatMap((line, at) => /^\*.*(?:starting price|additional charges)/i.test(line) ? [at] : []) : [];
           const currencyIndexes = [...new Set(adjacent.flatMap(price => price.currencyIndexes))];
           const literal = [...new Set([title, lines[index + 1], ...following, ...footnoteIndexes.map(at => lines[at]), ...currencyIndexes.map(at => lines[at])])].join(' ');
-          if (literal.length > 1000 || title.length > 160 || category.length > 400) { limit('Some offering names or descriptions exceed the catalog field limits. Split or review the import; no truncated offering was accepted.'); stack.push({ level, title, index }); continue; }
+          if (title.length > 160 || category.length > 400) { limit('Some offering names or categories exceed the catalog field limits. Split or review the import; no truncated offering was accepted.'); stack.push({ level, title, index }); continue; }
+          const details = offeringTerms(literal, title, category);
           for (const field of fields) attributes.set(field.id, field);
           attributes.set('source_category', { id: 'source_category', label: 'Source category', type: 'text' });
           attributes.set('source_price_terms', { id: 'source_price_terms', label: 'Price / size terms', type: 'text' });
           const id = `offering-${key(`${page.url}:${category}:${title}`)}`;
-          entities.push({ id, kind: 'offering', name: title.slice(0, 160), summary: `${category ? category + '. ' : ''}${literal}${/[.!?]$/.test(literal) ? '' : '.'} Listed information; availability is not verified.`.slice(0, 1600),
-            attributes: { ...Object.fromEntries(adjacent.map(price => [priceField(price), priceValue(price)])), source_category: category, source_price_terms: literal },
+          entities.push({ id, kind: 'offering', name: title, summary: details.summary, ...(details.blocks ? { blocks: details.blocks } : {}),
+            attributes: { ...Object.fromEntries(adjacent.map(price => [priceField(price), priceValue(price)])), source_category: category, source_price_terms: details.terms },
             identifiers: [{ scheme: 'publisher-id', value: key(`${page.url}:${category}:${title}`) }] });
           const group = category || 'Offerings'; groups.set(group, [...groups.get(group) ?? [], id]);
           evidence.push({ entityId: id, pageUrl: page.url, fields: [sourceField('name', index), ...adjacent.flatMap(price => priceEvidence(price, index + 1)),
@@ -169,9 +180,10 @@ export function websiteOfferings(pages: Pick<ExtractedWebsitePage, 'url' | 'text
         const priceText = prices.length ? title : inherited!.literal!;
         const footnoteIndexes = priceText.includes('*') ? lines.flatMap((line, at) => /^\*.*(?:starting price|additional charges)/i.test(line) ? [at] : []) : [];
         const literal = [...new Set([priceText,...followingIndexes.map(at => lines[at]),...footnoteIndexes.map(at => lines[at]),...price.currencyIndexes.map(at => lines[at])])].join(' ');
-        if (literal.length > 1000 || name.length > 160 || category.length > 400) { limit('Some offering names or descriptions exceed the catalog field limits. Split or review the import; no truncated offering was accepted.'); unmatched++; stack.push({ level, title, index }); continue; }
-        entities.push({ id, kind: 'offering', name, summary: `${category ? category + '. ' : ''}${literal}. Listed information; availability is not verified.`.slice(0, 1600),
-          attributes: { [priceId]: priceValue(price), source_category: category, source_price_terms: literal },
+        if (name.length > 160 || category.length > 400) { limit('Some offering names or categories exceed the catalog field limits. Split or review the import; no truncated offering was accepted.'); unmatched++; stack.push({ level, title, index }); continue; }
+        const details = offeringTerms(literal, name, category);
+        entities.push({ id, kind: 'offering', name, summary: details.summary, ...(details.blocks ? { blocks: details.blocks } : {}),
+          attributes: { [priceId]: priceValue(price), source_category: category, source_price_terms: details.terms },
           identifiers: [{ scheme: 'publisher-id', value: key(`${page.url}:${category}:${title}`) }] });
         const group = category || 'Offerings'; groups.set(group, [...groups.get(group) ?? [], id]);
         const priceIndex = prices.length ? index : inherited!.index;
@@ -201,6 +213,7 @@ export function addWebsiteOfferings(catalog: KnowledgeCatalog, pages: Pick<Extra
   // Provider-owned identities are never name-merged. A scoped deterministic source ID makes repeat repair idempotent.
   const existing = new Set(catalog.entities.map(e => e.id));
   const retainsSourceFields = (source: CatalogEntity, other: CatalogEntity) => other.name === source.name && other.kind === source.kind && other.summary === source.summary
+    && JSON.stringify(other.blocks ?? []) === JSON.stringify(source.blocks ?? [])
     && Object.entries(source.attributes).every(([field, value]) => other.attributes[field] === value);
   if (options.strict) {
     for (const source of extracted.entities) {

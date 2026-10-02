@@ -12,6 +12,7 @@ import type { ExploreContext } from './explore-model';
 import { knowledgeValueText } from './knowledge-display';
 import { publishedNameGroup } from './website-presentation';
 import { readPublishedContent } from './visitor-published-content';
+import { workspaceControlIntent } from './visitor-workspace-command';
 
 // Revision identity, not a security token. Authority is the host's current public snapshot.
 export function workspacePublicationId(content: SiteContent, catalog?: KnowledgeCatalog | null, media?: MediaLibrary | null) {
@@ -205,10 +206,11 @@ export function explicitWorkspaceOpen(text: string, state: WorkspaceState, autho
 /** Offline, ordinary-control equivalent, not a general language understanding claim. */
 export function planWorkspaceIntent(text: string, state: WorkspaceState, authority: WorkspaceAuthority, scene?: WorkspaceScene, catalog?: KnowledgeCatalog | null, media?: MediaLibrary | null): WorkspaceIntentResult {
   const query = text.toLowerCase().trim();
+  const control = workspaceControlIntent(text);
   const result = (operations: WorkspaceOperation[], spatial = false): WorkspaceIntentResult => ({ batch: workspaceBatch(state, operations, crypto.randomUUID(), spatial ? scene?.revision : undefined), message: '' });
-  if (/^(reset|start over|clear (?:the )?workspace|close everything)/.test(query)) return result([{ kind: 'reset', objects: [] }]);
-  if (/^(go )?back\b|^return\b/.test(query)) return result([{ kind: 'return' }]);
-  if (scene?.page === 'browse' && !state.focusedId && scene.workspaceRevision === state.revision) {
+  if (control === 'reset') return result([{ kind: 'reset', objects: [] }]);
+  if (control === 'return') return result([{ kind: 'return' }]);
+  if ((control === 'show' || control === 'expand') && scene?.page === 'browse' && !state.focusedId && scene.workspaceRevision === state.revision) {
     const ordinal = query.match(/\b(first|second|third|fourth|fifth|sixth)\b/)?.[1];
     if (ordinal && /\b(open|show|expand|pull up)\b/.test(query)) {
       const item = scene.browseItems?.[['first', 'second', 'third', 'fourth', 'fifth', 'sixth'].indexOf(ordinal)];
@@ -218,8 +220,8 @@ export function planWorkspaceIntent(text: string, state: WorkspaceState, authori
       return result([{ kind: 'add', object }, { kind: 'focus', instanceId: object.instanceId }], true);
     }
   }
-  const close = /\b(close|dismiss|done with)\b/.test(query), expand = /\b(bigger|expand|more context)\b/.test(query), collapse = /\b(smaller|collapse)\b/.test(query);
-  if (close || expand || collapse || /\b(left|right|second|third|that one|this one)\b/.test(query) && !/\bcollection|album\b/.test(query)) {
+  const close = control === 'close', expand = control === 'expand', collapse = control === 'collapse';
+  if (close || expand || collapse || control === 'focus' || control === 'show' && /\b(left|right|second|third|that one|this one)\b/.test(query) && !/\bcollection|album\b/.test(query)) {
     const named = close ? namedWorkspaceRecords(text, authority, catalog) : [];
     const namedPanel = named.length === 1 ? openWorkspaceObject(state, `${named[0].reference.kind}:${named[0].reference.id}`) : undefined;
     const id = named.length ? namedPanel?.instanceId : resolveWorkspaceTarget(state, scene, text);

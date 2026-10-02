@@ -280,3 +280,14 @@ html[data-theme="dark"] .media-files-heading p{color:#a6b4cf}
 [data-site-template=clarity] .website-detail { background: var(--platform-surface); }
 [data-site-template=clarity] .website-detail h2 { padding-left: 20px; border-left: 4px solid var(--platform-accent); }
 .voice-template[data-site-template] { background: var(--platform-bg); }
+
+/* Qualified values lead long website details; mobile rows retain reading width. */
+.website-detail-content { overflow-wrap: anywhere; }
+.website-detail-content dl { margin: 20px 0 32px; }
+.website-detail-content dl > div { padding: 16px 0; border-top: 1px solid var(--platform-border); }
+.website-detail-content dt { color: var(--platform-muted); font-size: 13px; line-height: 1.5; }
+.website-detail-content dd { margin: 6px 0 0; line-height: 1.65; white-space: pre-line; overflow-wrap: anywhere; }
+@media (min-width: 600px) {
+  .website-detail-content dl > div { display: grid; grid-template-columns: minmax(90px, .35fr) minmax(0, 1fr); gap: 16px; }
+  .website-detail-content dd { margin: 0; }
+}

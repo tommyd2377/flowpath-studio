@@ -20,6 +20,7 @@ import { visitorPageIntent } from '@/lib/visitor-navigation';
 import { websiteCommandCanMatch } from '@/lib/visitor-command-intent';
 import { contextualSearchQuery } from '@/lib/explore-workspace';
 import { explicitWorkspaceOpen, planWorkspaceIntent, publishedWorkspace } from '@/lib/visitor-workspace';
+import { workspaceControlIntent } from '@/lib/visitor-workspace-command';
 import { exploreSettings, exploreKindForText, exploreReference, localExploreCommand, type AnnotationTarget, type ExploreKind } from '@/lib/explore-model';
 import type { SiteContent } from '@/lib/site-model';
 import { siteStyle } from '@/lib/site-style';
@@ -563,7 +564,7 @@ export default function VisitorAssistant({ layerOpen, onLayerClose, website, con
       else if (direct.batch) await workspaceView.current.apply(direct.batch); else setError(direct.message);
       return;
     }
-    if (!websiteTasks?.view && question.trim() && /\b(highlight|spotlight|close|dismiss|done with|bigger|smaller|collapse|expand|left|right|second|third)\b|\b(?:open|show|pull up)\b.*\b(?:first|fourth|fifth|sixth)\b|^(?:go )?back\b|^reset\b/i.test(question) && workspaceView.current) {
+    if (!websiteTasks?.view && workspaceControlIntent(question) && workspaceView.current) {
       manualInteraction(); setChatExpanded(false); setText(''); onControlActivate();
       await workspaceView.current.intent(question); return;
     }

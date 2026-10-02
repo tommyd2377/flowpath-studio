@@ -44,7 +44,10 @@ export function bindWebsiteOfferingProvenance(catalog: KnowledgeCatalog, provena
       }
       const value = attribute ? entity.attributes[attribute] : entity.name;
       const sourceValue = attribute ? original.attributes[attribute] : original.name;
-      if (JSON.stringify(value) !== JSON.stringify(sourceValue)) { removeParserReference(key); continue; }
+      // A compact long-terms pointer is supported only together with the complete
+      // original reader content, never after a provider drops or edits its tail.
+      const changedTerms = attribute === 'source_price_terms' && JSON.stringify(entity.blocks ?? []) !== JSON.stringify(original.blocks ?? []);
+      if (changedTerms || JSON.stringify(value) !== JSON.stringify(sourceValue)) { removeParserReference(key); continue; }
       if (!Number.isInteger(field.lineStart) || !Number.isInteger(field.lineEnd) || field.lineStart < 1 || field.lineEnd < field.lineStart
         || field.lineEnd > lines.length || !field.excerpt || lines.slice(field.lineStart - 1, field.lineEnd).join('\n') !== field.excerpt) throw invalidEvidence();
       const baseOffset = lines.slice(0, field.lineStart - 1).reduce((offset, line) => offset + line.length + 1, 0);

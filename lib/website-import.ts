@@ -32,6 +32,29 @@ function pageUrl(value: string, base: string, root: string) {
     return url.toString();
   } catch { return null; }
 }
+/** A homepage logo can explicitly identify the publisher when metadata does not. */
+function homepageLogoName(root: ReturnType<typeof parseHtml>, pageUrl: string) {
+  const origin = new URL(pageUrl).origin, names = new Set<string>();
+  const marker = /(?:^|[\s_-])(?:logo|brand)(?:$|[\s_-])/i;
+  for (const link of root.querySelectorAll('a[href]')) {
+    let destination: URL;
+    try { destination = new URL(link.getAttribute('href') ?? '', pageUrl); } catch { continue; }
+    if (destination.origin !== origin || destination.pathname !== '/' || destination.search || destination.hash || destination.username || destination.password) continue;
+    for (const image of link.querySelectorAll('img[alt]')) {
+      if (!marker.test(`${link.getAttribute('class') ?? ''} ${image.getAttribute('class') ?? ''}`)) continue;
+      let node: typeof image | undefined = image, hidden = false;
+      while (node) {
+        if (node.getAttribute('hidden') !== undefined || node.getAttribute('aria-hidden') === 'true') { hidden = true; break; }
+        node = node.parentNode;
+      }
+      const name = (image.getAttribute('alt') ?? '').replace(/\s+/g, ' ').trim();
+      const placeholder = /^(?:(?:company|site|website|brand|logo|home(?:page)?|image|photo|name)(?:\s+|$))+$/i.test(name);
+      if (!hidden && name.length <= 80 && name && !placeholder) names.add(name);
+    }
+  }
+  // Conflicting labels need publisher review; do not choose a brand by position.
+  return names.size === 1 ? [...names][0] : '';
+}
 export type ExtractedWebsitePage = { url: string; title: string; text: string; name: string; headline: string; description: string; accent?: string; rawText?: string; contact?: string; hours?: string; blocks?: ReturnType<typeof textBlocks>; links: { url: string; title: string }[]; images: ReturnType<typeof extractWebsiteImages> };
 export function extractWebsitePage(html: string, url: string): ExtractedWebsitePage {
   const root = parseHtml(html);
@@ -59,7 +82,7 @@ export function extractWebsitePage(html: string, url: string): ExtractedWebsiteP
     const a=node.attributes, target=pageUrl(a.href,url,url);
     return target ? [{url:target,title:(node.text.trim() || a['aria-label'] || a.title || target).slice(0,160)}] : [];
   });
-  return { url, rawText: document.rawText, blocks: textBlocks(text), contact: document.contact, hours: document.hours, title: title || headline || new URL(url).pathname, text, name: (businessName || meta.get('og:site_name') || title.split(/\s[|–—]\s/)[0] || new URL(url).hostname).slice(0, 80),
+  return { url, rawText: document.rawText, blocks: textBlocks(text), contact: document.contact, hours: document.hours, title: title || headline || new URL(url).pathname, text, name: (businessName || meta.get('og:site_name') || homepageLogoName(root, url) || title.split(/\s[|–—]\s/)[0] || new URL(url).hostname).slice(0, 80),
     headline: headline || new URL(url).hostname, description: (meta.get('description') || meta.get('og:description') || text.replace(/^Title:[^\n]*\n?/, '').trim()).slice(0, 1500),
     ...(/^#[\da-f]{6}$/i.test(accent ?? '') ? { accent } : {}), links, images: extractWebsiteImages(html, url) };
 }

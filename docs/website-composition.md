@@ -4,6 +4,8 @@ Studio Branding now offers **Suggest layout**, a deterministic local proposal re
 
 The planner arranges approved content rather than rewriting it. It can order every canonical website section, choose short host-approved navigation labels, select one registered section/contact/assistant action, and select an explicitly reviewed opening photograph. Full section headings, records, qualifications, prices, credits and illustrative labels remain intact. The existing runtime still owns layouts, CSS, motion, accessibility and action routing. Saved template, palette, typography, spacing, motion and opening choices are preserved exactly; without a saved style, the local proposal chooses an existing template.
 
+Explicit, unambiguous section headings can supply the registered labels **Classes, Courses, Programs, Admissions, About and Policies**, ahead of a generic record-kind label such as Services. Mixed or unrecognized headings retain the existing fallback. New local and connected proposals receive the same preferred labels; the previous bounded labels remain registered so saved plans still validate. This changes labels only: section destinations, snapshot binding and canonical content stay unchanged, and no booking or other capability is added.
+
 ## Authority and lifecycle
 
 - `packages/platform-ui/src/website-composition.ts` defines the strict portable schema; its package subpath is `@thevoice/platform-ui/website-composition`.

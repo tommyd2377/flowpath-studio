@@ -43,6 +43,21 @@ function shortLabel(section: Pick<WebsiteSection, 'id' | 'title'> & Partial<Pick
   return `${boundary >= 16 ? start.slice(0, boundary) : start}…`;
 }
 
+const semanticSectionLabels = [
+  ['Classes', /\bclasses\b/i], ['Courses', /\bcourses?\b/i], ['Programs', /\bprograms?\b/i],
+  ['Admissions', /\badmissions?\b/i], ['About', /^about\b/i], ['Policies', /\b(?:policy|policies)\b/i],
+] as const;
+const aboutSectionHeading = /^about(?: us| (?:our|the) (?:studio|school|team|company|business|organization|organisation|practice))?$/i;
+
+function sectionLabels(section: WebsiteSection): string[] {
+  const legacy = shortLabel(section), heading = section.title.replace(/\s+/g, ' ').trim();
+  // An explicit, unambiguous heading takes precedence over a generic record kind.
+  // Keep the prior label registered so a reviewed saved plan remains valid.
+  const matches = semanticSectionLabels.filter(([, pattern]) => pattern.test(heading));
+  const preferred = matches.length === 1 && (matches[0][0] !== 'About' || aboutSectionHeading.test(heading)) ? matches[0][0] : null;
+  return preferred ? [...new Set([preferred, legacy])] : [legacy];
+}
+
 /** Only reviewed site/opening selections authorize a decorative hero. Album membership alone does not. */
 export function eligibleWebsiteHeroAssets(content: SiteContent, media?: MediaLibrary | null) {
   const permitted = new Set([...(content.opening?.initialAssetIds ?? []), ...(media?.associations.filter(link => link.targetType === 'site').map(link => link.assetId) ?? [])]);
@@ -55,8 +70,8 @@ export function buildWebsiteCompositionManifest(content: SiteContent, catalog?: 
   const sections = [...websiteSections(publishedWorkspace(content, catalog, media), content, catalog, media), ...extraSections];
   const snapshot = websiteCompositionSnapshot(content), eligibleHeroAssets = eligibleWebsiteHeroAssets(content, media);
   const actions: WebsiteCompositionAction[] = sections.map(section => {
-    const label = shortLabel(section);
-    return { actionId: `section:${section.id}`, kind: 'section', sectionId: section.id, labels: [label, `View ${label}`] };
+    const labels = sectionLabels(section);
+    return { actionId: `section:${section.id}`, kind: 'section', sectionId: section.id, labels: labels.flatMap(label => [label, `View ${label}`]) };
   });
   if (content.contact.trim()) actions.push({ actionId: 'contact', kind: 'contact', labels: ['Contact', 'Get in touch'] });
   if (visitorSettings(content).enabled) actions.push({ actionId: 'assistant', kind: 'assistant', labels: ['Ask a question'] });
@@ -69,7 +84,7 @@ export function buildWebsiteCompositionManifest(content: SiteContent, catalog?: 
     sections: sections.map(section => {
       const sample = section.entries.slice(0, 2);
       const textFor = (entry: WebsiteSection['entries'][number]) => entry.body || entry.blocks?.map(block => block.text).join('\n') || '';
-      return { id: section.id, title: section.title, kind: section.kind, navigation: section.navigation !== false && !!(section.entries.length || section.total), labels: [shortLabel(section)],
+      return { id: section.id, title: section.title, kind: section.kind, navigation: section.navigation !== false && !!(section.entries.length || section.total), labels: sectionLabels(section),
         entryCount: section.total ?? section.entries.length, sampleEntries: sample.map(entry => ({ id: entry.id, name: entry.name, text: textFor(entry).slice(0, 320) })),
         omittedEntries: Math.max(0, (section.total ?? section.entries.length) - sample.length), omittedTextCharacters: sample.reduce((total, entry) => total + Math.max(0, textFor(entry).length - 320), 0) };
     }) };

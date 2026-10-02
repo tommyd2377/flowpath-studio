@@ -79,7 +79,7 @@ test('unmatched prices remain visible when offering or attribute bounds are reac
 });
 
 test('strict import rejects source truncation, contradictory duplicate identities and combined catalog limits', () => {
-  const long = '# Menu\n#### Long Description\n$10\n' + 'Description '.repeat(100);
+  const long = '# Menu\n#### ' + 'Long Name '.repeat(20) + '\n$10\nDescription.';
   assert.throws(() => websiteOfferings([{ url, text: long }], { strict: true }), /no truncated offering/);
   const duplicate = '# Menu\n## Sides\n#### Same Item\n$4\n#### Same Item\n$6';
   assert.throws(() => websiteOfferings([{ url, text: duplicate }], { strict: true }), /Conflicting source entries/);
