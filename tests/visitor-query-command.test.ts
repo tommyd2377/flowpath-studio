@@ -303,6 +303,52 @@ test('price commands disambiguate published bases and never make an unknown pric
   } finally { await close(); }
 });
 
+test('currency markers cannot become another currency or a numeric unit', async () => {
+  const space = websiteTaskFixture('services');
+  space.fields.find(field => field.id === 'price')!.currency = 'EUR';
+  for (const record of space.records) for (const assertion of record.assertions) {
+    if (assertion.value?.type === 'money') assertion.value.currency = 'EUR';
+  }
+  const { context, ask, close } = await setup(space);
+  try {
+    await ask('Show me remote');
+    for (const field of ['price', 'duration']) for (const amount of ['$40', '40 USD', '40 dollars', '40 dollar']) {
+      const request = `Only ${field} under ${amount}`;
+      const before = structuredClone(context.session.queries);
+      assert.equal(websiteQueryCommand(request, context)?.capabilityId, 'task.clarify', request);
+      await ask(request);
+      assert.deepEqual(context.session.queries, before, 'A mismatched currency leaves the previous query intact');
+    }
+  } finally { await close(); }
+});
+
+test('implicit amounts keep published units and matching USD markers keep the price basis', async () => {
+  for (const currency of ['EUR', 'USD']) {
+    const space = websiteTaskFixture('services');
+    space.fields.find(field => field.id === 'price')!.currency = currency;
+    for (const record of space.records) for (const assertion of record.assertions) {
+      if (assertion.value?.type === 'money') assertion.value.currency = currency;
+    }
+    const { ask, close } = await setup(space);
+    try {
+      for (const amount of currency === 'USD' ? ['40', '$40', '40 USD', '40 dollars', '40 dollar'] : ['40']) {
+        const view = await ask(`Only price under ${amount}`);
+        assert.equal(view.result.count.value, 19);
+        assert.equal(view.result.exclusions.unknown, 1);
+        const predicate = expressionNodes(view.query.where).find(node => node.kind === 'field' && node.fieldId === 'price');
+        assert.ok(predicate?.kind === 'field');
+        assert.deepEqual(predicate.value, { type: 'money', value: 40, currency, basis: 'session' });
+      }
+      await ask('Remove the price limit');
+      const view = await ask('Only duration under 14');
+      assert.equal(view.result.count.value, 4);
+      const predicate = expressionNodes(view.query.where).find(node => node.kind === 'field' && node.fieldId === 'duration');
+      assert.ok(predicate?.kind === 'field');
+      assert.deepEqual(predicate.value, { type: 'number', value: 14, unit: 'minutes' });
+    } finally { await close(); }
+  }
+});
+
 test('decorated money labels support exact published bases without confusing projections with filters', async () => {
   for (const [kind, basis, otherBasis, request] of [
     ['products', 'Slice', 'Pie', 'Show me the pizza menu with slice and whole pie prices.'],

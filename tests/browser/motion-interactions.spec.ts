@@ -250,3 +250,69 @@ test('live reduced motion interrupts geometry safely and the next normal transit
   expect(resumed.every(frame => frame.sameImage)).toBe(true);
   await expect(card(page).getByRole('heading', { name: 'A closer look', exact: true })).toBeVisible();
 });
+
+test('live reduced motion stops composer travel without losing the draft or focus and can resume', async ({ page }, info) => {
+  await page.setViewportSize({ width: 393, height: 852 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  let modelRequests = 0;
+  page.on('request', request => { if (request.method() === 'POST' && /\/api\/visitor\/[^/]+$/.test(new URL(request.url()).pathname)) modelRequests++; });
+  await prepare(page);
+  const dock = page.locator('.platform-conversation-dock'), control = page.locator('.platform-conversation-surface');
+  const input = page.getByRole('textbox', { name: 'What would you like to see?', exact: true });
+  await expect(dock).toHaveAttribute('data-conversation-motion', 'reduced');
+  await input.fill('Keep this unfinished thought');
+  const original = await input.elementHandle();
+  // Filling the mobile input can shrink its wrapped placeholder. Wait for the
+  // dock's ResizeObserver to measure that final height before recording travel.
+  const destination = await control.evaluate((node: HTMLElement) => {
+    const host = node.closest('.platform-conversation-dock')!;
+    const viewport = window.visualViewport;
+    const center = (viewport?.offsetTop ?? 0) + (viewport?.height ?? innerHeight) * .42;
+    return Math.max(0, center - host.getBoundingClientRect().top - node.offsetTop - node.offsetHeight / 2);
+  });
+  expect(destination).toBeGreaterThan(100);
+  await expect.poll(() => control.evaluate((node, destination) => Math.abs(new DOMMatrix(getComputedStyle(node).transform).f - destination), destination)).toBeLessThan(1);
+  await page.keyboard.press('Escape');
+  await expect(dock).toHaveAttribute('data-expanded', 'false');
+  await expect.poll(() => control.evaluate(node => Math.abs(new DOMMatrix(getComputedStyle(node).transform).f))).toBeLessThan(.5);
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await expect(dock).toHaveAttribute('data-conversation-motion', 'full');
+  await input.focus();
+  await expect.poll(() => control.evaluate((node, destination) => {
+    const y = new DOMMatrix(getComputedStyle(node).transform).f; return y > 1 && y < destination - 1;
+  }, destination), { intervals: [0, 16, 32] }).toBe(true);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(dock).toHaveAttribute('data-conversation-motion', 'reduced');
+  const stopped = await control.evaluate(async node => {
+    const positions: number[] = [];
+    for (let frame = 0; frame < 6; frame++) { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); positions.push(new DOMMatrix(getComputedStyle(node).transform).f); }
+    return positions;
+  });
+  for (const position of stopped) expect(Math.abs(position - destination)).toBeLessThan(1);
+  await expect(input).toBeFocused(); await expect(input).toHaveValue('Keep this unfinished thought');
+  expect(await input.evaluate((node, original) => node === original, original)).toBe(true);
+
+  // Restoring the preference must also restore normal, subtle travel on the
+  // same mounted control, including an interrupted return to the compact dock.
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await expect(dock).toHaveAttribute('data-conversation-motion', 'full');
+  await page.keyboard.press('Escape');
+  await expect.poll(() => control.evaluate((node, destination) => {
+    const y = new DOMMatrix(getComputedStyle(node).transform).f; return y > 1 && y < destination - 1;
+  }, destination), { intervals: [0, 16, 32] }).toBe(true);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect.poll(() => control.evaluate(node => Math.abs(new DOMMatrix(getComputedStyle(node).transform).f))).toBeLessThan(.5);
+  // Escape restores focus without reopening the layer. A real click also
+  // exercises reopening when that input is already the active element.
+  await input.click(); await expect(input).toBeFocused();
+  await expect(dock).toHaveAttribute('data-expanded', 'true');
+  await expect(input).toHaveValue('Keep this unfinished thought');
+  expect(await input.evaluate((node, original) => node === original, original)).toBe(true);
+  await expect.poll(() => control.evaluate((node, destination) => Math.abs(new DOMMatrix(getComputedStyle(node).transform).f - destination), destination)).toBeLessThan(1);
+  expect(modelRequests).toBe(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await info.attach('composer-preference-frames', { body: JSON.stringify({ destination, stopped }), contentType: 'application/json' });
+  const screenshot = info.outputPath('mobile-composer-live-reduced-motion.png');
+  await page.screenshot({ path: screenshot });
+  await info.attach('mobile-composer-live-reduced-motion', { path: screenshot, contentType: 'image/png' });
+});

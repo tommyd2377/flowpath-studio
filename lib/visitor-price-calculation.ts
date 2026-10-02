@@ -28,7 +28,7 @@ function decimal(minor: bigint, digits: number) {
 /** Published references supply every price; no expression evaluation or external action. */
 export function totalPublishedPrices(index: CompiledQueryIndex, input: z.infer<typeof priceTotalInputSchema>, asOf: string) {
   const request = priceTotalInputSchema.parse(input);
-  if (new Set(request.lines.map(line => `${line.recordId}:${line.fieldId}`)).size !== request.lines.length) throw new PublishedPriceInputError('Combine quantities for each published record and price field into one line.');
+  if (new Set(request.lines.map(line => JSON.stringify([line.recordId, line.fieldId]))).size !== request.lines.length) throw new PublishedPriceInputError('Combine quantities for each published record and price field into one line.');
   let currency: string | undefined, fractionDigits = 2, subtotalMinor = 0n;
   const lines = request.lines.map(line => {
     const record = index.records.get(line.recordId), field = index.space.fields.find(field => field.id === line.fieldId);

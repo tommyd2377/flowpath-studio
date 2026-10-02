@@ -51,6 +51,18 @@ export function nodeText(node: HtmlNode): string {
   return block.test(tag) ? `\n${heading ? '#'.repeat(Number(heading[1])) + ' ' : ''}${content}\n` : tag === 'td' || tag === 'th' ? `${content}\t` : content;
 }
 export const cleanText = (value: string) => value.replace(/[ \t]+/g, ' ').replace(/[ \t]*\n[ \t]*/g, '\n').replace(/\n{2,}/g, '\n').trim();
+/** Webflow puts alternate form results beside the form, not inside it. Only
+ * remove its exact direct-child state panels beside an actual form. */
+function removeFormFeedback(root: HtmlNode) {
+  for (const wrapper of root.querySelectorAll('.w-form')) {
+    if (!wrapper.childNodes.some(node => node.rawTagName?.toLowerCase() === 'form')) continue;
+    for (const node of [...wrapper.childNodes]) {
+      if (node.nodeType !== 1) continue;
+      const classes = (node.getAttribute('class') ?? '').split(/\s+/);
+      if (classes.includes('w-form-done') || classes.includes('w-form-fail')) node.remove();
+    }
+  }
+}
 const footerSelector = 'footer,[data-elementor-type="footer"],[role="contentinfo"]';
 function textOutsideLinks(node: HtmlNode): string {
   if (node.nodeType === 3) return node.text;
@@ -85,6 +97,7 @@ export function htmlDocument(html: string, stripChrome = true) {
   const root = parseHtml(html), title = root.querySelector('title')?.text.trim() ?? '';
   for (const node of root.querySelectorAll('script,style,noscript,template,svg')) node.remove();
   const rawText = cleanText(nodeText(root));
+  removeFormFeedback(root);
   const contacts = root.querySelectorAll('a[href]').flatMap(node => /^(?:tel:|mailto:)/i.test(node.getAttribute('href') ?? '') ? [(node.getAttribute('href') ?? '').replace(/^(?:tel:|mailto:)/i, '').split('?')[0]] : []);
   const footerText = root.querySelectorAll(footerSelector).map(node => cleanText(nodeText(node))).join('\n');
   const dayLines = (text:string) => cleanText(text).split('\n').filter(line=>/(?:mon|tues|wednes|thurs|fri|satur|sun)day/i.test(line));

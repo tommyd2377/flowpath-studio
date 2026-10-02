@@ -10,6 +10,7 @@ import { priceTotalInputSchema, totalPublishedPrices } from '../lib/visitor-pric
 import { buildVisitorTaskView, executeVisitorCapability, visitorCapabilities } from '../lib/visitor-capabilities';
 import { VisitorTaskStore } from '../lib/visitor-task-store';
 import { localTaskDocuments } from '../lib/task-persistence';
+import { updatePublishedEstimate } from '../lib/visitor-estimate';
 
 const asOf = '2026-09-24';
 function prices(amounts = [12.5, 3.5], currency = 'USD') {
@@ -33,6 +34,39 @@ test('published-price arithmetic returns exact line totals and subtotal without 
   assert.match(result.note, /Taxes, fees, availability/);
   assert.deepEqual(space, original);
   assert.equal(priceTotalInputSchema.safeParse({ lines: [{ ...line(0), price: 1 }] }).success, false);
+});
+
+test('namespaced service and price IDs remain distinct through calculation and basket edits', () => {
+  const space = websiteTaskFixture('services', 2);
+  space.relationships = [];
+  const price = space.fields.find(field => field.id === 'price')!;
+  space.fields = space.fields.filter(field => field !== price).concat([
+    { ...price, id: 'rate', label: 'Hourly rate', basis: 'hour' },
+    { ...price, id: 'design:rate', label: 'Session price', basis: 'session' },
+  ]);
+  const references = [
+    { recordId: 'service:design', fieldId: 'rate', quantity: 2 },
+    { recordId: 'service', fieldId: 'design:rate', quantity: 1 },
+  ];
+  space.records.forEach((record, position) => {
+    const previousId = record.id; record.id = references[position].recordId;
+    for (const membership of space.memberships) if (membership.recordId === previousId) membership.recordId = record.id;
+    const assertion = record.assertions.find(assertion => assertion.fieldId === 'price')!;
+    assertion.fieldId = references[position].fieldId;
+    assertion.value = { type: 'money', value: position ? 45 : 125, currency: 'USD', basis: position ? 'session' : 'hour' };
+  });
+  const index = compileQueryIndex(space);
+  const total = totalPublishedPrices(index, { lines: references }, asOf);
+  assert.equal(total.formattedSubtotal, 'USD 295.00');
+  assert.deepEqual(total.lines.map(({ recordId, fieldId, per, lineTotal }) => [recordId, fieldId, per, lineTotal]), [
+    ['service:design', 'rate', 'hour', '250.00'], ['service', 'design:rate', 'session', '45.00'],
+  ]);
+  const estimate = updatePublishedEstimate(index, undefined, { op: 'set', expectedRevision: 0, lines: references }, asOf);
+  const edited = updatePublishedEstimate(index, estimate, { op: 'upsert', expectedRevision: 1, lines: [{ ...references[1], quantity: 2 }] }, asOf);
+  assert.equal(edited.formattedSubtotal, 'USD 340.00');
+  assert.deepEqual(edited.lines.map(({ quantity }) => quantity), [2, 2]);
+  assert.equal(estimate.formattedSubtotal, 'USD 295.00');
+  assert.throws(() => totalPublishedPrices(index, { lines: [references[0], references[0]] }, asOf), /Combine quantities/);
 });
 
 test('listed subtotals retain source qualifications instead of claiming final payable prices', () => {

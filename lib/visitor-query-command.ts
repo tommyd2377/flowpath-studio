@@ -141,7 +141,13 @@ export function websiteQueryCommand(text: string, context: Pick<CapabilityContex
     if (!field) return clarify('Which published attribute or price basis should I use? Name the field with your limit.');
     const op: Extract<Expression, { kind: 'field' }>['op'] = ({ under: 'lt', below: 'lt', 'less than': 'lt', 'smaller than': 'lt', over: 'gt', above: 'gt', 'greater than': 'gt', 'larger than': 'gt', 'at least': 'gte', 'at most': 'lte', before: 'lt', after: 'gt', equals: 'eq', equal: 'eq', is: 'eq', contains: 'contains', include: 'contains', includes: 'contains', 'include all of': 'all', 'includes all of': 'all', 'include any of': 'any', 'includes any of': 'any' } as Record<string, Extract<Expression, { kind: 'field' }>['op']>)[bound[1]];
     const raw = bound[2].replace(/\s+(?:please|too)$/, '').replace(/^['"]|['"]$/g, '').trim();
-    const scalar = (input: string): string | number | boolean => field.type === 'number' || field.type === 'money' ? Number(input.replace(/^\$/, '').replace(/\s+(?:usd|dollars?)$/, '')) : field.type === 'boolean' ? /^(true|yes)$/.test(input) : input;
+    const scalar = (input: string): string | number | boolean => {
+      if (field.type === 'number' || field.type === 'money') {
+        // Currency markers must agree with the published field before stripping them.
+        return Number(field.type === 'money' && field.currency === 'USD' ? input.replace(/^\$/, '').replace(/\s+(?:usd|dollars?)$/, '') : input);
+      }
+      return field.type === 'boolean' ? /^(true|yes)$/.test(input) : input;
+    };
     const data = op === 'any' || op === 'all' ? raw.split(/\s*,\s*/).map(scalar) : scalar(raw);
     if (typeof data === 'number' && !Number.isFinite(data) && /^[a-z ]+$/.test(raw)) return null; // Let the assistant interpret written-out quantities.
     if (!field.operations.includes(op) || typeof data === 'number' && !Number.isFinite(data) || field.type === 'boolean' && !/^(true|false|yes|no)$/.test(raw) || field.type === 'geo') return clarify(`Use a supported ${field.label} value: ${field.operations.join(', ')}${field.unit ? `, measured in ${field.unit}` : ''}.`);

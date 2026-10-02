@@ -46,6 +46,7 @@
 .website { padding: 40px 28px 0; transition: filter .3s ease, opacity .3s ease; container-type: inline-size; }
 .assistant[data-ai-layer-open=true] .website { filter: blur(6px); opacity: .38; user-select: none; }
 .backdrop { position: fixed; z-index: 40; inset: 0; background: color-mix(in srgb, var(--platform-bg, #11160e) 35%, transparent); touch-action: none; }
+.assistant[data-ai-layer-open=false] .backdrop { pointer-events: none; }
 .interaction :global(.platform-conversation-backdrop) { display: none; }
 @media(max-width:600px) { .website { padding: 40px 18px 0; }.interaction .modes { right: 16px; }.assistant[data-ai-layer-open=true] .website { filter: blur(3px); opacity: .22; } }
 @media(prefers-reduced-motion:reduce) { .website { transition: none; }.assistant[data-ai-layer-open=true] .website { filter: none; } }
@@ -103,7 +104,7 @@
 
 /* Blur the contents of the fixed results rail, never its containing block.
    This retains the answer's position, scroll, and mounted media while typing. */
-.results :global([data-information-surface]) > div { transition: filter .35s ease, opacity .35s ease; }
+.results :global([data-information-surface]) > div { transition: width var(--surface-reflow) cubic-bezier(.22,.61,.36,1), filter .35s ease, opacity .35s ease; }
 .results[data-defocused=true] :global([data-information-surface]) > div { filter: blur(6px); opacity: .28; pointer-events: none; }
 .assistant[data-chat-composing=true] .interaction,
 .assistant[data-chat-composing=true] .interaction :global(.platform-conversation-dock) { background: transparent; border-color: transparent; }

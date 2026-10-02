@@ -331,6 +331,58 @@ test('an empty composer closes with Escape or its backdrop and keeps keyboard fo
   await noMediaRequests(page);
 });
 
+test('returning after a failed chat lets the first website click through the exiting backdrop', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  const { site, requests } = await prepare(page, { mode: 'chat' });
+  let failedRequests = 0;
+  await page.route(`${origin}/api/visitor/${site.slug}`, route => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    failedRequests++;
+    return route.fulfill({ status: 429, json: { error: 'Synthetic QA budget reached.' } });
+  });
+  const card = website(page).getByRole('button', { name: 'Open Clay Basics', exact: true });
+  await card.scrollIntoViewIfNeeded();
+  await input(page).fill(firstPrompt); await input(page).press('Enter');
+  await expect(assistant(page)).toContainText('Synthetic QA budget reached.');
+  await expect(assistant(page)).toHaveAttribute('data-ai-layer-open', 'true');
+  const backdrop = page.locator('[data-assistant-backdrop]');
+  await expect(backdrop).toHaveCSS('opacity', '1');
+  // Hold only the next native backdrop animation halfway through its exit.
+  // Motion sets startTime after animate returns, so pause after that constructor.
+  await backdrop.evaluate(element => {
+    const target = element as HTMLElement & { __exitAnimation?: Animation };
+    const animate = target.animate.bind(target);
+    target.animate = (...args: Parameters<Element['animate']>) => {
+      const animation = animate(...args); target.__exitAnimation = animation;
+      queueMicrotask(() => {
+        animation.pause(); animation.currentTime = Number(animation.effect!.getTiming().duration) / 2;
+      });
+      return animation;
+    };
+  });
+  await page.getByRole('button', { name: 'Return to website', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(assistant(page)).toHaveAttribute('data-ai-layer-open', 'false');
+  await expect(website(page)).not.toHaveAttribute('inert', '');
+  await expect.poll(() => backdrop.evaluate(element => (element as HTMLElement & { __exitAnimation?: Animation }).__exitAnimation?.playState)).toBe('paused');
+  const opacity = await backdrop.evaluate(element => Number(getComputedStyle(element).opacity));
+  expect(opacity).toBeGreaterThan(0); expect(opacity).toBeLessThan(1);
+  await expect(backdrop).toHaveCSS('pointer-events', 'none');
+  const point = await card.evaluate(element => {
+    const rect = element.getBoundingClientRect(), x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
+    return { x, y, inViewport: x > 0 && x < innerWidth && y > 0 && y < innerHeight,
+      receivesPointer: element.contains(document.elementFromPoint(x, y)) };
+  });
+  expect(point.inViewport).toBe(true); expect(point.receivesPointer).toBe(true);
+  // A physical click cannot silently wait for the retained backdrop to disappear.
+  await page.mouse.click(point.x, point.y);
+  await expect(page.getByRole('dialog', { name: 'Clay Basics', exact: true })).toBeVisible();
+  await backdrop.evaluate(element => (element as HTMLElement & { __exitAnimation?: Animation }).__exitAnimation!.finish());
+  await expect(backdrop).toHaveCount(0);
+  expect(failedRequests).toBe(1); expect(requests).toHaveLength(0);
+  await noMediaRequests(page);
+});
+
 test('mocked dictation edits the draft, cancels stale replies, and stops when its composer closes', async ({ page }, info) => {
   const { site, requests } = await prepare(page);
   await page.getByRole('button', { name: 'Chat', exact: true }).click(); await centered(page);

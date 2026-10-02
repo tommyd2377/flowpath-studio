@@ -1,8 +1,8 @@
 'use client';
 
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'motion/react';
-import { revealTransition } from './motion.js';
+import { AnimatePresence, animate, motion, useIsPresent, useMotionValue } from 'motion/react';
+import { revealTransition, usePlatformReducedMotion } from './motion.js';
 
 function Suggestions({ children, reduced }: { children: ReactNode; reduced: boolean | null }) {
   const present = useIsPresent();
@@ -15,9 +15,18 @@ function Suggestions({ children, reduced }: { children: ReactNode; reduced: bool
 export function ConversationDock({ expanded, onDismiss, children, suggestions }: {
   expanded: boolean; onDismiss: () => void; children: ReactNode; suggestions?: ReactNode;
 }) {
-  const reduced = useReducedMotion();
+  const reduced = usePlatformReducedMotion();
   const dock = useRef<HTMLDivElement>(null), surface = useRef<HTMLDivElement>(null);
   const [offset, setOffset] = useState(0);
+  const travel = useMotionValue(0);
+  useLayoutEffect(() => {
+    const target = expanded ? offset : 0;
+    // An OS preference change stops current travel without remounting the
+    // focused input. The same measured destination remains above the keyboard.
+    if (reduced) { travel.jump(target); return; }
+    const animation = animate(travel, target, { duration: .65, ease: [.22, 1, .36, 1] });
+    return () => animation.stop();
+  }, [expanded, offset, reduced, travel]);
   useLayoutEffect(() => {
     const host = dock.current, control = surface.current;
     if (!host || !control) return;
@@ -41,14 +50,13 @@ export function ConversationDock({ expanded, onDismiss, children, suggestions }:
       window.visualViewport?.removeEventListener('resize', measure); window.visualViewport?.removeEventListener('scroll', measure);
     };
   }, [expanded]);
-  return <div ref={dock} className="platform-conversation-dock" data-expanded={expanded} onKeyDown={event => {
+  return <div ref={dock} className="platform-conversation-dock" data-expanded={expanded} data-conversation-motion={reduced ? 'reduced' : 'full'} onKeyDown={event => {
     if (event.key === 'Escape' && expanded) { event.preventDefault(); event.stopPropagation(); onDismiss(); }
   }}>
     <AnimatePresence initial={false}>{expanded && <motion.div className="platform-conversation-backdrop" aria-hidden="true"
       onPointerDown={onDismiss} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       transition={{ ...revealTransition, duration: reduced ? 0 : .45 }}/>}</AnimatePresence>
-    <motion.div ref={surface} className="platform-conversation-surface" initial={false}
-      animate={{ y: expanded ? offset : 0 }} transition={{ duration: reduced ? 0 : .65, ease: [.22, 1, .36, 1] }}>
+    <motion.div ref={surface} className="platform-conversation-surface" style={{ y: travel }}>
       {children}
       <AnimatePresence initial={false}>{expanded && suggestions && <Suggestions key="suggestions" reduced={reduced}>{suggestions}</Suggestions>}</AnimatePresence>
     </motion.div>
