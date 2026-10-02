@@ -9,6 +9,7 @@ const cli = createRequire(import.meta.url).resolve('@playwright/test/cli');
 const groups = {
   templates: ['templates.spec.ts'],
   websiteDesign: ['website-design.spec.ts'],
+  websiteComposition: ['website-composition.spec.ts'],
   websiteHero: ['website-hero.spec.ts'],
   websiteMotion: ['website-motion.spec.ts'],
   websiteMotionControls: ['website-motion-controls.spec.ts'],

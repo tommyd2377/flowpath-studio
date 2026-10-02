@@ -29,7 +29,7 @@ export function EditorPanels({ editor, mode, panel, site, content, setContent, b
   const save = () => void command({ action: 'save', content });
   const saveBar = <div className="save-bar"><span>{unsaved ? 'Save to keep these changes in your draft.' : 'Your draft is up to date.'}</span><button className="button primary" disabled={busy || !unsaved} onClick={save}><Check size={16}/>Save draft</button></div>;
 
-  if (panel === 'branding') return <BrandingPanel site={site} content={content} setContent={setContent} busy={busy} unsaved={unsaved} upload={upload} save={save}/>;
+  if (panel === 'branding') return <BrandingPanel connected={editor.mode === 'openai'} site={site} content={content} setContent={setContent} busy={busy} unsaved={unsaved} upload={upload} save={save}/>;
   if (panel === 'voice') return <VoicePanel key={site.id} siteId={site.id} content={content} setContent={setContent} busy={busy} unsaved={unsaved} save={save}/>;
 
   if (panel === 'content') return <div className="settings-panel">

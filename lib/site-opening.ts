@@ -4,6 +4,7 @@ import { validatePlan, type KnowledgeCatalog, type PresentationPlan } from '@the
 import type { SiteContent } from './site-model';
 import { AppError } from './errors';
 import { validatePresentation, type SitePresentation } from './site-presentation';
+import { compositionMatchesContent } from './website-composition-snapshot';
 
 export type OpeningVisibility = 'intro-only' | 'publisher-selected' | 'legacy';
 export const DEFAULT_OPENING: NonNullable<SiteContent['opening']> = {
@@ -17,7 +18,10 @@ export function openingVisibility(content: SiteContent): OpeningVisibility {
 
 export function publicationContent(content: SiteContent): SiteContent {
   const opening = content.opening ?? DEFAULT_OPENING;
-  return { ...content, opening: { ...DEFAULT_OPENING, ...opening, visibility: opening.visibility ?? 'intro-only' } };
+  const published = { ...content, opening: { ...DEFAULT_OPENING, ...opening, visibility: opening.visibility ?? 'intro-only' } };
+  if (compositionMatchesContent(content)) published.websiteComposition = { ...content.websiteComposition!, reviewNotes: [] };
+  else delete published.websiteComposition;
+  return published;
 }
 
 export function openingCopy(content: SiteContent, catalog?: KnowledgeCatalog | null) {

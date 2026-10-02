@@ -13,6 +13,7 @@ import { validateMediaLibrary } from '@thevoice/platform-ui/media';
 import { CatalogRepository } from '@/lib/catalog-repository';
 import { assertLaunchPublication } from '@/lib/launch-billing';
 import { loadGreetingRecords } from '@/lib/greeting-record-store';
+import { buildWebsiteCompositionManifest, resolveWebsiteComposition, validateWebsiteCompositionPlan } from '@/lib/website-composition';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -30,6 +31,18 @@ export async function POST(request: Request, { params }: Context) {
     const { siteId } = await params;
     const command = commandSchema.parse(await readJson(request));
     let effectiveCommand = command;
+    let publishCompositionAccepted = false;
+    if (command.action === 'save' || command.action === 'apply') {
+      const current = await getSite(user, siteId);
+      const next = command.action === 'save' ? command.content : current.messages.find(message => message.id === command.messageId)?.proposal?.content;
+      // Ordinary content edits may stale an existing plan; rendering then falls back.
+      // Any newly supplied plan must pass the full host reference checks before storage.
+      if (next?.websiteComposition && JSON.stringify(next.websiteComposition) !== JSON.stringify(current.draft.websiteComposition)) {
+        const catalog = !current.draft.catalogPublicationId && current.draft.knowledgeRevisionId ? (await readKnowledgeArtifact(user, siteId, current.draft.knowledgeRevisionId)).catalog : null;
+        const media = current.draft.mediaRevisionId ? await readMediaLibrary(user, siteId, current.draft.mediaRevisionId) : null;
+        validateWebsiteCompositionPlan(next.websiteComposition, buildWebsiteCompositionManifest(pruneGreetingSources(next), catalog, media));
+      }
+    }
     if (command.action === 'save' && command.content.greetingPoints) {
       const current = await getSite(user, siteId);
       const catalog = current.draft.knowledgeRevisionId ? (await readKnowledgeArtifact(user, siteId, current.draft.knowledgeRevisionId)).catalog : null;
@@ -44,6 +57,7 @@ export async function POST(request: Request, { params }: Context) {
       await assertLaunchPublication(user, siteId);
       const catalog = current.draft.knowledgeRevisionId ? (await readKnowledgeArtifact(user, siteId, current.draft.knowledgeRevisionId)).catalog : null;
       const media = current.draft.mediaRevisionId ? await readMediaLibrary(user, siteId, current.draft.mediaRevisionId) : null;
+      publishCompositionAccepted = !!resolveWebsiteComposition(current.draft, current.draft.catalogPublicationId ? null : catalog, media);
       validateOpeningWithMedia(current.draft, catalog, media);
       validateGreeting(current.draft, catalog, await loadGreetingRecords(siteId, current.draft));
       if (current.draft.catalogPublicationId) await new CatalogRepository().verify(siteId, current.draft.catalogPublicationId);
@@ -54,7 +68,11 @@ export async function POST(request: Request, { params }: Context) {
       }
     }
     let site = command.action === 'chat' ? await editWithChat(user, siteId, command)
-      : await modifySite(user, siteId, effectiveCommand.revision, state => applyCommand(state, effectiveCommand));
+      : await modifySite(user, siteId, effectiveCommand.revision, state => {
+        applyCommand(state, effectiveCommand);
+        // Stale plans never block useful publication or escape into the public snapshot.
+        if (command.action === 'publish' && state.published?.websiteComposition && !publishCompositionAccepted) delete state.published.websiteComposition;
+      });
     if (command.action === 'save' || command.action === 'apply') {
       const repair = await reconcileSectionAssociations(user, siteId, site.revision, site.draft.sections.map(section => section.id));
       site = repair.site;

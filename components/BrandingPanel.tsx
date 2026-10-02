@@ -13,10 +13,11 @@ import { websiteEntry, websiteHeroId, websiteSections } from '@/lib/website-pres
 import { openingCopy } from '@/lib/site-opening';
 import type { UploadFiles } from './MediaPanel';
 import styles from './BrandingPanel.module.css';
+import WebsiteCompositionPanel from './WebsiteCompositionPanel';
 
 const noop = () => {};
-export default function BrandingPanel({ site, content, setContent, busy, unsaved, upload, save }: {
-  site: Site; content: SiteContent; setContent: (content: SiteContent) => void; busy: boolean; unsaved: boolean; upload: UploadFiles; save: () => void;
+export default function BrandingPanel({ connected = false, site, content, setContent, busy, unsaved, upload, save }: {
+  connected?: boolean; site: Site; content: SiteContent; setContent: (content: SiteContent) => void; busy: boolean; unsaved: boolean; upload: UploadFiles; save: () => void;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<{ key: string; catalog: KnowledgeCatalog | null; media: MediaLibrary | null }>();
@@ -31,13 +32,14 @@ export default function BrandingPanel({ site, content, setContent, busy, unsaved
     ]).then(([knowledge, media]) => { if (!controller.signal.aborted) { setPreview({ key, catalog: knowledge?.catalog ?? null, media: media?.library ?? null }); setError(''); } }).catch(error => { if (!controller.signal.aborted) setError(error.message); });
     return () => controller.abort();
   }, [site.id, content.knowledgeRevisionId, content.mediaRevisionId, key]);
-  const catalog = preview?.key === key ? preview.catalog : null, media = preview?.key === key ? preview.media : null;
+  const catalog = !content.catalogPublicationId && preview?.key === key ? preview.catalog : null, media = preview?.key === key ? preview.media : null;
   const style = content.style;
   const effectiveTemplate = effectiveWebsiteTemplate(style);
   const change = <K extends keyof SiteContent>(key: K, value: SiteContent[K]) => setContent({ ...content, [key]: value });
   const updateStyle = (patch: Partial<SiteDesign>) => change('style', { layout: 'balanced', palette: 'midnight', ...style, ...patch, customized: [...new Set([...(style?.customized ?? []), ...Object.keys(patch).filter(key => key !== 'entry' && key !== 'paletteVersion') as NonNullable<SiteDesign['customized']>])] });
   return <div className="settings-panel">
     <div className="panel-heading"><span className="eyebrow">A place that feels like you</span><h2>Branding</h2><p>Choose a starting point. Make a few adjustments. Your content does the rest.</p></div>
+    <WebsiteCompositionPanel key={`${site.id}:${site.revision}:${JSON.stringify(content)}`} site={site} content={content} setContent={setContent} busy={busy} unsaved={unsaved} catalog={content.catalogPublicationId ? null : catalog} media={media} connected={connected} ready={preview?.key === key}/>
     <fieldset className={styles.fieldset}><legend>Choose your template</legend><p className="field-help">Previews use your draft. The full preview beside this panel updates immediately; use its desktop and mobile controls.</p>
       {!style?.template && <p className={styles.notice}>Your website uses the {WEBSITE_TEMPLATES[effectiveTemplate].name} layout with your saved colors and content. Customize it below, or preview another template. Changes stay in your draft until you Publish.</p>}
       {error && <p role="alert">{error} Template previews currently show only the site information available here.</p>}

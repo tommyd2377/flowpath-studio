@@ -1,0 +1,314 @@
+{
+  "sourceMethod": "Curated synthetic graph/media fixture; not an actual source import or live model result",
+  "canonicalContentUnchanged": true,
+  "canonicalCatalogUnchanged": true,
+  "styleUnchanged": true,
+  "plan": {
+    "version": 1,
+    "snapshot": {
+      "contentBinding": "content-v1:894:a44e9a9:bad89bf5",
+      "knowledgeRevisionId": "1f6491ec-497e-43ac-800a-17e7b4a1b775",
+      "catalogPublicationId": null,
+      "mediaRevisionId": "c96922ac-86e5-44f4-bdc7-316874f7b4c0"
+    },
+    "style": {
+      "layout": "editorial",
+      "palette": "linen",
+      "paletteVersion": 2,
+      "entry": "website",
+      "template": "editorial",
+      "version": 1,
+      "typography": "literary",
+      "textSize": "standard",
+      "spacing": "spacious",
+      "websiteMotion": "subtle",
+      "customAccent": false
+    },
+    "sectionOrder": [
+      "collection-services",
+      "collection-projects",
+      "album-studies",
+      "introduction"
+    ],
+    "navigation": [
+      {
+        "sectionId": "collection-services",
+        "label": "Services"
+      },
+      {
+        "sectionId": "collection-projects",
+        "label": "Work"
+      },
+      {
+        "sectionId": "album-studies",
+        "label": "A closer look"
+      },
+      {
+        "sectionId": "introduction",
+        "label": "About"
+      }
+    ],
+    "primaryAction": {
+      "actionId": "section:collection-services",
+      "label": "Services"
+    },
+    "heroAssetId": "3d0042c1-2238-4da3-bb34-a7f265d6ccaf",
+    "reviewNotes": [
+      "Your saved template, colors, typography, spacing, motion and opening choice are preserved.",
+      "Start with “Ways we can work together”; keep every section, record and qualification available.",
+      "The opening photo was selected from reviewed media. Check the preview for visual fit and crop; dimensions and labels cannot establish image quality or subject identity."
+    ]
+  },
+  "baseline": [
+    {
+      "viewport": "desktop",
+      "pageWidth": 1440,
+      "viewportWidth": 1440,
+      "firstHeroAction": {
+        "label": "Good work begins with listening. ↘",
+        "target": "#_R_1jav5ubtb_-introduction"
+      },
+      "navigationLabels": [
+        "Good work begins with listening.",
+        "Ways we can work together",
+        "Selected work",
+        "A closer look",
+        "Contact"
+      ],
+      "firstSectionHeading": "Good work begins with listening.",
+      "sectionHeadings": [
+        "Good work begins with listening.",
+        "Ways we can work together",
+        "Selected work",
+        "A closer look"
+      ],
+      "allHeadings": [
+        "A closer look",
+        "Get in touch",
+        "Good work begins with listening.",
+        "Independent design & direction",
+        "Selected work",
+        "Thoughtful design. Lasting character.",
+        "Ways we can work together"
+      ],
+      "images": [
+        {
+          "source": "http://127.0.0.1:3225/api/public-files/template-services-1790975823236/3d0042c1-2238-4da3-bb34-a7f265d6ccaf",
+          "naturalWidth": 1400,
+          "naturalHeight": 1100,
+          "renderedWidth": 517.765625,
+          "inCard": false
+        },
+        {
+          "source": "http://127.0.0.1:3225/api/public-files/template-services-1790975823236/f15c0b54-289a-4992-85ae-a9c66ca2dafd",
+          "naturalWidth": 1400,
+          "naturalHeight": 1100,
+          "renderedWidth": 822.328125,
+          "inCard": true
+        },
+        {
+          "source": "http://127.0.0.1:3225/api/public-files/template-services-1790975823236/3d0042c1-2238-4da3-bb34-a7f265d6ccaf",
+          "naturalWidth": 1400,
+          "naturalHeight": 1100,
+          "renderedWidth": 676.078125,
+          "inCard": true
+        },
+        {
+          "source": "http://127.0.0.1:3225/api/public-files/template-services-1790975823236/f15c0b54-289a-4992-85ae-a9c66ca2dafd",
+          "naturalWidth": 1400,
+          "naturalHeight": 1100,
+          "renderedWidth": 587.90625,
+          "inCard": true
+        }
+      ]
+    },
+    {
+      "viewport": "mobile",
+      "pageWidth": 390,
+      "viewportWidth": 390,
+      "firstHeroAction": {
+        "label": "Good work begins with listening. ↘",
+        "target": "#_R_1jav5ubtb_-introduction"
+      },
+      "navigationLabels": [
+        "Good work begins with listening.",
+        "Ways we can work together",
+        "Selected work",
+        "A closer look",
+        "Contact"
+      ],
+      "firstSectionHeading": "Good work begins with listening.",
+      "sectionHeadings": [
+        "Good work begins with listening.",
+        "Ways we can work together",
+        "Selected work",
+        "A closer look"
+      ],
+      "allHeadings": [
+        "A closer look",
+        "Get in touch",
+        "Good work begins with listening.",
+        "Independent design & direction",
+        "Selected work",
+        "Thoughtful design. Lasting character.",
+        "Ways we can work together"
+      ],
+      "images": [
+        {
+          "source": "http://127.0.0.1:3225/api/public-files/template-services-1790975823236/3d0042c1-2238-4da3-bb34-a7f265d6ccaf",
+          "naturalWidth": 1400,
+          "naturalHeight": 1100,
+          "renderedWidth": 350,
+          "inCard": false
+        },
+        {
+          "source": "http://127.0.0.1:3225/api/public-files/template-services-1790975823236/f15c0b54-289a-4992-85ae-a9c66ca2dafd",
+          "naturalWidth": 1400,
+          "naturalHeight": 1100,
+          "renderedWidth": 350,
+          "inCard": true
+        },
+        {
+          "source": "http://127.0.0.1:3225/api/public-files/template-services-1790975823236/3d0042c1-2238-4da3-bb34-a7f265d6ccaf",
+          "naturalWidth": 1400,
+          "naturalHeight": 1100,
+          "renderedWidth": 350,
+          "inCard": true
+        },
+        {
+          "source": "http://127.0.0.1:3225/api/public-files/template-services-1790975823236/f15c0b54-289a-4992-85ae-a9c66ca2dafd",
+          "naturalWidth": 1400,
+          "naturalHeight": 1100,
+          "renderedWidth": 350,
+          "inCard": true
+        }
+      ]
+    }
+  ],
+  "planned": [
+    {
+      "viewport": "desktop",
+      "pageWidth": 1440,
+      "viewportWidth": 1440,
+      "firstHeroAction": {
+        "label": "Services ↘",
+        "target": "#_R_1jav5ubtb_-collection-services"
+      },
+      "navigationLabels": [
+        "Services",
+        "Work",
+        "A closer look",
+        "About",
+        "Contact"
+      ],
+      "firstSectionHeading": "Ways we can work together",
+      "sectionHeadings": [
+        "Ways we can work together",
+        "Selected work",
+        "A closer look",
+        "Good work begins with listening."
+      ],
+      "allHeadings": [
+        "A closer look",
+        "Get in touch",
+        "Good work begins with listening.",
+        "Independent design & direction",
+        "Selected work",
+        "Thoughtful design. Lasting character.",
+        "Ways we can work together"
+      ],
+      "images": [
+        {
+          "source": "http://127.0.0.1:3225/api/public-files/template-services-1790975823236/3d0042c1-2238-4da3-bb34-a7f265d6ccaf",
+          "naturalWidth": 1400,
+          "naturalHeight": 1100,
+          "renderedWidth": 517.765625,
+          "inCard": false
+        },
+        {
+          "source": "http://127.0.0.1:3225/api/public-files/template-services-1790975823236/f15c0b54-289a-4992-85ae-a9c66ca2dafd",
+          "naturalWidth": 1400,
+          "naturalHeight": 1100,
+          "renderedWidth": 822.328125,
+          "inCard": true
+        },
+        {
+          "source": "http://127.0.0.1:3225/api/public-files/template-services-1790975823236/3d0042c1-2238-4da3-bb34-a7f265d6ccaf",
+          "naturalWidth": 1400,
+          "naturalHeight": 1100,
+          "renderedWidth": 676.078125,
+          "inCard": true
+        },
+        {
+          "source": "http://127.0.0.1:3225/api/public-files/template-services-1790975823236/f15c0b54-289a-4992-85ae-a9c66ca2dafd",
+          "naturalWidth": 1400,
+          "naturalHeight": 1100,
+          "renderedWidth": 587.90625,
+          "inCard": true
+        }
+      ]
+    },
+    {
+      "viewport": "mobile",
+      "pageWidth": 390,
+      "viewportWidth": 390,
+      "firstHeroAction": {
+        "label": "Services ↘",
+        "target": "#_R_1jav5ubtb_-collection-services"
+      },
+      "navigationLabels": [
+        "Services",
+        "Work",
+        "A closer look",
+        "About",
+        "Contact"
+      ],
+      "firstSectionHeading": "Ways we can work together",
+      "sectionHeadings": [
+        "Ways we can work together",
+        "Selected work",
+        "A closer look",
+        "Good work begins with listening."
+      ],
+      "allHeadings": [
+        "A closer look",
+        "Get in touch",
+        "Good work begins with listening.",
+        "Independent design & direction",
+        "Selected work",
+        "Thoughtful design. Lasting character.",
+        "Ways we can work together"
+      ],
+      "images": [
+        {
+          "source": "http://127.0.0.1:3225/api/public-files/template-services-1790975823236/3d0042c1-2238-4da3-bb34-a7f265d6ccaf",
+          "naturalWidth": 1400,
+          "naturalHeight": 1100,
+          "renderedWidth": 350,
+          "inCard": false
+        },
+        {
+          "source": "http://127.0.0.1:3225/api/public-files/template-services-1790975823236/f15c0b54-289a-4992-85ae-a9c66ca2dafd",
+          "naturalWidth": 1400,
+          "naturalHeight": 1100,
+          "renderedWidth": 350,
+          "inCard": true
+        },
+        {
+          "source": "http://127.0.0.1:3225/api/public-files/template-services-1790975823236/3d0042c1-2238-4da3-bb34-a7f265d6ccaf",
+          "naturalWidth": 1400,
+          "naturalHeight": 1100,
+          "renderedWidth": 350,
+          "inCard": true
+        },
+        {
+          "source": "http://127.0.0.1:3225/api/public-files/template-services-1790975823236/f15c0b54-289a-4992-85ae-a9c66ca2dafd",
+          "naturalWidth": 1400,
+          "naturalHeight": 1100,
+          "renderedWidth": 350,
+          "inCard": true
+        }
+      ]
+    }
+  ]
+}

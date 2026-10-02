@@ -9,6 +9,8 @@ Studio turns source material into reviewable knowledge and media, then publishes
 
 **Editorial, Showcase and Clarity** provide three distinct website templates, with actual-content previews and simple palette, typography, text-size and spacing controls in Branding. Related files share one review, and source withdrawal preserves supported facts and publisher corrections. Existing sites opt in without migration or reimport. See the [implementation and publisher guide](docs/templates-and-source-lifecycle.md) and [visual evidence](docs/screenshots/templates/README.md).
 
+Branding also offers a [reviewed website layout proposal](docs/website-composition.md): local suggestions require no API credit, preserve saved styling and keep all approved content. An optional connected model uses the same strict references and separate apply, save and publish steps.
+
 **Status:** working local pilot with semantic ingestion, publisher correction, photos/albums and a shared visitor runtime. Firebase and direct model integrations are implemented but require separate configuration and live verification. This is not yet a complete commercial hosting or billing service.
 
 The application displays **FlowPath Studio**. Existing identifiers (`voice-platform`, `@thevoice/platform-ui`, `VOICE_*`) are retained. The separate FlowPath/news application is a reference implementation and test publisher, not a dependency or a template for this platform.

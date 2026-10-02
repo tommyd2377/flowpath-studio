@@ -3,7 +3,9 @@ import { greetingPointSchema, WELCOME_MESSAGE_MAX_LENGTH } from './site-greeting
 import { visitorSettingsSchema } from './visitor-model';
 import { exploreSettingsSchema } from './explore-model';
 import { siteDesignSchema } from '@thevoice/platform-ui/site-design';
+import { websiteCompositionPlanSchema } from '@thevoice/platform-ui/website-composition';
 import { conversationSummary } from './voice-settings';
+import { publicationContent } from './site-opening';
 
 export const sectionSchema = z.object({
   id: z.string().trim().min(1).max(80),
@@ -37,6 +39,7 @@ export const contentSchema = z.object({
   welcomeMessage: z.string().trim().max(WELCOME_MESSAGE_MAX_LENGTH).optional(),
   greetingPoints: z.array(greetingPointSchema.nullable()).length(3).optional(),
   style: siteDesignSchema.optional(),
+  websiteComposition: websiteCompositionPlanSchema.optional(),
   visitorSpeaksFirst: z.boolean().optional(),
   visitor: visitorSettingsSchema.optional(),
   explore: exploreSettingsSchema.optional(),
@@ -73,7 +76,7 @@ export type Site = {
 export type SiteSummary = Pick<Site, 'id' | 'slug' | 'revision' | 'publishedAt'> & { name: string; accent: string; dirty: boolean };
 
 export function hasChanges(site: Site) {
-  return JSON.stringify(site.draft) !== JSON.stringify(site.published);
+  return !site.published || JSON.stringify(publicationContent(site.draft)) !== JSON.stringify(publicationContent(site.published));
 }
 
 export function summarize(site: Site): SiteSummary {
@@ -84,10 +87,11 @@ export function summarize(site: Site): SiteSummary {
 export function describeChanges(before: SiteContent, after: SiteContent): Change[] {
   const labels: Record<Exclude<keyof SiteContent, 'sections'>, string> = { name: 'Site name', tagline: 'Tagline', headline: 'Headline', description: 'Introduction',
     hours: 'Opening hours', contact: 'Contact', accent: 'Brand color', logoAssetId: 'Logo',
-    welcomeMessage: 'Welcome message', greetingPoints: 'Spoken greeting points', style: 'Visitor style', visitorSpeaksFirst: 'Conversation opening', visitor: 'Visitor conversations', explore: 'Search and explore', knowledgeRevisionId: 'Knowledge revision', catalogPublicationId: 'Collection publication', mediaRevisionId: 'Photos and albums', opening: 'Opening experience' };
+    welcomeMessage: 'Welcome message', greetingPoints: 'Spoken greeting points', style: 'Visitor style', websiteComposition: 'Website layout', visitorSpeaksFirst: 'Conversation opening', visitor: 'Visitor conversations', explore: 'Search and explore', knowledgeRevisionId: 'Knowledge revision', catalogPublicationId: 'Collection publication', mediaRevisionId: 'Photos and albums', opening: 'Opening experience' };
   const display = (content: SiteContent, key: keyof typeof labels) => key === 'visitor'
     ? `${content.visitor?.enabled ? content.visitor.mode : 'Off'} · ${content.visitor?.openingExperience === 'voice' ? 'Voice invitation' : 'Website first'} · GPT Live 1 · ${content.visitor?.chatDailyLimit ?? 25} chat messages / ${content.visitor?.voiceDailyLimit ?? 5} voice tasks per day · ${content.visitor?.voiceIdleTimeoutSeconds ?? 60}s idle close · ${content.visitor?.voiceSessionSeconds ?? 120}s session maximum · Assistant role: ${content.visitor?.assistantPurpose || 'Helpful website guide'} · ${conversationSummary(content)}`
     : key === 'explore' ? content.explore?.enabled ? `On · ${content.explore.dailyLimit} searches/day · ${content.explore.images ? 'images on' : 'images off'} · ${content.explore.maps ? 'maps on' : 'maps off'} · ${content.explore.annotations ? 'web additions on' : 'web additions off'} · ${content.explore.allowedDomains.join(', ') || 'wider web'}` : 'Off'
+    : key === 'websiteComposition' ? content.websiteComposition ? `${content.websiteComposition.sectionOrder.length} sections · ${content.websiteComposition.primaryAction?.label ?? 'Default action'}` : 'Default layout'
     : key === 'welcomeMessage' ? content.welcomeMessage?.trim() || 'Default greeting'
     : key === 'visitorSpeaksFirst' ? content.visitorSpeaksFirst ? 'Visitor speaks first' : 'Assistant welcomes the visitor' : String(content[key] ?? 'None');
   const changes = (Object.keys(labels) as (keyof typeof labels)[]).filter(key => JSON.stringify(before[key]) !== JSON.stringify(after[key]))
