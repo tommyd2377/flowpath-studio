@@ -234,7 +234,9 @@ export function planWorkspaceIntent(text: string, state: WorkspaceState, authori
   let collectionOrigin: { objectId: string | null; reference: WorkspaceReference } | undefined;
   let usesScene = false;
   if (catalog) {
-    const retrieved = retrieveKnowledge(catalog, { revisionId: catalog.id, query: text, intent: photo ? 'photos' : 'answer', expansion: 1 }, media);
+    // Intent classification reads fact references, not prose. Keep full reading
+    // blocks in the separate bounded published-content search/pagination path.
+    const retrieved = retrieveKnowledge(catalog, { revisionId: catalog.id, query: text, intent: photo ? 'photos' : 'answer', expansion: 1, includeBlocks: false }, media);
     const terms = query.split(/\W+/).filter(term => !['show', 'give', 'tell', 'please', 'also', 'too', 'the', 'and', 'your', 'me', 'about', 'what', 'where', 'that', 'from', 'open'].includes(term) && term.length > 2);
     const subjects = named.filter(record => record.reference.kind === 'entity');
     matches = authority.records.filter(record => record.reference.kind === 'fact' && (!subjects.length || subjects.some(subject => subject.reference.id === record.parent?.id)) && retrieved.facts.some(fact => fact.id === record.reference.id)

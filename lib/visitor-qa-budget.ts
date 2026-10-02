@@ -4,6 +4,7 @@ import { mkdir, open, readFile, rename, unlink, writeFile } from 'node:fs/promis
 import { join } from 'node:path';
 import { AppError } from './errors';
 import type { TestRecorder } from './visitor-test-events';
+import { AI_OUTPUT_LIMITS } from './ai-model';
 
 type Scope = { slug?: string; record?: TestRecorder };
 type Config = { recordingId: string; slugs: string[]; limitMicros: number; voiceReserveMicros: number };
@@ -139,6 +140,21 @@ function requestBound(body: Record<string, unknown>, knownReasoning: ReasoningBo
 
 export function visitorQaRequestBound(body: Record<string, unknown>) {
   return requestBound(body, []);
+}
+
+/** Pure continuation preflight with bounds recorded from prior provider output.
+ * Callers must obtain these hashes from their verified response ledger. */
+export function visitorQaContinuationRequestBound(body: Record<string, unknown>, knownReasoning: ReasoningBound[]) {
+  if (!Array.isArray(knownReasoning) || knownReasoning.some(item => !/^[a-f0-9]{64}$/.test(item.digest)
+    || !integer(item.tokenBound) || item.tokenBound < 1 || item.tokenBound > AI_OUTPUT_LIMITS.visitor)) throw blocked('reasoning history has no supported output bound');
+  return requestBound(body, knownReasoning);
+}
+
+/** Hash-only output evidence; the originating request ceiling bounds each item.
+ * Accounting verification and durable storage remain the caller's responsibility. */
+export function visitorQaReasoningOutputBounds(response: Record<string, unknown>, model: string, outputBound: number) {
+  if (!supportedModel(model) || !integer(outputBound) || outputBound < 1 || outputBound > AI_OUTPUT_LIMITS.visitor) throw blocked('reasoning output has no supported original bound');
+  return reasoningOutputBounds(response, model, outputBound);
 }
 
 function reasoningOutputBounds(response: Record<string, unknown>, model: QaModel, outputBound: number): ReasoningBound[] {

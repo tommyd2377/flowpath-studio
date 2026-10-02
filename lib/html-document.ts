@@ -5,8 +5,41 @@ import { AppError } from './errors';
 export type HtmlNode = { nodeType: number; rawTagName?: string; text: string; rawText: string; innerHTML: string; outerHTML: string; childNodes: HtmlNode[]; parentNode?: HtmlNode;
   attributes: Record<string, string>; getAttribute(name: string): string | undefined; setAttribute(name: string, value: string): void; removeAttribute(name: string): void;
   querySelector(selector: string): HtmlNode | null; querySelectorAll(selector: string): HtmlNode[]; remove(): void; set_content(value: string): void };
-const parser = createRequire(import.meta.url)('next/dist/compiled/node-html-parser') as { parse(html: string, options?: Record<string, unknown>): HtmlNode };
-export const parseHtml = (html: string) => parser.parse(html, { comment: false, blockTextElements: { script: true, style: true, pre: true } });
+// Next externalizes explicit compiled JavaScript files. Rebundling this precompiled
+// CommonJS package breaks its entity decoder in a production webpack server.
+const parser = createRequire(import.meta.url)('next/dist/compiled/node-html-parser/index.js') as { parse(html: string, options?: Record<string, unknown>): HtmlNode };
+/** The bundled parser treats declarations as text. Remove only actual leading prolog tokens. */
+function withoutDocumentProlog(html: string) {
+  const removed: Array<[number, number]> = [];
+  let cursor = 0;
+  while (cursor < html.length) {
+    while (/\s/.test(html[cursor] ?? '') && cursor < html.length) cursor++;
+    if (html.startsWith('<!--', cursor)) {
+      const end = html.indexOf('-->', cursor + 4);
+      if (end < 0) break;
+      cursor = end + 3; continue;
+    }
+    const prefix = html.slice(cursor, cursor + 12);
+    const xml = /^<\?xml\s/i.test(prefix), doctype = /^<!doctype\s/i.test(prefix);
+    if (!xml && !doctype) break;
+    let quote = '', subset = 0, end = cursor + (xml ? 5 : 9);
+    for (; end < html.length; end++) {
+      const char = html[end];
+      if (quote) { if (char === quote) quote = ''; continue; }
+      if (char === '"' || char === "'") { quote = char; continue; }
+      if (char === '<' && !subset) break;
+      if (doctype && char === '[') subset++;
+      else if (doctype && char === ']') subset = Math.max(0, subset - 1);
+      else if (char === '>' && !subset && (!xml || html[end - 1] === '?')) break;
+    }
+    // Malformed declarations are not permission to consume the following document.
+    if (end >= html.length || html[end] !== '>') break;
+    removed.push([cursor, end + 1]); cursor = end + 1;
+  }
+  let start = 0;
+  return removed.map(([from, to]) => { const kept = html.slice(start, from); start = to; return kept; }).join('') + html.slice(start);
+}
+export const parseHtml = (html: string) => parser.parse(withoutDocumentProlog(html), { comment: false, blockTextElements: { script: true, style: true, pre: true } });
 const block = /^(?:h[1-6]|p|li|div|section|article|br|tr|address|dt|dd|header|footer|nav)$/;
 export function nodeText(node: HtmlNode): string {
   if (node.nodeType === 3) return node.text;
@@ -66,7 +99,14 @@ export function htmlDocument(html: string, stripChrome = true) {
   for (const node of root.querySelectorAll('title,head,form,select,button,input,textarea,[hidden],[aria-hidden="true"]')) node.remove();
   if (stripChrome) {
     retainFooterInformation(root);
-    for (const node of root.querySelectorAll('nav,header,[role="navigation"],[role="banner"],[data-elementor-type="header"]')) node.remove();
+    for (const node of root.querySelectorAll('nav,[role="navigation"]')) node.remove();
+    for (const node of root.querySelectorAll('header,[role="banner"],[data-elementor-type="header"]')) {
+      // A section/article header is content, including its qualifications and introduction.
+      // Only the outer site header is chrome; do not lose a main page's hero prose.
+      let parent = node.parentNode;
+      while (parent && !/^(?:main|article|section)$/i.test(parent.rawTagName ?? '') && parent.getAttribute('role') !== 'main') parent = parent.parentNode;
+      if (node.rawTagName?.toLowerCase() !== 'header' || !parent) node.remove();
+    }
   }
   const text = cleanText(nodeText(root));
   return { root, title, text, rawText, contact: [...new Set(contacts)].join(' · ').slice(0, 180), hours };

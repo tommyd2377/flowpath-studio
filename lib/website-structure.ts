@@ -7,7 +7,7 @@ const key = (value: string) => createHash('sha256').update(value).digest('hex').
 const currencyCodes = 'USD|CAD|AUD|GBP|EUR';
 const knownCurrencyToken = `(?:${currencyCodes.split('|').map(code => [...code].map(letter => `[${letter}${letter.toLowerCase()}]`).join('')).join('|')})`;
 // Capture unsupported uppercase markers too, so a nearby code can never fall through to a scoped currency.
-const currencyToken = `(?:(?!(?:PER|PLUS)\\b)[A-Z]{2,}|${knownCurrencyToken})`;
+const currencyToken = `(?:(?!(?:PER|PLUS|EACH|APIECE)\\b)[A-Z]{2,}|${knownCurrencyToken})`;
 const amountPattern = '\\d+(?:,\\d{3})*(?:\\.\\d{1,2})?(?!\\d|[.,]\\d)';
 const pricePattern = `(?:(?<![\\p{L}])${currencyToken}\\s*)?[$£€]\\s*${amountPattern}(?:\\s+${currencyToken}\\b)?|(?<![\\p{L}])${knownCurrencyToken}\\s*${amountPattern}(?:\\s+${currencyToken}\\b)?`;
 type CurrencyScope = { currency?: string; indexes: number[] };
@@ -96,6 +96,14 @@ export function websiteOfferings(pages: Pick<ExtractedWebsitePage, 'url' | 'text
       if (!match) { if (new RegExp(pricePattern, 'u').test(lines[index]) && !capturedPriceLines.has(index)) { pricedLines++; unmatched++; } continue; }
       const level = match[1].length, title = match[2].trim();
       while (stack.length && stack.at(-1)!.level >= level) stack.pop();
+      // Descendant headings are still part of this item's source description.
+      // Retain their qualifications until the next sibling/ancestor boundary.
+      const followingIndexes: number[] = [];
+      for (let after = index + 1; after < lines.length; after++) {
+        const heading = /^(#{1,6})\s/.exec(lines[after]);
+        if (heading && heading[1].length <= level) break;
+        followingIndexes.push(after);
+      }
       const prices = [...title.matchAll(new RegExp(pricePattern, 'gu'))];
       if (prices.length) pricedLines++;
       const adjacent = !prices.length && lines[index + 1] && !/^#{1,6}\s/.test(lines[index + 1]) ? adjacentPrices(lines[index + 1], scopes[index]) : [];
@@ -103,8 +111,7 @@ export function websiteOfferings(pages: Pick<ExtractedWebsitePage, 'url' | 'text
         const category = stack.filter(item => item.price === undefined).map(item => item.title).slice(-2).join(' / ');
         const fields = adjacent.map(priceDefinition);
         if (entities.length < 70 && new Set([...attributes.keys(), 'source_category', 'source_price_terms', ...fields.map(field => field.id)]).size <= 24) {
-          const following: string[] = [];
-          for (let after = index + 2; after < lines.length && !/^#{1,6}\s/.test(lines[after]); after++) following.push(lines[after]);
+          const following = followingIndexes.slice(1).map(at => lines[at]);
           const footnoteIndexes = lines[index + 1].includes('*') ? lines.flatMap((line, at) => /^\*.*(?:starting price|additional charges)/i.test(line) ? [at] : []) : [];
           const currencyIndexes = [...new Set(adjacent.flatMap(price => price.currencyIndexes))];
           const literal = [...new Set([title, lines[index + 1], ...following, ...footnoteIndexes.map(at => lines[at]), ...currencyIndexes.map(at => lines[at])])].join(' ');
@@ -127,32 +134,42 @@ export function websiteOfferings(pages: Pick<ExtractedWebsitePage, 'url' | 'text
         continue;
       }
       const nextHeading = lines.slice(index + 1).find(line => /^#{1,6}\s/.test(line));
-      const tier = prices.length === 1 && !!nextHeading && /^#+/.exec(nextHeading)![0].length > level;
-      const inherited = [...stack].reverse().find(item => item.price !== undefined);
+      const hasChildren = !!nextHeading && /^#+/.exec(nextHeading)![0].length > level;
+      // A hierarchy alone cannot distinguish priced items from instructions.
+      // Only an explicit per-item price immediately introducing child headings
+      // establishes a shared tier; ambiguous branches remain source evidence.
+      const perItemPrice = prices.length === 1 && /^(?:\s*\*)?\s+(?:each|apiece)\b/i.test(title.slice(prices[0].index! + prices[0][0].length));
+      const tier = perItemPrice && hasChildren && /^#{1,6}\s/.test(lines[index + 1] ?? '');
+      if (prices.length === 1 && hasChildren && !tier) {
+        unmatched++;
+        stack.push({ level, title, index });
+        continue;
+      }
+      // A tier applies to its direct children, never through a named item to
+      // deeper headings such as that item's instructions or specifications.
+      const inherited = stack.at(-1);
       const price = prices.length === 1 ? listedPrice(prices[0][0], scopes[index]) : !prices.length ? inherited?.price : undefined;
       const category = stack.filter(item => item.price === undefined).map(item => item.title).slice(-2).join(' / ');
       if (tier) { stack.push({ level, title, index, price, literal: title }); if (price && !price.currency) { unconfirmedCurrency++; unmatched++; } continue; }
       if (price && Number.isFinite(price.price)) {
-        if (entities.length >= 70) { limit('The 70-item structured offering limit was reached. Split or review the import.'); unmatched++; continue; }
+        if (entities.length >= 70) { limit('The 70-item structured offering limit was reached. Split or review the import.'); unmatched++; stack.push({ level, title, index }); continue; }
         let labelEnd = prices[0]?.index;
         const unknownPrefix = /^([A-Z]{2,})\s*[$£€]/.exec(price.literal)?.[1];
         // An unfamiliar uppercase word may be part of the item name. Retain it unless a price separator scopes it.
         if (labelEnd !== undefined && unknownPrefix && !currencyCodes.split('|').includes(unknownPrefix) && !/[~–—:\-]\s*$/.test(title.slice(0, labelEnd))) labelEnd += unknownPrefix.length;
         const label = prices.length ? title.slice(0, labelEnd).replace(/[~–—:\-\s]+$/, '').replace(/\b(?:starting at|from)\s*$/i, '').replace(/[~–—:\-\s]+$/, '').trim() : title;
-        if (!label) { unmatched++; continue; }
+        if (!label) { unmatched++; stack.push({ level, title, index }); continue; }
         const name = /^[\d\W]/.test(label) && category ? `${category.split(' / ').at(-1)} · ${label}` : label;
         const priceId = priceField(price);
-        if (new Set([...attributes.keys(), 'source_category', 'source_price_terms', priceId]).size > 24) { limit('The 24-field structured offering limit was reached. Split or review the import.'); unmatched++; continue; }
+        if (new Set([...attributes.keys(), 'source_category', 'source_price_terms', priceId]).size > 24) { limit('The 24-field structured offering limit was reached. Split or review the import.'); unmatched++; stack.push({ level, title, index }); continue; }
         attributes.set(priceId, priceDefinition(price));
         attributes.set('source_category', { id: 'source_category', label: 'Source category', type: 'text' });
         attributes.set('source_price_terms', { id: 'source_price_terms', label: 'Price / size terms', type: 'text' });
         const id = `offering-${key(`${page.url}:${category}:${title}`)}`;
         const priceText = prices.length ? title : inherited!.literal!;
-        const followingIndexes: number[] = [];
-        for (let after=index+1; after<lines.length&&!/^#{1,6}\s/.test(lines[after]); after++) followingIndexes.push(after);
         const footnoteIndexes = priceText.includes('*') ? lines.flatMap((line, at) => /^\*.*(?:starting price|additional charges)/i.test(line) ? [at] : []) : [];
         const literal = [...new Set([priceText,...followingIndexes.map(at => lines[at]),...footnoteIndexes.map(at => lines[at]),...price.currencyIndexes.map(at => lines[at])])].join(' ');
-        if (literal.length > 1000 || name.length > 160 || category.length > 400) { limit('Some offering names or descriptions exceed the catalog field limits. Split or review the import; no truncated offering was accepted.'); unmatched++; continue; }
+        if (literal.length > 1000 || name.length > 160 || category.length > 400) { limit('Some offering names or descriptions exceed the catalog field limits. Split or review the import; no truncated offering was accepted.'); unmatched++; stack.push({ level, title, index }); continue; }
         entities.push({ id, kind: 'offering', name, summary: `${category ? category + '. ' : ''}${literal}. Listed information; availability is not verified.`.slice(0, 1600),
           attributes: { [priceId]: priceValue(price), source_category: category, source_price_terms: literal },
           identifiers: [{ scheme: 'publisher-id', value: key(`${page.url}:${category}:${title}`) }] });

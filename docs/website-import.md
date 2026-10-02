@@ -37,3 +37,5 @@ Existing historical source-layout references are ignored by the native runtime a
 ## Currency evidence
 
 Offering extraction recognizes explicit CAD, AUD, USD, GBP and EUR markers and currency declarations scoped by headings. A bare `$`, an unsupported marker or conflicting evidence remains literal text with a review note instead of assuming USD. Such text fields are not eligible for numeric price calculations until the publisher resolves the currency. Amounts, units, conditions and source evidence remain available for review.
+
+Shared price tiers require an explicit `each` or `apiece` qualification after the amount and an immediately following child heading. The price applies only to direct children; it cannot pass through a named item into deeper instructional headings. Descendant instructions and qualifications remain in that item's terms and exact source evidence until the next sibling or ancestor heading. A price-bearing branch without this evidence remains in the source text for review instead of turning its child headings into offerings. Directly stated item prices still work without a shared-tier qualification.

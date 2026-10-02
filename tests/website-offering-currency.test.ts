@@ -107,10 +107,10 @@ test('an explicit item price overrides scope without changing a sibling or conve
 });
 
 test('inherited tiers retain the currency that belongs to the source amount', () => {
-  const result = extract('# Bakery\nPrices in CAD.\n## Cakes\n### Single servings — $7\n#### Chocolate\nCurrency: AUD\nAvailable Wednesdays.\n#### Vanilla\n## Catering\nPrices in AUD.\n### Half Sheet — $150*\n*Starting price; additional charges apply.');
+  const result = extract('# Bakery\nPrices in CAD.\n## Cakes\n### Single servings — $7 each\n#### Chocolate\nCurrency: AUD\nAvailable Wednesdays.\n#### Vanilla\n## Catering\nPrices in AUD.\n### Half Sheet — $150*\n*Starting price; additional charges apply.');
   assert.deepEqual(result.entities.map(entity => [entity.attributes.source_price_cad, entity.attributes.source_price_aud]), [[7, undefined], [7, undefined], [undefined, 150]]);
   const evidence = result.evidence[0].fields.filter(field => field.field === 'attributes.source_price_cad');
-  assert.deepEqual(evidence.map(field => field.excerpt), ['### Single servings — $7', 'Prices in CAD.']);
+  assert.deepEqual(evidence.map(field => field.excerpt), ['### Single servings — $7 each', 'Prices in CAD.']);
   assert.match(result.entities[2].summary, /additional charges apply/);
 });
 
@@ -122,7 +122,7 @@ test('preamble and heading declarations support scoped variants with exact origi
 });
 
 test('bare dollars retain their literal units and conditions across adjacent, heading and tier prices', () => {
-  const result = extract('# Menu\n## Tea\nCup: $4.00; Pot: $9\nOnly with food.\n## Cake ~ from $7*\n*Starting price; additional charges apply.\n## Ice cream — $5\n### Vanilla\nOnly on weekends.');
+  const result = extract('# Menu\n## Tea\nCup: $4.00; Pot: $9\nOnly with food.\n## Cake ~ from $7*\n*Starting price; additional charges apply.\n## Ice cream — $5 each\n### Vanilla\nOnly on weekends.');
   assert.equal(result.entities.length, 3);
   assert.equal(result.attributes.some(field => field.type === 'money' || field.currency), false);
   assert.deepEqual(Object.values(result.entities[0].attributes).filter(value => typeof value === 'string' && /^(Cup|Pot):/.test(value)), ['Cup: $4.00', 'Pot: $9']);

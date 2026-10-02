@@ -100,11 +100,11 @@ test('long exact excerpts are segmented completely and excessive field evidence 
 });
 
 test('legacy heading and inherited tier prices also retain complete exact source evidence', () => {
-  const pages = [{ url: page.url, text: '# Bakery\n## Cakes\n### Single servings — $7\n#### Chocolate\nAvailable Wednesdays.\n## Catering\n### Half Sheet — $150*\n*Starting price; additional charges apply.' }];
+  const pages = [{ url: page.url, text: '# Bakery\n## Cakes\n### Single servings — $7 each\n#### Chocolate\nAvailable Wednesdays.\n## Catering\n### Half Sheet — $150*\n*Starting price; additional charges apply.' }];
   const { extracted, catalog } = fixture(pages);
   const bound = bindWebsiteOfferingProvenance(catalog, { anchors: [], fields: [] }, pages, extracted);
   assert.equal(catalog.entities.length, 2);
   const price = bound.fields.find(field => field.entityId === catalog.entities[0].id && field.field === 'attributes.source_price_unknown')!;
-  assert.equal(bound.anchors.find(anchor => anchor.id === price.anchorIds[0])!.excerpt, '### Single servings — $7');
+  assert.equal(bound.anchors.find(anchor => anchor.id === price.anchorIds[0])!.excerpt, '### Single servings — $7 each');
   assert.ok(bound.anchors.some(anchor => anchor.excerpt === '*Starting price; additional charges apply.'));
 });
