@@ -19,7 +19,7 @@ function fixture(pages = [page]) {
 test('structured prices retain exact page-local lines and field support without approving assertions', () => {
   const { extracted, catalog, pages } = fixture();
   const provenance = bindWebsiteOfferingProvenance(catalog, { anchors: [], fields: [] }, pages, extracted);
-  const slice = extracted.attributes.find(attribute => attribute.unit === 'Slice')!;
+  const slice = extracted.attributes.find(attribute => attribute.label.startsWith('Listed Slice price'))!;
   const reference = provenance.fields.find(field => field.entityId === catalog.entities[0].id && field.field === `attributes.${slice.id}`)!;
   const anchor = provenance.anchors.find(anchor => anchor.id === reference.anchorIds[0])!;
   assert.equal(anchor.excerpt, 'Slice: $6.50, Pie: $39');
@@ -41,7 +41,7 @@ test('same-named offerings on separate source pages keep distinct exact price ev
   const pages = [page, { url: 'https://restaurant.example/seasonal', text: page.text.replace('$6.50', '$8.50') }];
   const { extracted, catalog } = fixture(pages);
   const provenance = bindWebsiteOfferingProvenance(catalog, { anchors: [], fields: [] }, pages, extracted);
-  const slice = extracted.attributes.find(attribute => attribute.unit === 'Slice')!;
+  const slice = extracted.attributes.find(attribute => attribute.label.startsWith('Listed Slice price'))!;
   for (const [index, expected] of [[0, '$6.50'], [2, '$8.50']] as const) {
     const reference = provenance.fields.find(field => field.entityId === catalog.entities[index].id && field.field === `attributes.${slice.id}`)!;
     assert.match(provenance.anchors.find(anchor => anchor.id === reference.anchorIds[0])!.excerpt, new RegExp(expected.replace('$', '\\$')));
@@ -61,14 +61,14 @@ test('model references are preserved and rebinding is idempotent without mutatin
 
 test('changed values and incompatible price definitions never inherit parser evidence', () => {
   const { extracted, catalog, pages } = fixture();
-  const slice = extracted.attributes.find(attribute => attribute.unit === 'Slice')!;
+  const slice = extracted.attributes.find(attribute => attribute.label.startsWith('Listed Slice price'))!;
   const original = bindWebsiteOfferingProvenance(catalog, { anchors: [], fields: [] }, pages, extracted);
   const changed = structuredClone(catalog);
   changed.entities[0].name = 'Different product';
-  changed.entities[0].attributes[slice.id] = 99;
+  changed.entities[0].attributes[slice.id] = 'Slice: $99';
   let bound = bindWebsiteOfferingProvenance(changed, original, pages, extracted);
   assert.ok(!bound.fields.some(field => field.entityId === changed.entities[0].id && ['name', `attributes.${slice.id}`].includes(field.field)));
-  changed.attributes.find(attribute => attribute.id === slice.id)!.currency = 'EUR';
+  Object.assign(changed.attributes.find(attribute => attribute.id === slice.id)!, { type: 'money', currency: 'EUR', unit: 'Slice' });
   bound = bindWebsiteOfferingProvenance(changed, bound, pages, extracted);
   assert.ok(!bound.fields.some(field => field.field === `attributes.${slice.id}`));
 });
@@ -104,7 +104,7 @@ test('legacy heading and inherited tier prices also retain complete exact source
   const { extracted, catalog } = fixture(pages);
   const bound = bindWebsiteOfferingProvenance(catalog, { anchors: [], fields: [] }, pages, extracted);
   assert.equal(catalog.entities.length, 2);
-  const price = bound.fields.find(field => field.entityId === catalog.entities[0].id && field.field === 'attributes.source_price_usd')!;
+  const price = bound.fields.find(field => field.entityId === catalog.entities[0].id && field.field === 'attributes.source_price_unknown')!;
   assert.equal(bound.anchors.find(anchor => anchor.id === price.anchorIds[0])!.excerpt, '### Single servings — $7');
   assert.ok(bound.anchors.some(anchor => anchor.excerpt === '*Starting price; additional charges apply.'));
 });

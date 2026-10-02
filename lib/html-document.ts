@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { AppError } from './errors';
 
 /** The parser bundled with our pinned Next dependency; no browser/script execution. */
 export type HtmlNode = { nodeType: number; rawTagName?: string; text: string; rawText: string; innerHTML: string; outerHTML: string; childNodes: HtmlNode[]; parentNode?: HtmlNode;
@@ -71,13 +72,49 @@ export function htmlDocument(html: string, stripChrome = true) {
   return { root, title, text, rawText, contact: [...new Set(contacts)].join(' · ').slice(0, 180), hours };
 }
 export function textBlocks(text: string) {
-  const blocks: { id: string; kind: 'paragraph' | 'heading'; text: string }[] = [];
+  // Match the catalog reading-block bounds without dropping a paragraph's tail.
+  const maxCharacters = 8000, maxBlocks = 24;
+  type Block = { kind: 'paragraph' | 'heading'; text: string };
+  const runs: Block[] = [];
   for (const line of text.split('\n').map(s => s.trim()).filter(Boolean)) {
     const heading = /^(#{1,6})\s+(.+)$/.exec(line);
     const kind = heading ? 'heading' : 'paragraph'; const value = heading ? heading[2] : line;
-    if (blocks.length && blocks.at(-1)!.kind === 'paragraph' && kind === 'paragraph' && blocks.at(-1)!.text.length + value.length < 7900) blocks.at(-1)!.text += `\n${value}`;
-    else blocks.push({ id: `block-${blocks.length}`, kind, text: value.slice(0, 8000) });
+    if (runs.at(-1)?.kind === 'paragraph' && kind === 'paragraph') runs.at(-1)!.text += `\n${value}`;
+    else runs.push({ kind, text: value });
   }
-  // Preserve the remainder in a bounded last paragraph instead of silently losing long documents.
-  return blocks.length <= 24 ? blocks : [...blocks.slice(0, 23), { id: 'block-rest', kind: 'paragraph' as const, text: blocks.slice(23).map(b => b.text).join('\n').slice(0, 8000) }];
+  const chunk = ({ kind, text }: Block, preferBoundaries = true): Block[] => {
+    const chunks: Block[] = [];
+    for (let start = 0; start < text.length;) {
+      let end = Math.min(start + maxCharacters, text.length);
+      if (preferBoundaries && end < text.length) {
+        // Separate rendered paragraphs should not split ordinary words/prices.
+        // Keep enough capacity for the remaining text when near the schema cap.
+        const earliestEnd = Math.max(start + 1, text.length - (maxBlocks - chunks.length - 1) * maxCharacters);
+        const paragraphEnd = text.lastIndexOf('\n', end - 1) + 1;
+        if (paragraphEnd >= earliestEnd) end = paragraphEnd;
+        else {
+          let wordEnd = end;
+          while (wordEnd >= earliestEnd && !/\s/.test(text[wordEnd - 1])) wordEnd--;
+          if (wordEnd >= earliestEnd) end = wordEnd;
+        }
+      }
+      // Keep a Unicode surrogate pair together at a chunk boundary.
+      if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1]) && /[\uDC00-\uDFFF]/.test(text[end])) end--;
+      chunks.push({ kind, text: text.slice(start, end) });
+      start = end;
+    }
+    return chunks;
+  };
+  let blocks = runs.flatMap(run => chunk(run));
+  // Excess heading boundaries can exceed the block count even for short pages.
+  // Compact their complete text into paragraphs, keeping source line boundaries.
+  if (blocks.length > maxBlocks) {
+    const compact = { kind: 'paragraph' as const, text: runs.map(run => run.text).join('\n') };
+    blocks = chunk(compact);
+    // Preferred breaks can use capacity needed to keep a later surrogate pair
+    // together. Check exact packing before declaring the source too large.
+    if (blocks.length > maxBlocks) blocks = chunk(compact, false);
+  }
+  if (blocks.length > maxBlocks) throw new AppError('This webpage exceeds the 24 reading blocks of 8,000 characters. Split it into smaller pages; no partial text was imported.');
+  return blocks.map((block, index) => ({ id: `block-${index}`, ...block }));
 }

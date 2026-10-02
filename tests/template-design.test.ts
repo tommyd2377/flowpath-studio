@@ -66,13 +66,17 @@ test('legacy published content gets refined composition without rewriting saved 
   }
 });
 
-test('real website price headings retain price semantics and complete terms in website composition', () => {
+test('bare-dollar website headings retain literal prices, unconfirmed currency and complete terms in composition', () => {
   const page = extractWebsitePage('<h1>Menu</h1><h2>Catering</h2><h3>Half Sheet ~ $150.00*</h3><p>*Starting Price - Additional charges may apply based on order.</p>', 'https://bakery.example/menu');
   const catalog = addWebsiteOfferings(websitePageCatalog([page]), [page]).catalog;
   const content = { ...sampleContent('general'), sections: [], style: undefined };
   const original = structuredClone(catalog);
   const entry = websiteSections(publishedWorkspace(content, catalog), content, catalog).flatMap(section => section.entries).find(entry => entry.kind === 'offering')!;
-  assert.equal(entry.values?.find(value => value.role === 'price')?.label, 'Listed price (USD)');
+  const price = entry.values?.find(value => value.role === 'price');
+  assert.equal(price?.label, 'Listed price (currency unconfirmed)');
+  assert.equal(price?.text, '$150.00');
+  assert.equal(catalog.attributes.find(field => field.id === 'source_price_unknown')?.type, 'text');
+  assert.ok(catalog.attributes.every(field => field.type !== 'money' && field.currency === undefined));
   assert.match(entry.values?.find(value => value.role === 'price-terms')?.text ?? '', /Starting Price - Additional charges may apply/);
   assert.deepEqual(catalog, original);
   assert.equal(designWebsite(page, 1).style?.template, 'editorial');
