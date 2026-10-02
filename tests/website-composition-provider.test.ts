@@ -76,7 +76,7 @@ test('composition guidance preserves every saved style choice across all three t
     assert.deepEqual(parseWebsiteCompositionReply(responseFor(plan), manifest).style, manifest.style);
     for (const [field, changed] of Object.entries({ template: template.defaults.template === 'editorial' ? 'clarity' : 'editorial',
       entry: 'website', palette: 'linen', typography: 'modern', textSize: 'standard', spacing: 'spacious', websiteMotion: 'subtle', customAccent: false, customized: [] })) {
-      const modified = wire(plan); modified.style[field] = changed;
+      const original = wire(plan), modified = { ...original, style: { ...original.style, [field]: changed } };
       assert.throws(() => parseWebsiteCompositionReply(completed(JSON.stringify(modified)), manifest), status(502));
     }
   }
