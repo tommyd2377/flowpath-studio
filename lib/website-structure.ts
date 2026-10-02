@@ -72,6 +72,19 @@ const priceDefinition = (price: ListedPrice): AttributeDefinition => ({ id: pric
   ...(price.currency ? { type: 'money' as const, currency: price.currency, ...(price.unit ? { unit: price.unit } : {}) } : { type: 'text' as const }) });
 export type WebsiteOfferingEvidence = { entityId: string; pageUrl: string; fields: { field: string; lineStart: number; lineEnd: number; excerpt: string }[] };
 type OfferingOptions = { strict?: boolean };
+/** Zero can be a storefront default or an issuance fee, not the card's value.
+ * Only an item-specific free-card statement resolves an unqualified zero price. */
+function ambiguousZeroGiftCard(name: string, prices: ListedPrice[], description: string[]) {
+  const item = /\bgift[ -]?(?:card|certificate|voucher)s?(?:\s*\([^)]*\))?(?:\s+[–—-]\s+[^\n]+)?$/i;
+  const accessory = /\bgift[ -]?(?:card|certificate|voucher)s?\s+(?:[–—-]\s+)?(?:holder|sleeve|envelope|wallet|display|stand|box|packaging)\b/i;
+  const fee = /^(?:activation|issuance|delivery|shipping|replacement)(?: fee)?$/i;
+  if (!item.test(name) || accessory.test(name) || !prices.some(price => price.price === 0 && !(price.unit && fee.test(price.unit)))) return false;
+  const card = '(?:(?:digital|electronic|e)[ -]*)?gift[ -]?(?:card|certificate|voucher)s?';
+  const freeTitle = new RegExp(`^(?:free|complimentary)\\s+${card}\\b`, 'i').test(name);
+  const freeStatement = new RegExp(`^(?:this|the)\\s+${card}\\s+(?:is|are)\\s+(?:free|complimentary)(?:[.!?]|$|\\s+(?:with|when|for)\\b)`, 'i');
+  const notFree = new RegExp(`\\b(?:this|the)\\s+${card}\\s+(?:(?:is|are)\\s+(?:not|never)|(?:isn|aren)['’]t)\\s+(?:free|complimentary)\\b`, 'i');
+  return description.some(line => notFree.test(line)) || !(freeTitle || description.some(line => freeStatement.test(line)));
+}
 // Comparison fields stay compact; a long source description belongs in the
 // reader. Never truncate its later qualifications to fit a displayed price.
 function offeringTerms(literal: string, name: string, category: string) {
@@ -86,7 +99,7 @@ export function websiteOfferings(pages: Pick<ExtractedWebsitePage, 'url' | 'text
   const entities: CatalogEntity[] = [], attributes = new Map<string, AttributeDefinition>(), groups = new Map<string, string[]>();
   const evidence: WebsiteOfferingEvidence[] = [], issues: string[] = [];
   const limit = (message: string) => { if (options.strict) throw new AppError(message); if (!issues.includes(message)) issues.push(message); };
-  let pricedLines = 0, unmatched = 0, unconfirmedCurrency = 0;
+  let pricedLines = 0, unmatched = 0, unconfirmedCurrency = 0, unresolvedGiftCards = 0;
   for (const page of pages) {
     const sourceLines = page.text.split('\n');
     const records = sourceLines.flatMap((raw, sourceIndex) => {
@@ -118,6 +131,9 @@ export function websiteOfferings(pages: Pick<ExtractedWebsitePage, 'url' | 'text
       if (prices.length) pricedLines++;
       const adjacent = !prices.length && lines[index + 1] && !/^#{1,6}\s/.test(lines[index + 1]) ? adjacentPrices(lines[index + 1], scopes[index]) : [];
       if (adjacent.length) {
+        if (ambiguousZeroGiftCard(title, adjacent, followingIndexes.slice(1).map(at => lines[at]))) {
+          unresolvedGiftCards++; stack.push({ level, title, index }); continue;
+        }
         const category = stack.filter(item => item.price === undefined).map(item => item.title).slice(-2).join(' / ');
         const fields = adjacent.map(priceDefinition);
         if (entities.length < 70 && new Set([...attributes.keys(), 'source_category', 'source_price_terms', ...fields.map(field => field.id)]).size <= 24) {
@@ -171,6 +187,9 @@ export function websiteOfferings(pages: Pick<ExtractedWebsitePage, 'url' | 'text
         const label = prices.length ? title.slice(0, labelEnd).replace(/[~–—:\-\s]+$/, '').replace(/\b(?:starting at|from)\s*$/i, '').replace(/[~–—:\-\s]+$/, '').trim() : title;
         if (!label) { unmatched++; stack.push({ level, title, index }); continue; }
         const name = /^[\d\W]/.test(label) && category ? `${category.split(' / ').at(-1)} · ${label}` : label;
+        if (ambiguousZeroGiftCard(name, [price], followingIndexes.map(at => lines[at]))) {
+          unresolvedGiftCards++; unmatched++; stack.push({ level, title, index }); continue;
+        }
         const priceId = priceField(price);
         if (new Set([...attributes.keys(), 'source_category', 'source_price_terms', priceId]).size > 24) { limit('The 24-field structured offering limit was reached. Split or review the import.'); unmatched++; stack.push({ level, title, index }); continue; }
         attributes.set(priceId, priceDefinition(price));
@@ -204,6 +223,7 @@ export function websiteOfferings(pages: Pick<ExtractedWebsitePage, 'url' | 'text
   if (groups.size > 12) limit('The 12-category structured offering limit was reached. Split or review the import.');
   return { entities: [...unique.values()], attributes: [...attributes.values()], evidence: evidence.filter(item => unique.has(item.entityId)), collections: [...groups].slice(0, 12).map(([name, entityIds]) => ({ id: `offering-group-${key(name)}`, name: name.slice(0, 160), entityIds: [...new Set(entityIds)].filter(id => unique.has(id)) })).filter(group => group.entityIds.length),
     notes: [`Source coverage: ${pricedLines} price-bearing lines; ${unique.size} structured offerings; ${unmatched} price-bearing lines need manual review.`, ...issues,
+      ...(unresolvedGiftCards ? [`${unresolvedGiftCards} zero-priced gift-card entries need manual review. No free card or stored value was inferred; their source text and restrictions remain available.`] : []),
       ...(unconfirmedCurrency ? [`${unconfirmedCurrency} price-bearing lines have an unconfirmed currency. Literal prices were retained as text; no currency or conversion was inferred. Review the captured source before publishing.`] : []),
       ...(unmatched > unconfirmedCurrency ? ['Some ranges, multiple prices, or prose could not be mapped conservatively. Review the captured source before publishing.'] : [])] };
 }
