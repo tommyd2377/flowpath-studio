@@ -179,6 +179,17 @@
 .platform-website[data-website-design][data-template] .platform-website-hero[data-hero-layout=split] figure { grid-column: auto; justify-self: end; width: min(100%, var(--website-hero-image-limit, 560px), calc(min(520px, 56svh) * var(--website-hero-ratio, 1))); padding: 0; margin: 0; }
 .platform-website[data-website-design][data-template] .platform-website-hero[data-hero-layout=split] figure .platform-media-image { aspect-ratio: var(--website-hero-ratio, 1) !important; }
 
+/* An album shows the complete approved composition. Bounded source proportions
+   reserve space for extreme portraits/panoramas; contain keeps every edge visible.
+   These frames omit image choreography so zoom/depth cannot undo that guarantee. */
+.platform-website[data-website-design][data-template] .platform-website-section[data-section-kind=photos] .platform-website-entries > li .platform-website-card .platform-media-image[data-fit=contain] { aspect-ratio: var(--website-gallery-ratio, 4 / 3) !important; max-height: 600px; }
+.platform-website[data-website-design][data-template] .platform-website-section[data-section-kind=photos] .platform-website-entries { align-items: start; }
+.platform-website[data-website-design][data-template] .platform-website-section[data-section-kind=photos]:is([data-photo-count='0'], [data-photo-count='1']) .platform-website-entries { grid-template-columns: minmax(0, 1fr); max-width: 940px; }
+.platform-website[data-website-design][data-template] .platform-website-section[data-section-kind=photos] .platform-website-entries > li[data-website-photo-reference=true] { grid-column: 1 / -1; grid-row: auto; padding-top: 0; }
+.platform-website[data-website-design][data-template] .platform-website-card[data-opening-photo=true] { height: auto; max-width: 48rem; border-top: 1px solid var(--website-rule); }
+.platform-website[data-website-design][data-template] .platform-website-card[data-opening-photo=true] .platform-content-card-copy { padding-block: 16px; }
+.platform-website[data-website-design][data-template] .platform-website-opening-reference { font-size: 11px; color: var(--platform-muted); }
+
 @container (min-width: 900px) {
   .platform-website[data-website-design][data-template=editorial][data-website-motion=expressive] .platform-website-section:not([data-section-kind=photos], [data-website-composition=illustrated-story], [data-website-composition=editorial-gallery]) .platform-website-section-heading { position: sticky; top: 160px; align-self: start; }
 }

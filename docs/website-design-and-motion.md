@@ -1,5 +1,13 @@
 # Regular website design and motion
 
+## Complete gallery images — 2 October 2026
+
+Photo sections now use contained images with reserved proportions derived from approved asset dimensions, bounded between 4:5 and 2.2:1. This preserves the complete photograph or collage, including wide and portrait edges, instead of forcing every image into a 4:3 cover crop. Extreme proportions may leave space around the image. Gallery images omit frame zoom/depth choreography so hover and scrolling cannot crop that composition again; other website motion remains available.
+
+When a reviewed opening photograph also belongs to a photo section, that section leads with its other photographs and keeps the opening image as a compact, clickable **Opening photograph** reference. Every entry, photo count, caption, credit and illustrative-example label remains available; larger albums retain their expand/collapse controls. Record and story illustrations keep their contextual images. A missing or unresolved hero does not remove album images, and unavailable image URLs retain the existing fallback and photo action.
+
+These are deterministic shared-renderer rules for generated and existing websites, including Studio previews. They do not alter source images, saved album order, approved hero eligibility, composition proposals or publication state. They add no image interpretation, focal-point guessing or provider request. The two real-source controls used for visual checks were manually curated; that evidence is separate from automatic import or model-generation quality.
+
 ## Distinct template composition — 27 September 2026
 
 The [current refinement](website-design-update-2026-09-27.md) replaces the shared fade/rise vocabulary with template-specific lateral reveals, finite image focus and compact spatial entrances, including mobile. Content-aware supported compositions adapt to actual media coverage; sparse and mixed-media collections stay simple. The September 19 distances and frame keyframes below describe that historical pass, not the current choreography. No new animation dependency or paid API call was added.

@@ -92,8 +92,11 @@ function importedPriceDescription(name: string, source: string, prices: WebsiteV
 }
 
 /** Website-only cards deliberately do not change the assistant's ContentCard. */
-function WebsiteCard({ entry, onOpen, gallery, signature, index, highlighted, sectionTitle }: { entry: WebsiteEntry; onOpen: () => void; gallery: boolean; signature: boolean; index: number; highlighted: boolean; sectionTitle: string }) {
+function WebsiteCard({ entry, onOpen, gallery, openingPhoto, signature, index, highlighted, sectionTitle }: { entry: WebsiteEntry; onOpen: () => void; gallery: boolean; openingPhoto: boolean; signature: boolean; index: number; highlighted: boolean; sectionTitle: string }) {
   const motionEnabled = useContext(WebsiteMotionContext);
+  const asset = usePublishedMedia()?.library.assets.find(asset => asset.id === entry.imageAssetId);
+  // Dimensions choose reserved space, never a crop or a claim about the subject.
+  const galleryRatio = gallery && asset ? Math.max(.8, Math.min(2.2, asset.width / asset.height)) : undefined;
   const role = (value: NonNullable<WebsiteEntry['values']>[number]) => value.role ?? websiteValueRole(value);
   const prices = entry.values?.filter(value => role(value) === 'price') ?? [];
   const terms = entry.values?.filter(value => role(value) === 'price-terms') ?? [];
@@ -102,11 +105,12 @@ function WebsiteCard({ entry, onOpen, gallery, signature, index, highlighted, se
   const copiedSummary = sourceBody !== undefined && (entry.body === `${sourceBody}. Listed information; availability is not verified.`
     || entry.body === `${sourceBody}${/[.!?]$/.test(sourceBody) ? '' : '.'} Listed information; availability is not verified.`);
   const description = copiedSummary ? importedPriceDescription(entry.name, terms[0].text, prices) : undefined;
-  return <motion.button initial={false} animate="rest" whileHover={motionEnabled ? 'intent' : undefined} whileFocus={motionEnabled ? 'intent' : undefined} whileTap={motionEnabled ? { scale: .995 } : undefined} transition={motionEnabled ? controlTransition : { duration: 0 }} type="button" className="platform-content-card platform-website-card" data-has-image={Boolean(entry.imageAssetId)} data-kind={entry.kind}
+  return <motion.button initial={false} animate="rest" whileHover={motionEnabled ? 'intent' : undefined} whileFocus={motionEnabled ? 'intent' : undefined} whileTap={motionEnabled ? { scale: .995 } : undefined} transition={motionEnabled ? controlTransition : { duration: 0 }} type="button" className="platform-content-card platform-website-card" data-has-image={Boolean(entry.imageAssetId && !openingPhoto)} data-opening-photo={openingPhoto || undefined} data-kind={entry.kind}
     data-task-record={entry.recordId} data-workspace-content={entry.id} data-workspace-highlighted={highlighted ? entry.id : undefined} aria-label={`Open ${entry.name}`} onClick={onOpen}>
-    {entry.imageAssetId && <span className="platform-website-image-frame" data-website-frame data-website-depth={signature || undefined}><span className="platform-website-image-content"><motion.span className="platform-website-image-interaction" variants={imageVariants} transition={motionEnabled ? { duration: .42, ease: [.22, .68, .2, 1] } : { duration: 0 }}><MediaImage checkInitialLoad assetId={entry.imageAssetId} size="display" loading="lazy" interactive={false} aspectRatio={gallery ? '4 / 3' : '16 / 11'}/></motion.span></span></span>}
+    {entry.imageAssetId && !openingPhoto && <span className="platform-website-image-frame" data-website-frame={!gallery || undefined} data-website-depth={!gallery && signature || undefined} style={galleryRatio ? { '--website-gallery-ratio': galleryRatio } as React.CSSProperties : undefined}><span className="platform-website-image-content"><motion.span className="platform-website-image-interaction" variants={gallery ? undefined : imageVariants} transition={motionEnabled ? { duration: .42, ease: [.22, .68, .2, 1] } : { duration: 0 }}><MediaImage checkInitialLoad assetId={entry.imageAssetId} size="display" loading="lazy" interactive={false} fit={gallery ? 'contain' : 'cover'} aspectRatio={gallery ? String(galleryRatio ?? 4 / 3) : '16 / 11'}/></motion.span></span></span>}
     <span className="platform-content-card-copy">
       {!gallery && <span className="platform-website-item-index" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>}
+      {openingPhoto && <span className="platform-website-opening-reference">Opening photograph</span>}
       <strong>{entry.name}</strong>
       {entry.example && <span className="platform-media-example">Illustrative example</span>}
       {!gallery && entry.body && !copiedSummary && <span className="platform-content-card-description">{entry.body}</span>}
@@ -146,15 +150,20 @@ function sectionComposition(section: WebsiteSection, template: WebsiteTemplate |
   return 'flow';
 }
 
-function WebsiteGroup({ section, anchor, onOpen, onInteraction, highlightedId, onPage, template, signature }: { section: WebsiteSection; anchor: string; onOpen: (id: string) => void; onInteraction: () => void; highlightedId?: string; onPage?: (offset: number) => void; template?: WebsiteTemplate; signature: boolean }) {
+function WebsiteGroup({ section, anchor, onOpen, onInteraction, highlightedId, onPage, template, signature, heroAssetId }: { section: WebsiteSection; anchor: string; onOpen: (id: string) => void; onInteraction: () => void; highlightedId?: string; onPage?: (offset: number) => void; template?: WebsiteTemplate; signature: boolean; heroAssetId?: string }) {
   const [expanded, setExpanded] = useState(false);
   const motionEnabled = useContext(WebsiteMotionContext);
   const { ref: expansionRef, prepare } = useWebsiteExpansion(motionEnabled, expanded);
   const limit = section.paged ? 48 : section.kind === 'photos' ? 8 : 6;
-  const entries = expanded ? section.entries : section.entries.slice(0, limit);
+  const openingPhoto = (entry: WebsiteEntry) => section.kind === 'photos' && !!heroAssetId && entry.imageAssetId === heroAssetId;
+  // Keep every album entry and its action, but lead with photographs not already
+  // shown in the opening. Record/story illustrations keep their own context.
+  const ordered = section.kind === 'photos' && heroAssetId ? [...section.entries.filter(entry => !openingPhoto(entry)), ...section.entries.filter(openingPhoto)] : section.entries;
+  const entries = expanded ? ordered : ordered.slice(0, limit);
+  const illustrated = entries.filter(entry => !openingPhoto(entry));
   const presentation = collectionLayout(section);
-  const leadImage = usePublishedMedia()?.library.assets.find(asset => asset.id === entries[0]?.imageAssetId);
-  return <section id={anchor} tabIndex={-1} className="platform-website-section" data-section-kind={section.kind} data-collection-layout={presentation} data-website-composition={sectionComposition(section, template, entries, leadImage)} data-entry-count={entries.length} aria-label={section.title}>
+  const leadImage = usePublishedMedia()?.library.assets.find(asset => asset.id === illustrated[0]?.imageAssetId);
+  return <section id={anchor} tabIndex={-1} className="platform-website-section" data-section-kind={section.kind} data-collection-layout={presentation} data-website-composition={sectionComposition(section, template, illustrated, leadImage)} data-entry-count={entries.length} data-photo-count={section.kind === 'photos' ? illustrated.filter(entry => entry.imageAssetId).length : undefined} aria-label={section.title}>
     <span className="platform-website-section-rule" data-website-reveal="rule" aria-hidden="true"/>
     <header className="platform-website-section-heading" data-website-reveal><div>{section.parentTitle && <span className="platform-website-eyebrow">{section.parentTitle}</span>}<h2>{section.title}</h2>{section.description && <p>{section.description}</p>}</div>
       {(section.kind === 'collection' || section.kind === 'photos') && <span className="platform-website-count">{section.total ?? section.entries.length} {section.kind === 'photos' ? section.entries.length === 1 ? 'photo' : 'photos' : section.entries.length === 1 ? 'item' : 'items'}</span>}
@@ -174,8 +183,8 @@ function WebsiteGroup({ section, anchor, onOpen, onInteraction, highlightedId, o
           {entry.example && <span className="platform-media-example">Illustrative example</span>}{entry.caption && <p className="platform-website-caption">{entry.caption}</p>}{entry.credit && <small className="platform-website-credit">{entry.credit}</small>}
           <motion.button initial={false} animate="rest" whileHover={motionEnabled ? 'intent' : undefined} whileFocus={motionEnabled ? 'intent' : undefined} whileTap={motionEnabled ? { scale: .98 } : undefined} transition={motionEnabled ? controlTransition : { duration: 0 }} type="button" className="platform-website-text-link" aria-label={`Open ${entry.name}`} data-workspace-content={entry.id} data-workspace-highlighted={highlightedId === entry.id ? entry.id : undefined} onClick={() => onOpen(entry.id)}>{section.kind === 'stories' ? 'Continue reading' : 'Full details'} <motion.span variants={arrowVariants} transition={motionEnabled ? controlTransition : { duration: 0 }} aria-hidden="true">↗</motion.span></motion.button>
         </div>
-      </article>; })}</div> : <ol className="platform-website-entries" data-with-photos={entries.some(entry => entry.imageAssetId)}>{entries.map((entry, index) => <li key={entry.id} data-website-reveal data-website-order={index}>
-        {template ? <WebsiteCard entry={entry} sectionTitle={section.title} index={index} gallery={section.kind === 'photos'} signature={signature && index === 0} onOpen={() => onOpen(entry.id)} highlighted={highlightedId === entry.id}/> : <ContentCard motionEnabled={false} entry={entry} number={index + 1} onOpen={() => onOpen(entry.id)} highlighted={highlightedId === entry.id}/>}
+      </article>; })}</div> : <ol className="platform-website-entries" data-with-photos={illustrated.some(entry => entry.imageAssetId)}>{entries.map((entry, index) => <li key={entry.id} data-website-reveal data-website-order={index} data-website-photo-reference={openingPhoto(entry) || undefined}>
+        {template ? <WebsiteCard entry={entry} sectionTitle={section.title} index={index} gallery={section.kind === 'photos'} openingPhoto={openingPhoto(entry)} signature={signature && index === 0} onOpen={() => onOpen(entry.id)} highlighted={highlightedId === entry.id}/> : <ContentCard motionEnabled={false} entry={entry} number={index + 1} onOpen={() => onOpen(entry.id)} highlighted={highlightedId === entry.id}/>}
       </li>)}</ol>}
       {onPage && section.total != null && <nav className="platform-website-pagination" aria-label="Collection pages"><button type="button" className="platform-website-text-link" disabled={!section.offset} onClick={() => onPage(Math.max(0, (section.offset ?? 0) - 24))}>Previous page</button><span aria-live="polite">{Math.floor((section.offset ?? 0) / 24) + 1} / {Math.max(1, Math.ceil(section.total / 24))}</span><button type="button" className="platform-website-text-link" disabled={(section.offset ?? 0) + 24 >= section.total} onClick={() => onPage((section.offset ?? 0) + 24)}>Next page</button></nav>}
       {section.entries.length > limit && <motion.button initial={false} layout={motionEnabled ? 'position' : false} whileHover={motionEnabled ? { y: -2 } : undefined} whileTap={motionEnabled ? { scale: .985 } : undefined} transition={motionEnabled ? { ...controlTransition, layout: { duration: .42, ease: [.22, .68, .2, 1] } } : { duration: 0 }} type="button" className="platform-website-more" aria-expanded={expanded} aria-controls={`${anchor}-entries`} onClick={event => { if (expanded && expansionRef.current?.contains(document.activeElement)) event.currentTarget.focus({ preventScroll: true }); prepare(); onInteraction(); setExpanded(value => !value); }}>{expanded ? 'Show fewer' : `Explore all ${section.entries.length}`} <DisclosureMark open={expanded}/></motion.button>}
@@ -240,7 +249,7 @@ export function PublishedWebsite({ primaryAction, name, headline, description, t
       {photograph}
       {template === 'clarity' && !photograph && navigation.length > 0 && <aside className="platform-website-directory" aria-label="On this website"><span className="platform-website-eyebrow">On this website</span>{navigation.slice(0, 4).map((section, i) => <a data-website-reveal="directory-item" data-website-order={i} href={`#${anchor(section.id)}`} key={section.id} onClick={navigate}><span>0{i + 1}</span>{section.navLabel ?? section.title}<span aria-hidden="true">↗</span></a>)}</aside>}
     </div>
-    <section className="platform-website-content" aria-label="Website content"><div>{displayed.map(section => <WebsiteGroup key={section.id} template={template} section={section} anchor={anchor(section.id)} onOpen={onOpen} onInteraction={onInteraction} highlightedId={highlightedId} onPage={section.id === 'published-catalog' ? onPage : undefined} signature={section.id === signatureSection}/>)}</div></section>
+    <section className="platform-website-content" aria-label="Website content"><div>{displayed.map(section => <WebsiteGroup key={section.id} template={template} section={section} anchor={anchor(section.id)} onOpen={onOpen} onInteraction={onInteraction} highlightedId={highlightedId} onPage={section.id === 'published-catalog' ? onPage : undefined} signature={section.id === signatureSection} heroAssetId={heroAsset?.id}/>)}</div></section>
     <footer id={anchor('contact')} tabIndex={-1} className="platform-website-footer" data-minimal={!contact && !hours}>
       {(tagline || contact || hours || assistantEnabled) && <div data-website-reveal><h2>{tagline || name}</h2>{assistantEnabled && <motion.button initial={false} animate="rest" whileHover={motionEnabled ? 'intent' : undefined} whileFocus={motionEnabled ? 'intent' : undefined} whileTap={motionEnabled ? { scale: .98 } : undefined} transition={motionEnabled ? controlTransition : { duration: 0 }} type="button" className="platform-website-text-link" onClick={onAsk}>Ask a question <motion.span variants={arrowVariants} transition={motionEnabled ? controlTransition : { duration: 0 }} aria-hidden="true">↗</motion.span></motion.button>}</div>}
       {(contact || hours) && <div className="platform-website-contact" data-website-reveal>{contact && <div data-source-id="contact"><h3>Get in touch</h3><p><ContactText text={contact}/></p></div>}{hours && <div data-source-id="hours"><h3>Hours &amp; availability</h3><p>{hours}</p></div>}</div>}
