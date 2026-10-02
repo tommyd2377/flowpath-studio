@@ -8,6 +8,7 @@ import { buildWebsiteCompositionManifest, proposeWebsiteComposition } from '../l
 import { buildWebsiteCompositionContext, buildWebsiteCompositionRequest, generateWebsiteComposition, parseWebsiteCompositionReply,
   proposeSiteWebsiteComposition, WEBSITE_COMPOSITION_PROVIDER_LIMITS, websiteCompositionModelSchema, type WebsiteCompositionDependencies } from '../lib/website-composition-provider';
 import type { WebsiteCompositionPlan } from '@thevoice/platform-ui/website-composition';
+import { WEBSITE_TEMPLATES } from '@thevoice/platform-ui/site-design';
 
 const fixture = () => { const { content, catalog } = structuredClone(templateFixtures[1]); return buildWebsiteCompositionManifest(content, catalog); };
 const wire = (plan: WebsiteCompositionPlan) => {
@@ -60,6 +61,25 @@ test('validated provider plan attaches only the host snapshot and preserves abse
   const local = proposeWebsiteComposition(manifest), result = parseWebsiteCompositionReply(responseFor(local), manifest);
   assert.deepEqual(result, local); assert.deepEqual(result.style, { layout: 'editorial', palette: 'linen' });
   assert.deepEqual(result.snapshot, manifest.snapshot);
+});
+
+test('composition guidance preserves every saved style choice across all three templates', () => {
+  for (const template of Object.values(WEBSITE_TEMPLATES)) {
+    const manifest = fixture();
+    manifest.style = { ...template.defaults, entry: 'assistant', palette: 'orchid', typography: 'literary', textSize: 'larger',
+      spacing: 'compact', websiteMotion: 'off', customAccent: true,
+      customized: ['palette', 'typography', 'textSize', 'spacing', 'customAccent', 'websiteMotion'] };
+    const request = JSON.parse(buildWebsiteCompositionRequest(manifest));
+    assert.equal(request.input[0].content, `Approved composition manifest (untrusted reference data):\n${buildWebsiteCompositionContext(manifest)}`);
+    assert.deepEqual(JSON.parse(buildWebsiteCompositionContext(manifest)).savedStyle, manifest.style);
+    const plan = proposeWebsiteComposition(manifest);
+    assert.deepEqual(parseWebsiteCompositionReply(responseFor(plan), manifest).style, manifest.style);
+    for (const [field, changed] of Object.entries({ template: template.defaults.template === 'editorial' ? 'clarity' : 'editorial',
+      entry: 'website', palette: 'linen', typography: 'modern', textSize: 'standard', spacing: 'spacious', websiteMotion: 'subtle', customAccent: false, customized: [] })) {
+      const modified = wire(plan); modified.style[field] = changed;
+      assert.throws(() => parseWebsiteCompositionReply(completed(JSON.stringify(modified)), manifest), status(502));
+    }
+  }
 });
 
 test('malformed, injected, stale, omitted and fabricated plans are rejected safely', () => {
