@@ -6,6 +6,8 @@ Photo sections now use contained images with reserved proportions derived from a
 
 When a reviewed opening photograph also belongs to a photo section, that section leads with its other photographs and keeps the opening image as a compact, clickable **Opening photograph** reference. Every entry, photo count, caption, credit and illustrative-example label remains available; larger albums retain their expand/collapse controls. Record and story illustrations keep their contextual images. A missing or unresolved hero does not remove album images, and unavailable image URLs retain the existing fallback and photo action.
 
+Sparse photo sections with zero or one remaining image use a 720px maximum content width, keeping desktop photography proportionate while retaining the mobile stack. Photo cards and opening references display **View photograph**, with an underline on keyboard focus as well as hover; photo counts stay on one line. Full-image fitting, metadata, detail actions and reduced-motion behavior are unchanged.
+
 These are deterministic shared-renderer rules for generated and existing websites, including Studio previews. They do not alter source images, saved album order, approved hero eligibility, composition proposals or publication state. They add no image interpretation, focal-point guessing or provider request. The two real-source controls used for visual checks were manually curated; that evidence is separate from automatic import or model-generation quality.
 
 ## Distinct template composition — 27 September 2026

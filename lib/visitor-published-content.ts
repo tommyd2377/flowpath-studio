@@ -12,6 +12,7 @@ export const publishedContentTool = {
 export const PUBLISHED_CONTENT_BYTES = 16000;
 const stop = new Set(['a', 'an', 'and', 'are', 'at', 'can', 'could', 'do', 'does', 'for', 'from', 'have', 'how', 'i', 'in', 'is', 'it', 'me', 'of', 'on', 'please', 'show', 'tell', 'the', 'there', 'these', 'this', 'to', 'what', 'which', 'with', 'you', 'your']);
 const words = (text: string) => text.normalize('NFKC').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(word => word && !stop.has(word)).map(word => word.length > 3 && /s$/.test(word) && !/ss$/.test(word) ? word.slice(0, -1) : word);
+const accommodationQueries = new Set(words('accessibility accessible wheelchair handicapped handicap disabled disability disabilities ASL'));
 type Passage = { reference: WorkspaceReference; name: string; blockId: string; heading: string; start: number; end: number; blockLength: number; text: string };
 
 /** Only the already-authorized public snapshot. No private artifacts or fetches.
@@ -22,6 +23,9 @@ export function readPublishedContent(raw: unknown, authority: WorkspaceAuthority
   const selected = input.reference ? sources.filter(record => referenceKey(record.reference) === referenceKey(input.reference!)) : sources;
   if (input.reference && !selected.length) throw new Error('Unknown published content reference.');
   const terms = [...new Set(words(input.query))];
+  // Publishers often describe access requirements as accommodations. This adds
+  // a retrieval term only; returned original wording cannot verify suitability.
+  if (terms.some(term => accommodationQueries.has(term)) && !terms.includes('accommodation')) terms.push('accommodation');
   const candidates: { passage: Passage; score: number; order: number }[] = [];
   const entities = new Map(catalog?.entities.map(entity => [entity.id, entity]));
   for (const source of selected) {

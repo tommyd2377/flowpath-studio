@@ -81,6 +81,32 @@ test('site-only content can be read in full and unknown content is not invented'
   assert.deepEqual(diagnosticError(new Error('Knowledge context exceeds 32,000 bytes.')), { reason: 'capacity' });
 });
 
+test('accessibility searches retain exact accommodation qualifications without inferring suitability', () => {
+  const content = sampleContent('general');
+  const qualified = 'For accommodation needs, including American Sign Language, inform admissions in advance. Requests require individual confirmation; not every need can be met.';
+  content.sections = [{ id: 'admissions', title: 'Admissions', body: qualified }];
+  const authority = publishedWorkspace(content);
+  for (const query of ['wheelchair accessible accessibility handicapped', 'disabilities', 'ASL']) {
+    const result = readPublishedContent({ query, reference: null, offset: 0 }, authority);
+    assert.equal(result.totalPassages, 1, query);
+    assert.equal(result.passages[0].text, qualified);
+    assert.equal(result.passages[0].text.slice(result.passages[0].start, result.passages[0].end), qualified);
+    assert.equal(result.nextOffset, null);
+    assert.ok(Buffer.byteLength(JSON.stringify(result)) <= PUBLISHED_CONTENT_BYTES);
+  }
+  assert.equal(readPublishedContent({ query: 'account access', reference: null, offset: 0 }, authority).totalPassages, 0);
+  assert.equal(readPublishedContent({ query: 'French classes', reference: null, offset: 0 }, authority).totalPassages, 0);
+});
+
+test('accessibility search cannot supply an accommodation policy absent from published text', () => {
+  const content = sampleContent('general');
+  content.sections = [{ id: 'contact', title: 'Contact', body: 'Telephone the office for appointment times.' }];
+  const authority = publishedWorkspace(content);
+  assert.equal(readPublishedContent({ query: 'wheelchair accessibility', reference: null, offset: 0 }, authority).totalPassages, 0);
+  const reference = authority.records.find(record => record.reference.kind === 'source' && record.name === 'Contact')!.reference;
+  assert.equal(readPublishedContent({ query: '', reference, offset: 0 }, authority).passages[0].text, content.sections[0].body);
+});
+
 test('the actual chat stream reads published section content without navigation or search', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'published-content-chat-')), previous = process.env;
   process.env = { NODE_ENV: 'test', VOICE_BACKEND: 'demo', VOICE_AI_MODE: 'demo', VOICE_DATA_DIR: directory };

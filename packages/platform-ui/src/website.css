@@ -184,7 +184,11 @@
    These frames omit image choreography so zoom/depth cannot undo that guarantee. */
 .platform-website[data-website-design][data-template] .platform-website-section[data-section-kind=photos] .platform-website-entries > li .platform-website-card .platform-media-image[data-fit=contain] { aspect-ratio: var(--website-gallery-ratio, 4 / 3) !important; max-height: 600px; }
 .platform-website[data-website-design][data-template] .platform-website-section[data-section-kind=photos] .platform-website-entries { align-items: start; }
-.platform-website[data-website-design][data-template] .platform-website-section[data-section-kind=photos]:is([data-photo-count='0'], [data-photo-count='1']) .platform-website-entries { grid-template-columns: minmax(0, 1fr); max-width: 940px; }
+.platform-website[data-website-design][data-template] .platform-website-section[data-section-kind=photos]:is([data-photo-count='0'], [data-photo-count='1']) .platform-website-entries { grid-template-columns: minmax(0, 1fr); max-width: 720px; }
+.platform-website[data-website-design][data-template] .platform-website-section[data-section-kind=photos] .platform-content-card-more { display: flex; width: fit-content; line-height: 1.5; gap: 10px; }
+.platform-website[data-website-design][data-template] .platform-website-section[data-section-kind=photos] .platform-content-card-more > span { font-size: 16px; line-height: 1; }
+.platform-website[data-website-design][data-template] .platform-website-section[data-section-kind=photos] .platform-website-card:focus-visible .platform-content-card-more { text-decoration: underline; text-underline-offset: 5px; }
+.platform-website[data-website-design][data-template] .platform-website-section[data-section-kind=photos] .platform-website-count { white-space: nowrap; min-width: max-content; }
 .platform-website[data-website-design][data-template] .platform-website-section[data-section-kind=photos] .platform-website-entries > li[data-website-photo-reference=true] { grid-column: 1 / -1; grid-row: auto; padding-top: 0; }
 .platform-website[data-website-design][data-template] .platform-website-card[data-opening-photo=true] { height: auto; max-width: 48rem; border-top: 1px solid var(--website-rule); }
 .platform-website[data-website-design][data-template] .platform-website-card[data-opening-photo=true] .platform-content-card-copy { padding-block: 16px; }
