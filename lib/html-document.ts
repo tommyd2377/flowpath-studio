@@ -64,6 +64,64 @@ function removeFormFeedback(root: HtmlNode) {
   }
 }
 const footerSelector = 'footer,[data-elementor-type="footer"],[role="contentinfo"]';
+const genericMetadataHeading = /^(?:(?:(?:opening|business|store|operating) )?hours|contact(?: us)?|find us|visit(?: us)?|about this site|search|quick links)$/i;
+/** A nearby named heading may be a location. Keep its values out of a flattened
+ * combined summary rather than assuming they describe the same location. */
+function scopedMetadata(node: HtmlNode) {
+  for (let child: HtmlNode = node; child.parentNode; child = child.parentNode) {
+    const siblings = child.parentNode.childNodes;
+    for (const sibling of siblings.slice(0, siblings.indexOf(child)).reverse()) {
+      const heading = /^h[2-6]$/i.test(sibling.rawTagName ?? '') ? sibling
+        : sibling.rawTagName?.toLowerCase() === 'header' ? sibling.querySelector('h2,h3,h4,h5,h6') : null;
+      if (heading) {
+        const label = heading.text.trim().replace(/:$/, '');
+        if (!genericMetadataHeading.test(label)) return true;
+      }
+    }
+    if (/^(?:section|article|footer)$/i.test(child.parentNode.rawTagName ?? '')) break;
+  }
+  return false;
+}
+/** Only explicit labels in one visible authored block. Do not scan neighboring
+ * prose for numbers/days or detach a qualifier from its phone/schedule. */
+function inlineContactHours(root: HtmlNode) {
+  const phones = new Set<string>(), schedules = new Set<string>();
+  let scopedPhone = false, scopedSchedule = false;
+  const eligible = (node: HtmlNode) => {
+    for (let current: HtmlNode | undefined = node; current; current = current.parentNode) {
+      if (current.getAttribute('hidden') !== undefined || current.getAttribute('aria-hidden') === 'true'
+        || /^(?:form|nav|select|button|input|textarea|pre|code|blockquote)$/i.test(current.rawTagName ?? '')
+        || current.getAttribute('role') === 'navigation') return false;
+    }
+    return !node.querySelector('p,div,section,article,li,address,h1,h2,h3,h4,h5,h6,[hidden],[aria-hidden="true"],form,nav,select,button,input,textarea,pre,code,blockquote,[role="navigation"]');
+  };
+  for (const node of root.querySelectorAll('p,div,li,address')) {
+    if (!eligible(node)) continue;
+    const lines = cleanText(nodeText(node)).split('\n');
+    const phone = /^(?:tel(?:ephone)?|phone)(?: number)?\s*:\s*(.*)$/i.exec(lines[0]);
+    if (phone) {
+      const value = [phone[1], ...lines.slice(1)].filter(Boolean).join(' ');
+      const number = /^(\+?[\d(][\d(). -]{5,}\d)(?:\b|\s|$)/.exec(value)?.[1];
+      const anotherLabel = lines.slice(1).some(line => /^(?:(?:(?:opening|business|store|operating) )?hours|tel(?:ephone)?|phone|email|address)\s*:/i.test(line));
+      if (!anotherLabel && number && number.replace(/\D/g, '').length >= 7 && number.replace(/\D/g, '').length <= 15) { phones.add(value); scopedPhone ||= scopedMetadata(node); }
+    }
+    const label = /^(?:(?:opening|business|store|operating) )?hours(?:\s*:\s*(.*))?$/i.exec(lines[0]);
+    if (!label) continue;
+    // Footer schedules already participate in the legacy path. Counting them
+    // again as a second inline location would hide an otherwise useful summary.
+    let ancestor: HtmlNode | undefined = node;
+    while (ancestor && ancestor.rawTagName?.toLowerCase() !== 'footer' && ancestor.getAttribute('role') !== 'contentinfo' && ancestor.getAttribute('data-elementor-type') !== 'footer') ancestor = ancestor.parentNode;
+    if (ancestor) continue;
+    const schedule = [label[1], ...lines.slice(1)].filter((line): line is string => Boolean(line));
+    const days = /\b(?:weekdays?|weekends?|(?:mon|tues|wednes|thurs|fri|satur|sun)days?)\b/i;
+    const timing = /\b(?:closed|open|appointment)\b|\d\s*(?:am|pm)\b|\d\s*[-–—]\s*\d|\d{1,2}:\d{2}/i;
+    // Another label/heading in this block is a boundary, not permission to
+    // silently cut the schedule or its later qualifications.
+    if (schedule.some(line => /^(?:#{1,6}\s|(?:tel(?:ephone)?|phone|email|address)\s*:)/i.test(line))) continue;
+    if (schedule.some(line => days.test(line) && timing.test(line))) { schedules.add(schedule.join('; ')); scopedSchedule ||= scopedMetadata(node); }
+  }
+  return { phones: [...phones], schedules: [...schedules], scopedPhone, scopedSchedule };
+}
 function textOutsideLinks(node: HtmlNode): string {
   if (node.nodeType === 3) return node.text;
   if (/^(?:a|h[1-6])$/i.test(node.rawTagName ?? '')) return '';
@@ -99,16 +157,31 @@ export function htmlDocument(html: string, stripChrome = true) {
   const rawText = cleanText(nodeText(root));
   removeFormFeedback(root);
   const contacts = root.querySelectorAll('a[href]').flatMap(node => /^(?:tel:|mailto:)/i.test(node.getAttribute('href') ?? '') ? [(node.getAttribute('href') ?? '').replace(/^(?:tel:|mailto:)/i, '').split('?')[0]] : []);
+  const scopedLink = root.querySelectorAll('a[href]').some(node => /^(?:tel:|mailto:)/i.test(node.getAttribute('href') ?? '') && scopedMetadata(node));
+  const inline = inlineContactHours(root);
   const footerText = root.querySelectorAll(footerSelector).map(node => cleanText(nodeText(node))).join('\n');
   const dayLines = (text:string) => cleanText(text).split('\n').filter(line=>/(?:mon|tues|wednes|thurs|fri|satur|sun)day/i.test(line));
   let hourLines = dayLines(footerText);
+  let scopedHours = root.querySelectorAll(footerSelector).some(footer => footer.querySelectorAll('h2,h3,h4,h5,h6').some(heading => !genericMetadataHeading.test(heading.text.trim().replace(/:$/, ''))));
   if(!hourLines.length)for(const heading of root.querySelectorAll('h1,h2,h3,h4,h5,h6')){
     if(!/^(?:opening |business |store |operating )?hours$/i.test(heading.text.trim()))continue;
     let section=heading.parentNode;
-    for(let depth=0;section&&depth<3;depth++,section=section.parentNode){const lines=dayLines(nodeText(section));if(lines.length){hourLines=lines;break;}}
+    for(let depth=0;section&&depth<3;depth++,section=section.parentNode){const lines=dayLines(nodeText(section));if(lines.length){hourLines=lines;scopedHours=scopedMetadata(heading);break;}}
     if(hourLines.length)break;
   }
-  const hours = [...new Set(hourLines)].join('; ').slice(0,180);
+  const legacyHours = [...new Set(hourLines)].join('; ').slice(0,180);
+  // Keep the existing heading/footer path. An inline schedule adds complete
+  // literal evidence, including closed days, without resolving conflicts.
+  const combinedHours = [...new Set([...hourLines, ...inline.schedules])].join('; ');
+  const inlineHourLines = new Set(inline.schedules.flatMap(schedule => schedule.split('; ')));
+  const distinctHours = hourLines.some(line => !inlineHourLines.has(line.replace(/^(?:(?:opening|business|store|operating) )?hours\s*:\s*/i, '')));
+  const mixedHoursScope = distinctHours && (inline.scopedSchedule || scopedHours);
+  const hours = inline.schedules.length ? inline.schedules.length === 1 && !mixedHoursScope && combinedHours.length <= 180 ? combinedHours : '' : legacyHours;
+  const barePhone = (value: string) => /^[+\d(). -]+$/.test(value) ? value.replace(/[(). -]/g, '') : value;
+  const additionalPhones = inline.phones.filter(phone => !contacts.some(contact => barePhone(contact) === barePhone(phone)));
+  const combinedContacts = [...new Set([...contacts, ...additionalPhones])].join(' · ');
+  const mixedContactScope = contacts.length > 0 && additionalPhones.length > 0 && (inline.scopedPhone || scopedLink);
+  const contact = inline.phones.length ? inline.phones.length === 1 && !mixedContactScope && combinedContacts.length <= 180 ? combinedContacts : '' : [...new Set(contacts)].join(' · ').slice(0,180);
   for (const node of root.querySelectorAll('title,head,form,select,button,input,textarea,[hidden],[aria-hidden="true"]')) node.remove();
   if (stripChrome) {
     retainFooterInformation(root);
@@ -122,7 +195,7 @@ export function htmlDocument(html: string, stripChrome = true) {
     }
   }
   const text = cleanText(nodeText(root));
-  return { root, title, text, rawText, contact: [...new Set(contacts)].join(' · ').slice(0, 180), hours };
+  return { root, title, text, rawText, contact, hours };
 }
 export function textBlocks(text: string) {
   // Match the catalog reading-block bounds without dropping a paragraph's tail.
