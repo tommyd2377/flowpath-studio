@@ -137,6 +137,14 @@ The offline command guard leaves questions such as “Will you close next Saturd
 
 Six focused command tests passed, including sixteen calendar formulations that retain the focused card and three explicit closes that remove it. Scoped lint, TypeScript and the isolated production webpack build passed. No new browser, voice or live-model test was run for this follow-up.
 
+## Narrow v1 comparisons (2026-10-03)
+
+The shared v1 comparison now owns its responsive CSS container. A bare `PresentationView` in the visitor workspace and a comparison inside `CatalogExplorer` both switch to complete stacked records when the comparison itself is at most 600 px wide. A narrow desktop panel uses the same layout; widening it restores the existing table. Source values, entity controls and the separate v2 `TaskComparison` are unchanged.
+
+The original CSS fails the new 320 px compact-visibility regression. Eighteen browser component checks now pass, including bare and catalog-hosted v1 comparisons at 320/390/1440 px, desktop panel resizing, long names/qualified values, keyboard focus and the existing v2/estimate/rich-table checks. Eleven shared rendering tests, scoped lint, the production webpack build with TypeScript, and the independent packed-package check also pass. Static component checks do not establish live model response quality.
+
+Nine compiled-app cases used the frozen T. Schreiber, Arms Acres and Roberta publications at 320/390/1440 px, with all non-GET traffic mocked locally. Both compared entities and their formatted values survived; all eighteen keyboard detail/Back cycles, hidden-control focus exclusions and one live reduced-motion toggle passed, with no horizontal clipping. All 35 workspace/public-catalog/media file hashes remained unchanged. An initial harness check omitted the revision from an expected reference key; that failed run was retained and the incomplete cases passed with the exact key. T. Schreiber and Arms are manually curated controls; none of these checks proves automatic interpretation or live provider quality.
+
 ## Remaining live and platform limits
 
 - Live GPT-Live/Luna speech comprehension, natural delivery of the three greeting points, real audio latency and physical-device acoustics need a separately authorized bounded live test. Offline success does not establish these.

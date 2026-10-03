@@ -151,6 +151,7 @@
 .platform-detail-attributes dt { color: var(--platform-muted); font-size: 11px; margin-bottom: 4px; }
 .platform-detail-attributes dd { margin: 0; font-size: 15px; overflow-wrap: anywhere; }
 .platform-section-intro { color: var(--platform-muted); font-size: 12px; margin: -8px 0 22px !important; }
+.platform-comparison { container: platform-comparison / inline-size; min-width: 0; }
 .platform-comparison-table { overflow-x: auto; border: 1px solid var(--platform-line); border-radius: 12px; }
 .platform-comparison table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 520px; }
 .platform-comparison th, .platform-comparison td { padding: 16px 20px; text-align: left; border-bottom: 1px solid var(--platform-line); vertical-align: top; min-width: 140px; }
@@ -161,6 +162,15 @@
 .platform-comparison tbody th { font-weight: 400; color: var(--platform-muted); font-size: 11px; }
 .platform-comparison tbody tr:last-child > * { border-bottom: 0; }
 .platform-comparison-mobile { display: none; }
+@container platform-comparison (max-width: 600px) {
+  .platform-comparison-table { display: none; }
+  .platform-comparison-mobile { display: grid; gap: 15px; }
+  .platform-comparison-mobile article { background: var(--platform-panel); border: 1px solid var(--platform-line); border-radius: 12px; padding: 22px 19px; }
+  .platform-comparison-mobile dl { margin-top: 19px; }
+  .platform-comparison-mobile dl > div { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 10px 0; border-top: 1px solid var(--platform-line); }
+  .platform-comparison-mobile dt { font-size: 11px; color: var(--platform-muted); }
+  .platform-comparison-mobile dd { font-size: 12px; margin: 0; overflow-wrap: anywhere; }
+}
 .platform-related, .platform-actions { border-top: 1px solid var(--platform-line); padding: 23px 0 3px; }
 .platform-related-items { display: grid; gap: 10px; }
 .platform-related-items > div { display: flex; align-items: center; flex-wrap: wrap; gap: 13px; border: 1px solid var(--platform-line); border-radius: 8px; padding: 15px; }
@@ -202,13 +212,6 @@
   .platform-detail h3 { font-size: 34px; }
   .platform-detail-summary { font-size: 13px; }
   .platform-detail-attributes { gap: 0 15px; }
-  .platform-comparison-table { display: none; }
-  .platform-comparison-mobile { display: grid; gap: 15px; }
-  .platform-comparison-mobile article { background: var(--platform-panel); border: 1px solid var(--platform-line); border-radius: 12px; padding: 22px 19px; }
-  .platform-comparison-mobile dl { margin-top: 19px; }
-  .platform-comparison-mobile dl > div { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 10px 0; border-top: 1px solid var(--platform-line); }
-  .platform-comparison-mobile dt { font-size: 11px; color: var(--platform-muted); }
-  .platform-comparison-mobile dd { font-size: 12px; margin: 0; overflow-wrap: anywhere; }
 }
 @media (prefers-reduced-motion: reduce) {
   .platform-explorer *, .platform-explorer *::before, .platform-explorer *::after { animation-duration: 0s !important; transition-duration: 0s !important; scroll-behavior: auto !important; }

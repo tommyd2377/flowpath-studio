@@ -5,7 +5,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { AnimatePresence } from 'motion/react';
 import { TaskComparison, PublishedEstimateView } from '@thevoice/platform-ui/task-components';
 import { RichAnswer } from '@thevoice/platform-ui/answer';
-import { ExternalSearchResults, MediaProvider, MediaVideo, type ExternalSearchResult } from '@thevoice/platform-ui';
+import { CatalogExplorer, PresentationView, ExternalSearchResults, MediaProvider, MediaVideo, type ExternalSearchResult } from '@thevoice/platform-ui';
+import { validateCatalog } from '@thevoice/platform-ui/contracts';
+import { comparisonPlan, initialInteraction } from '@thevoice/platform-ui/interaction';
 import { publishedEstimateNote, publishedEstimateRounding, publishedEstimateSchema } from '@thevoice/platform-ui/estimate';
 import { websiteTaskFixture } from '../../fixtures/visitor-tasks';
 
@@ -50,6 +52,58 @@ const estimate = publishedEstimateSchema.parse({
 test.beforeEach(async ({ page }) => {
   await page.route(/^https?:\/\//, route => route.abort('blockedbyclient'));
   await page.emulateMedia({ reducedMotion: 'reduce' });
+});
+
+const v1Catalog = validateCatalog(JSON.parse(readFileSync(new URL('../../fixtures/catalogs/classes.json', import.meta.url), 'utf8')));
+v1Catalog.attributes.push({ id: 'conditions', label: 'Conditions and additional registration requirements', type: 'text' });
+v1Catalog.entities[0].name = 'Introduction to handbuilding and extended studio practice';
+v1Catalog.entities[0].attributes.conditions = 'Materials are charged separately. Placement is not guaranteed. Reference-' + 'ABCD'.repeat(24);
+v1Catalog.entities[1].attributes.conditions = 'Prior introductory experience is required; confirm the applicable fee before registering.';
+const v1Entities = v1Catalog.entities.slice(0, 2);
+const v1Plan = comparisonPlan(v1Catalog, v1Entities.map(entity => entity.id));
+
+for (const mode of ['bare', 'catalog'] as const) for (const width of [320, 390, 1440]) {
+  test(`v1 comparison follows its own width in ${mode} mode at ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 852 });
+    const content = mode === 'bare'
+      ? createElement(PresentationView, { catalog: v1Catalog, plan: v1Plan, state: initialInteraction(v1Catalog) })
+      : createElement(CatalogExplorer, { catalog: v1Catalog, plan: v1Plan, showComposer: false });
+    await show(page, content);
+    const comparison = page.getByRole('region', { name: 'Compare published attributes' });
+    const cards = comparison.locator('.platform-comparison-mobile'), table = comparison.locator('.platform-comparison-table');
+    const compact = width < 600;
+    await expect(compact ? cards : table).toBeVisible();
+    await expect(compact ? table : cards).toBeHidden();
+    for (const entity of v1Entities) {
+      const visible = compact ? cards.locator(`article[data-entity-id="${entity.id}"]`) : table;
+      await expect(visible.getByRole('button', { name: entity.name, exact: true })).toBeVisible();
+      await expect(visible).toContainText(String(entity.attributes.conditions));
+      const control = visible.getByRole('button', { name: entity.name, exact: true });
+      await control.focus(); await expect(control).toBeFocused();
+      expect(await control.evaluate(node => node.closest('.platform-comparison-mobile') !== null)).toBe(compact);
+    }
+    expect(await comparison.evaluate(node => [...node.querySelectorAll('h4, dt, dd')]
+      .filter(element => element.getClientRects().length > 0)
+      .every(element => element.scrollWidth <= element.clientWidth + 1))).toBe(true);
+    expect(await fitsViewport(page)).toBe(true);
+    if (mode === 'bare') await page.screenshot({ path: testInfo.outputPath(`v1-${width}.png`), fullPage: true });
+  });
+}
+
+test('v1 comparison uses compact records in a narrow desktop panel and restores its table on expansion', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await show(page, createElement('div', { id: 'comparison-panel', style: { width: 390 } },
+    createElement(PresentationView, { catalog: v1Catalog, plan: v1Plan, state: initialInteraction(v1Catalog) })));
+  const cards = page.locator('.platform-comparison-mobile'), table = page.locator('.platform-comparison-table');
+  await expect(cards).toBeVisible(); await expect(table).toBeHidden();
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await expect(cards).toBeVisible();
+  await page.locator('#comparison-panel').evaluate(node => { node.style.width = '1000px'; });
+  await expect(table).toBeVisible(); await expect(cards).toBeHidden();
+  for (const entity of v1Entities) await expect(table).toContainText(String(entity.attributes.conditions));
+  await page.locator('#comparison-panel').evaluate(node => { node.style.width = '390px'; });
+  await expect(cards).toBeVisible(); await expect(table).toBeHidden();
+  expect(await fitsViewport(page)).toBe(true);
 });
 
 for (const width of [320, 375, 393, 430]) {
