@@ -14,6 +14,41 @@ const fieldLabels = (field: FieldDescriptor) => [field.id, field.label, ...field
   ...field.type === 'money' && field.basis ? ['price', 'cost', 'rate', 'fee'].map(label => `${field.basis} ${label}`) : []];
 const clarify = (question: string): WebsiteCommand => ({ capabilityId: 'task.clarify', input: { question, options: [] } });
 
+// A shortcut owns the complete filter, including the words before its bound.
+// Match published labels as whole phrases so numeric/multiword names are not
+// confused with a quantity or discarded as generic command words.
+function filterPrefix(input: string, candidates: FieldDescriptor[]) {
+  const key = (text: string) => words(text).map(singular).join(' ');
+  const prefix = key(input);
+  const frame = (text: string) => /^(?:(?:all|the|these|those|them|item|result|option)\s*)?(?:with\s*)?(?:a|an|the)?$/.test(text
+    .replace(/^(?:only(?: show)?|show(?: me)?|find|search(?: for)?|filter|where|keep)\b\s*/, '').replace(/^only\b\s*/, ''));
+  const labels = candidates.flatMap(field => [...fieldLabels(field), ...field.type === 'money' ? ['price', 'cost', 'rate', 'fee'] : []]).map(key);
+  return frame(prefix) || labels.some(label => prefix === label || prefix.endsWith(` ${label}`) && frame(prefix.slice(0, -label.length).trim()));
+}
+
+/** Consume whole published values before treating and/or as separators. */
+function implicitFilterValues(input: string, field: FieldDescriptor, values: string[]): string[] | null {
+  const key = (text: string) => words(text).map(singular);
+  const subject = input.replace(/,?\s*at any price$/, '').replace(/\s+(?:instead|too|again|please),?$/, '')
+    .replace(/^(?:show(?: me)?|find|only(?: show)?|include|filter|search(?: for)?)\s+/, '')
+    .replace(/^(?:only|all(?: of)?|the|your|our)\s+/, '').trim();
+  let remaining = key(subject);
+  const label = fieldLabels(field).map(key).sort((a, b) => b.length - a.length).find(label => label.every((word, i) => remaining[i] === word));
+  if (label) remaining = remaining.slice(label.length);
+  const choices = values.map(value => ({ value, words: key(value) })).sort((a, b) => b.words.length - a.words.length);
+  const consumed: string[] = [];
+  while (remaining.length) {
+    const choice = choices.find(choice => choice.words.every((word, i) => remaining[i] === word));
+    if (!choice) return null;
+    consumed.push(choice.value); remaining = remaining.slice(choice.words.length);
+    if (!remaining.length || remaining.length === 1 && /^(?:item|result|option|choice)$/.test(remaining[0])) return consumed;
+    if (!/^(?:and|or)$/.test(remaining[0])) return null;
+    remaining = remaining.slice(1);
+    if (!remaining.length) return null;
+  }
+  return null;
+}
+
 /** A conservative, publication-driven shortcut. Unhandled prose stays with the assistant.
  * Every recognized command becomes an ordinary validated capability and needs its display receipt.
  */
@@ -111,8 +146,8 @@ export function websiteQueryCommand(text: string, context: Pick<CapabilityContex
     const subject = value.replace(/^(?:remove|clear)\s+(?:the\s+)?/, '').replace(/\s+(?:filter|limit|constraint)$/, '');
     // "Remove the item" may edit a basket or another surface. Only a whole
     // published field name (or an explicit filter request) belongs to this shortcut.
-    if (!priceLimit && !/\b(?:filter|limit|constraint)\b/.test(value)
-      && !candidates.some(candidate => fieldLabels(candidate).some(label => sameWords(subject, label)))) return null;
+    if (!priceLimit && !candidates.some(candidate => [...fieldLabels(candidate), ...candidate.type === 'money' ? ['price', 'cost', 'rate', 'fee'] : []].some(label => sameWords(subject, label)))
+      && (candidates.length || !/\s+(?:filter|limit|constraint)$/.test(value))) return null;
     if (priceLimit) candidates = fields.filter(field => field.type === 'money');
     const removed = nodes.filter(node => 'fieldId' in node && candidates.some(field => field.id === node.fieldId));
     return removed.length ? patch(removed.map(node => ({ op: 'removeConstraint', nodeId: node.id }))) : clarify('Which filter should I remove? Name its attribute, or say “show everything again”.');
@@ -135,12 +170,28 @@ export function websiteQueryCommand(text: string, context: Pick<CapabilityContex
   const explicitlyTyped = /^(?:only|filter|where)\b/.test(value) || best > 0 || !!bound && /\d/.test(bound[2]);
   let expression: Expression | undefined;
   if (field && websiteCommandFieldState.test(value)) {
-    const state = value.match(websiteCommandFieldState)![1];
+    const match = value.match(websiteCommandFieldState)!;
+    if (!filterPrefix(value.slice(0, match.index).replace(/\s+(?:is|are)$/, ''), [field])
+      || !/^(?:\s+(?:instead|too|again|please))?(?:,?\s+at any price)?$/.test(value.slice(match.index! + match[0].length))) return null;
+    const state = match[1];
     expression = { kind: 'state', id: randomUUID(), fieldId: field.id, state: state === 'missing' || state === 'not published' ? 'unknown' : state as 'known' };
   } else if (bound && explicitlyTyped) {
+    if (!filterPrefix(value.slice(0, bound.index), field ? [field] : candidates)) return null;
     if (!field) return clarify('Which published attribute or price basis should I use? Name the field with your limit.');
     const op: Extract<Expression, { kind: 'field' }>['op'] = ({ under: 'lt', below: 'lt', 'less than': 'lt', 'smaller than': 'lt', over: 'gt', above: 'gt', 'greater than': 'gt', 'larger than': 'gt', 'at least': 'gte', 'at most': 'lte', before: 'lt', after: 'gt', equals: 'eq', equal: 'eq', is: 'eq', contains: 'contains', include: 'contains', includes: 'contains', 'include all of': 'all', 'includes all of': 'all', 'include any of': 'any', 'includes any of': 'any' } as Record<string, Extract<Expression, { kind: 'field' }>['op']>)[bound[1]];
-    const raw = bound[2].replace(/\s+(?:please|too)$/, '').replace(/^['"]|['"]$/g, '').trim();
+    const literal = bound[2].replace(/\s+(?:please|too)$/, '').trim();
+    const raw = literal.replace(/^['"]|['"]$/g, '').trim();
+    if (field.type === 'number' || field.type === 'money') {
+      const suffix = raw.match(/^[\$€£¥]?[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?\s*(.*)$/i)?.[1].trim();
+      if (suffix && ![field.unit, field.currency, 'dollar', 'dollars', ...Intl.supportedValuesOf('currency')].some(unit => unit && normalized(unit) === normalized(suffix))) return null;
+    } else if (field.type === 'boolean' && /^(?:true|false|yes|no)\s+/.test(raw)) return null;
+    else if (field.type === 'text' || field.type === 'enum') {
+      // A whole published multiword value (including "and") is one literal.
+      // Unrecognized prose needs interpretation; quoted literals remain exact.
+      const literals = op === 'any' || op === 'all' ? literal.split(/\s*,\s*/) : [literal];
+      const known = [...field.values ?? [], ...index.space.records.flatMap(record => record.assertions.filter(assertion => assertion.fieldId === field.id && assertion.value).flatMap(assertion => assertion.value!.value))];
+      if (literals.some(item => !/^(['"]).*\1$/.test(item) && words(item).length > 1 && !known.some(value => typeof value === 'string' && normalized(value) === normalized(item)))) return null;
+    }
     const scalar = (input: string): string | number | boolean => {
       if (field.type === 'number' || field.type === 'money') {
         // Currency markers must agree with the published field before stripping them.
@@ -164,7 +215,9 @@ export function websiteQueryCommand(text: string, context: Pick<CapabilityContex
       if (values.length && values.length <= 12) matches.push({ field, values });
     }
     if (matches.length === 1) {
-      const { field, values } = matches[0];
+      const { field } = matches[0];
+      const values = implicitFilterValues(value, field, matches[0].values);
+      if (!values) return null;
       const leaves: Expression[] = values.map(value => ({ kind: 'field', id: randomUUID(), fieldId: field.id, op: field.cardinality === 'many' ? 'any' : 'eq', value: { type: field.type, value: field.cardinality === 'many' ? [value] : value } }));
       expression = leaves.length === 1 ? leaves[0] : { kind: 'any', id: randomUUID(), children: leaves };
     }
