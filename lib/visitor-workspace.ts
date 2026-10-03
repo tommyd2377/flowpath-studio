@@ -240,12 +240,13 @@ export function planWorkspaceIntent(text: string, state: WorkspaceState, authori
     // blocks in the separate bounded published-content search/pagination path.
     const retrieved = retrieveKnowledge(catalog, { revisionId: catalog.id, query: text, intent: photo ? 'photos' : 'answer', expansion: 1, includeBlocks: false }, media);
     // Match whole label/field tokens: confirm is not unconfirmed, nor now unknown.
+    // Keep field identifiers intact; expand label/key components only on the candidate side.
     // Keep punctuation between digits so 100.50, 100.99 and 100 remain distinct.
-    const tokens = (value: string) => value.toLowerCase().match(/(?:[\p{L}\p{N}]|(?<=\p{N})[.,/](?=\p{N}))+/gu) ?? [];
+    const tokens = (value: string) => value.toLowerCase().match(/(?:[\p{L}\p{N}_]|(?<=\p{N})[.,/](?=\p{N}))+/gu) ?? [];
     const terms = tokens(query).filter(term => !['show', 'give', 'tell', 'please', 'also', 'too', 'the', 'and', 'your', 'me', 'about', 'what', 'where', 'that', 'from', 'open'].includes(term) && term.length > 2);
     const subjects = named.filter(record => record.reference.kind === 'entity');
     matches = authority.records.filter(record => record.reference.kind === 'fact' && (!subjects.length || subjects.some(subject => subject.reference.id === record.parent?.id)) && retrieved.facts.some(fact => fact.id === record.reference.id)
-      && tokens(`${record.name.split(' · ')[0]} ${record.keywords ?? ''}`).some(token => terms.includes(token)));
+      && tokens(`${record.name.split(' · ')[0]} ${record.keywords ?? ''}`).some(token => terms.includes(token) || token.split('_').some(part => terms.includes(part))));
     if (!matches.length && !photo && !map) matches = named.filter(record => record.reference.kind === 'entity');
   }
   if (map) {
