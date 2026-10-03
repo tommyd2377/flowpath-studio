@@ -12,6 +12,8 @@ Studio keeps source material private while helping publishers correct the knowle
 
 The deterministic parser records references only for supplied fields it can trace to the displayed excerpt. It does not cite generated defaults, missing values or model guesses as source statements. PDF locations refer to extracted text, not an OCR or visual reading of the page. Older saved interpretations without provenance remain editable and show that excerpts are unavailable.
 
+PDF extraction preserves large horizontal gaps between text runs on the same line as tabs. These are spatial hints, not inferred table cells or item/price relationships. Original text order, line breaks and page references remain intact; rotated or ambiguous geometry keeps the existing spacing. This does not reconstruct page layout or recover lettering drawn as graphics. Review missing names, location-specific prices and qualifications against the original PDF.
+
 ## Review related files together
 
 Upload multiple related files in **Files**, select a source in Knowledge, then expand **Include related files in this review**. Up to six distinct files share one proposal, while retaining separate hashes, origins and source excerpts. Per-file progress distinguishes processing, successful extraction, unchanged sources and failures. Exact-byte duplicates share their result. Two files targeting the same source name are rejected before processing; renamed replacements are reviewed individually.

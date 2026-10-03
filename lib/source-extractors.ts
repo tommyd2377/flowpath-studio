@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { validateCatalog, type KnowledgeCatalog, type AttributeDefinition } from '@thevoice/platform-ui/contracts';
 import { AppError } from './errors';
+import { pdfTextFromItems } from './pdf-text';
 import { MAX_SOURCE_EXCERPT, validateSourceProvenance, type SourceAnchor, type SourceProvenance } from './source-provenance';
 import { extractDocxText, extractXlsx, htmlToText, type XlsxCell, type XlsxSheet } from './source-adapters';
 import { extractOcrText, type OcrProvider } from './ocr';
@@ -401,7 +402,7 @@ export async function extractSource(name: string, mime: string, bytes: Uint8Arra
       const pages: string[] = [];
       for (let index = 1; index <= pdf.numPages; index++) {
         const page = await pdf.getPage(index); const content = await page.getTextContent();
-        const text = content.items.map(item => 'str' in item ? `${item.str}${item.hasEOL ? '\n' : ' '}` : '').join('');
+        const text = pdfTextFromItems(content.items);
         if (!text.trim()) throw new AppError(`PDF page ${index} has no readable text. This may be a scanned or blank page; review it or use OCR before importing. No partial interpretation was saved.`);
         pages.push(text);
         if (pages.join('\n\n').length > MAX_EXTRACTED_CHARACTERS) throw new AppError('The extracted PDF exceeds this pilot’s text limit. Split it into smaller files; nothing was truncated.');
