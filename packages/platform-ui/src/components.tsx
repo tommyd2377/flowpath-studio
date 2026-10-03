@@ -1,13 +1,13 @@
 'use client';
 
 import { createContext, forwardRef, useContext, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { AnimatePresence, motion, useIsPresent, useReducedMotion, useScroll, useSpring, type HTMLMotionProps } from 'motion/react';
+import { AnimatePresence, MotionConfig, motion, useIsPresent, useReducedMotion, useScroll, useSpring, type HTMLMotionProps } from 'motion/react';
 import { z } from 'zod';
 import { createLibrary, defineComponent, useTriggerAction, type ElementNode } from './openui.js';
 import { formatAttribute, filterEntities, knownAttributes } from './catalog.js';
 import type { AttributeDefinition, KnowledgeCatalog, PresentationPlan } from './contracts.js';
 import type { CatalogInteractionState, FocusReference, ReturnAnchor } from './interaction.js';
-import { Disclosure, MotionHeight, SemanticSurface, feedbackTransition, motionTiming, revealTransition, sequenceItemVariants, sequenceVariants, surfaceTransition } from './motion.js';
+import { Disclosure, MotionHeight, SemanticSurface, feedbackTransition, motionTiming, revealTransition, sequenceItemVariants, sequenceVariants, surfaceTransition, usePlatformReducedMotion } from './motion.js';
 import { EntityMedia, MediaGallery } from './MediaViews.js';
 
 export type RuntimeContextValue = { spotlightId?: string | null; catalog: KnowledgeCatalog; state: CatalogInteractionState; plan: PresentationPlan;
@@ -171,30 +171,33 @@ function SectionHeading({ eyebrow, title, children }: { eyebrow?: string; title:
   return <div className="platform-section-heading"><div>{eyebrow && <span className="platform-eyebrow">{eyebrow}</span>}<h3>{title}</h3></div>{children}</div>;
 }
 
+const noCardTransform = () => 'none';
+const neutralCardMotion = { opacity: 1, y: 0, scale: 1 };
+// Own the live policy for these transforms; nested media retain Motion's user policy.
 const PresentCard = forwardRef<HTMLElement, HTMLMotionProps<'article'>>(function PresentCard(props, ref) {
   const present = useIsPresent();
-  const reduced = useReducedMotion();
-  return <motion.article {...props} ref={ref} layout={reduced ? false : 'position'} whileHover={reduced ? undefined : { y: -4 }} whileTap={reduced ? undefined : { scale: 0.992 }} whileFocus={reduced ? undefined : { y: -2 }} style={{ ...props.style, borderRadius: 13 }} inert={!present} aria-hidden={!present || undefined}
-    variants={reduced ? undefined : sequenceItemVariants} initial={reduced ? false : 'hidden'} animate="visible" exit="exit"
+  const reduced = usePlatformReducedMotion();
+  return <MotionConfig reducedMotion="never"><motion.article {...props} ref={ref} layout={reduced ? false : 'position'} transformTemplate={reduced ? noCardTransform : undefined} whileHover={reduced ? neutralCardMotion : { y: -4 }} whileTap={reduced ? neutralCardMotion : { scale: 0.992 }} whileFocus={reduced ? neutralCardMotion : { y: -2 }} style={{ ...props.style, borderRadius: 13 }} inert={!present} aria-hidden={!present || undefined}
+    variants={reduced ? undefined : sequenceItemVariants} initial={reduced ? false : 'hidden'} animate={reduced ? neutralCardMotion : 'visible'} exit={reduced ? { opacity: 0 } : 'exit'}
     transition={{ ...revealTransition, duration: reduced ? 0 : motionTiming.reveal, layout: reduced ? { duration: 0 } : surfaceTransition }}>
-    <motion.div layout={reduced ? false : 'position'} className="platform-item-content" transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }}>{props.children}</motion.div>
-  </motion.article>;
+    <MotionConfig reducedMotion="user"><motion.div layout={reduced ? false : 'position'} className="platform-item-content" transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }}>{props.children}</motion.div></MotionConfig>
+  </motion.article></MotionConfig>;
 });
 
-const PresentChip = forwardRef<HTMLButtonElement, HTMLMotionProps<'button'>>(function PresentChip(props, ref) {
+const PresentChip = forwardRef<HTMLButtonElement, Omit<HTMLMotionProps<'button'>, 'children'> & { children?: ReactNode }>(function PresentChip(props, ref) {
   const present = useIsPresent();
-  const reduced = useReducedMotion();
-  return <motion.button {...props} ref={ref} layout={reduced ? false : 'position'} inert={!present} aria-hidden={!present || undefined}
-    initial={reduced ? false : { opacity: 0 }} animate={{ opacity: 1 }}
+  const reduced = usePlatformReducedMotion();
+  return <MotionConfig reducedMotion="never"><motion.button {...props} ref={ref} layout={reduced ? false : 'position'} transformTemplate={reduced ? noCardTransform : undefined} inert={!present} aria-hidden={!present || undefined}
+    initial={reduced ? false : { opacity: 0 }} animate={neutralCardMotion}
     exit={{ opacity: 0, transition: { ...revealTransition, duration: reduced ? 0 : motionTiming.exit } }}
-    whileHover={reduced ? undefined : { y: -1 }} whileTap={reduced ? undefined : { scale: 0.98 }} whileFocus={reduced ? undefined : { scale: 1.02 }}
-    transition={{ ...feedbackTransition, duration: reduced ? 0 : motionTiming.feedback, layout: reduced ? { duration: 0 } : surfaceTransition }}/>;
+    whileHover={reduced ? neutralCardMotion : { y: -1 }} whileTap={reduced ? neutralCardMotion : { scale: 0.98 }} whileFocus={reduced ? neutralCardMotion : { scale: 1.02 }}
+    transition={{ ...feedbackTransition, duration: reduced ? 0 : motionTiming.feedback, layout: reduced ? { duration: 0 } : surfaceTransition }}><MotionConfig reducedMotion="user">{props.children}</MotionConfig></motion.button></MotionConfig>;
 });
 
 function CollectionContent({ entityIds, attributeIds, variant, collectionId }: ComponentProps) {
   const { catalog, state, onInteraction, spotlightId } = useCatalog();
   const action = useAction();
-  const reduced = useReducedMotion();
+  const reduced = usePlatformReducedMotion();
   const [limit, setLimit] = useState(18);
   const collection = catalog.collections.find(item => item.id === collectionId);
   const collectionTabs = catalog.collections.filter(item => item.name.toLocaleLowerCase() !== 'all items' || item.entityIds.length !== catalog.entities.length);
@@ -209,7 +212,7 @@ function CollectionContent({ entityIds, attributeIds, variant, collectionId }: C
       <button type="button" aria-pressed={!collectionId} onClick={() => { setLimit(18); action('collection', { id: '' }); }}>All items</button>
       {collectionTabs.map(item => <button type="button" key={item.id} aria-pressed={item.id === collectionId} onClick={() => { setLimit(18); action('collection', { id: item.id }); }}>{item.name}</button>)}
     </div>}
-    <MotionHeight><motion.div layout={reduced ? false : 'position'} variants={reduced ? undefined : sequenceVariants} initial={reduced ? false : 'hidden'} animate="visible" className="platform-items" data-variant={variant} transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }}>
+    <MotionHeight><motion.div layout={reduced ? false : 'position'} variants={reduced ? undefined : sequenceVariants} initial={reduced ? false : 'hidden'} animate={reduced ? { opacity: 1 } : 'visible'} className="platform-items" data-variant={variant} transition={{ layout: reduced ? { duration: 0 } : surfaceTransition }}>
       <AnimatePresence initial={false} mode="popLayout">
       {!entities.length && <PresentCard key="empty" className="platform-empty"><Icon name="filter" size={26}/><h4>A little too specific.</h4><p>No published items match these filters. Ask the assistant to adjust your request.</p><button className="platform-button" type="button" onClick={() => action('clear-filters')}>Clear filters</button></PresentCard>}
       {entities.slice(0, limit).map((entity, index) => {

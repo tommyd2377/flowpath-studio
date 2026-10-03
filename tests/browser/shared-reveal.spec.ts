@@ -228,3 +228,96 @@ for (const embedded of [true, false]) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBeTruthy();
   });
 }
+
+for (const width of [320, 390]) for (const embedded of [false, true]) {
+  test(`featured cards retain readable text at ${width}px ${embedded ? 'embedded' : 'viewport'} width`, async ({ page }, info) => {
+    await page.setViewportSize({ width: embedded ? 1440 : width, height: 1000 });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto('/lab');
+    if (embedded) await page.locator('.platform-container').evaluate((element, value) => { (element as HTMLElement).style.width = `${value}px`; }, width);
+    await settled(page);
+    const card = page.locator('.platform-item[data-layout="feature"]').first();
+    await card.scrollIntoViewIfNeeded();
+    const content = await card.innerText();
+    const geometry = await card.evaluate(element => {
+      const body = element.querySelector('.platform-item-content')!;
+      const summary = element.querySelector('.platform-item-summary')!;
+      const attributes = element.querySelector('.platform-item-attributes')!;
+      return { columns: getComputedStyle(body).gridTemplateColumns.split(' ').length,
+        bodyWidth: body.getBoundingClientRect().width, summaryWidth: summary.getBoundingClientRect().width,
+        titleWidth: element.querySelector('h4')!.getBoundingClientRect().width,
+        summaryBottom: summary.getBoundingClientRect().bottom, attributesTop: attributes.getBoundingClientRect().top,
+        clipped: body.scrollWidth > body.clientWidth + 1 };
+    });
+    expect(geometry.columns).toBe(1);
+    expect(geometry.summaryWidth).toBeGreaterThan(150);
+    expect(geometry.titleWidth).toBeGreaterThan(130);
+    expect(Math.abs(geometry.summaryWidth - geometry.bodyWidth)).toBeLessThan(1);
+    expect(geometry.attributesTop).toBeGreaterThanOrEqual(geometry.summaryBottom);
+    expect(geometry.clipped).toBe(false);
+    const opener = card.locator('.platform-item-open');
+    await opener.focus(); await opener.press('Enter');
+    await page.getByRole('button', { name: 'Back to results', exact: true }).click();
+    await settled(page); await expect(opener).toBeFocused();
+    expect(await card.innerText()).toBe(content);
+    await card.screenshot({ path: info.outputPath('featured-card-readable.png') });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  });
+}
+
+for (const initial of ['no-preference', 'reduce'] as const) {
+  test(`live card and shortlist motion follows preference changes from ${initial}`, async ({ page }, info) => {
+    await page.emulateMedia({ reducedMotion: initial });
+    await page.goto('/lab'); await settled(page);
+    const card = page.locator('.platform-item[data-layout="feature"]').first();
+    await card.scrollIntoViewIfNeeded();
+    const original = await card.elementHandle();
+    await page.mouse.move(0, 0);
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await page.waitForTimeout(100);
+    await card.evaluate(element => {
+      const values: number[] = []; (window as typeof window & { cardMotionSamples?: number[] }).cardMotionSamples = values;
+      element.addEventListener('pointerenter', () => {
+        const start = performance.now();
+        const sample = () => { values.push(new DOMMatrixReadOnly(getComputedStyle(element).transform).m42); if (performance.now() - start < 550) requestAnimationFrame(sample); };
+        requestAnimationFrame(sample);
+      }, { once: true });
+    });
+    await card.hover();
+    await expect.poll(() => card.evaluate(element => new DOMMatrixReadOnly(getComputedStyle(element).transform).m42)).toBeLessThan(-3.9);
+    const samples = await page.evaluate(() => (window as typeof window & { cardMotionSamples: number[] }).cardMotionSamples);
+    expect(samples.some(value => value < -0.05 && value > -3.9)).toBe(true);
+    // Keep the pointer stationary while reducing motion: an active hover must reset.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const neutral = async () => card.evaluate(element => {
+      const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform);
+      return { y: matrix.m42, scale: matrix.a, opacity: Number(getComputedStyle(element).opacity) };
+    });
+    await expect.poll(neutral).toEqual({ y: 0, scale: 1, opacity: 1 });
+    const reducedFrames = await card.evaluate(async element => {
+      const values: number[] = [];
+      for (let index = 0; index < 6; index++) { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); values.push(new DOMMatrixReadOnly(getComputedStyle(element).transform).m42); }
+      return values;
+    });
+    expect(reducedFrames).toEqual([0, 0, 0, 0, 0, 0]);
+    await page.mouse.move(0, 0); await card.hover();
+    await page.waitForTimeout(100); expect(await neutral()).toEqual({ y: 0, scale: 1, opacity: 1 });
+    await card.getByRole('button', { name: /Select .* for comparison/ }).click();
+    const chip = page.locator('.platform-selection-items button').first();
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    // Start a fresh keyboard interaction after restoring normal motion.
+    await page.keyboard.press('Tab'); await chip.focus();
+    expect(await chip.evaluate(element => element.matches(':focus-visible'))).toBe(true);
+    await expect.poll(() => chip.evaluate(element => new DOMMatrixReadOnly(getComputedStyle(element).transform).a)).toBeGreaterThan(1.01);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await expect.poll(() => chip.evaluate(element => {
+      const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform);
+      return { y: matrix.m42, scale: matrix.a };
+    })).toEqual({ y: 0, scale: 1 });
+    await expect(chip).toBeFocused();
+    expect(await card.evaluate((element, previous) => element === previous, original)).toBe(true);
+    await chip.press('Enter'); await expect(page.locator('.platform-selection-items button')).toHaveCount(0);
+    await expect(card.getByRole('button', { name: /Select .* for comparison/ })).toBeEnabled();
+    await card.screenshot({ path: info.outputPath('live-reduced-card.png') });
+  });
+}

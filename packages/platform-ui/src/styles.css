@@ -201,6 +201,9 @@
   .platform-view-status { font-size: 9px; }
   .platform-items { grid-template-columns: minmax(0, 1fr); }
   .platform-item { padding: 23px 20px; }
+  .platform-item[data-layout="feature"] .platform-item-content { grid-template-columns: minmax(0, 1fr); }
+  .platform-item[data-layout="feature"] .platform-item-attributes { grid-column: 1; grid-row: auto; margin-top: 18px !important; }
+  .platform-item[data-layout="feature"] .platform-item-open h4 { font-size: 26px; }
   .platform-item-open h4 { font-size: 26px; }
   .platform-item-attributes { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .platform-item-bottom { margin-top: 12px; }
