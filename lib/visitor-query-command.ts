@@ -26,7 +26,7 @@ function filterPrefix(input: string, candidates: FieldDescriptor[]) {
   return frame(prefix) || labels.some(label => prefix === label || prefix.endsWith(` ${label}`) && frame(prefix.slice(0, -label.length).trim()));
 }
 
-/** Consume whole published values before treating and/or as separators. */
+/** Consume whole published values before treating OR as an alternative. */
 function implicitFilterValues(input: string, field: FieldDescriptor, values: string[]): string[] | null {
   const key = (text: string) => words(text).map(singular);
   const subject = input.replace(/,?\s*at any price$/, '').replace(/\s+(?:instead|too|again|please),?$/, '')
@@ -42,9 +42,30 @@ function implicitFilterValues(input: string, field: FieldDescriptor, values: str
     if (!choice) return null;
     consumed.push(choice.value); remaining = remaining.slice(choice.words.length);
     if (!remaining.length || remaining.length === 1 && /^(?:item|result|option|choice)$/.test(remaining[0])) return consumed;
-    if (!/^(?:and|or)$/.test(remaining[0])) return null;
+    // AND between distinct values needs interpretation, never an OR expansion.
+    if (remaining[0] !== 'or') return null;
     remaining = remaining.slice(1);
     if (!remaining.length) return null;
+  }
+  return null;
+}
+
+/** Quotes delimit one complete value; only explicit lists may continue after a comma. */
+function filterLiterals(input: string, list: boolean): { value: string; quoted: boolean }[] | null {
+  const literals: { value: string; quoted: boolean }[] = [];
+  let remaining = input.trim();
+  while (remaining) {
+    const quoted = /^["']/.test(remaining);
+    const end = quoted ? remaining.indexOf(remaining[0], 1) : list ? remaining.indexOf(',') : -1;
+    if (quoted && end < 0) return null;
+    const value = remaining.slice(quoted ? 1 : 0, end < 0 ? undefined : end).trim();
+    if (!value) return null;
+    literals.push({ value, quoted });
+    const suffix = end < 0 ? '' : remaining.slice(end + (quoted ? 1 : 0)).trim();
+    if (!suffix) return literals;
+    if (!list || !suffix.startsWith(',')) return null;
+    remaining = suffix.slice(1).trim();
+    if (!remaining) return null;
   }
   return null;
 }
@@ -180,17 +201,21 @@ export function websiteQueryCommand(text: string, context: Pick<CapabilityContex
     if (!field) return clarify('Which published attribute or price basis should I use? Name the field with your limit.');
     const op: Extract<Expression, { kind: 'field' }>['op'] = ({ under: 'lt', below: 'lt', 'less than': 'lt', 'smaller than': 'lt', over: 'gt', above: 'gt', 'greater than': 'gt', 'larger than': 'gt', 'at least': 'gte', 'at most': 'lte', before: 'lt', after: 'gt', equals: 'eq', equal: 'eq', is: 'eq', contains: 'contains', include: 'contains', includes: 'contains', 'include all of': 'all', 'includes all of': 'all', 'include any of': 'any', 'includes any of': 'any' } as Record<string, Extract<Expression, { kind: 'field' }>['op']>)[bound[1]];
     const literal = bound[2].replace(/\s+(?:please|too)$/, '').trim();
-    const raw = literal.replace(/^['"]|['"]$/g, '').trim();
+    const literals = filterLiterals(literal, op === 'any' || op === 'all');
+    if (!literals) return null;
+    const raw = literals[0].value;
     if (field.type === 'number' || field.type === 'money') {
-      const suffix = raw.match(/^[\$€£¥]?[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?\s*(.*)$/i)?.[1].trim();
-      if (suffix && ![field.unit, field.currency, 'dollar', 'dollars', ...Intl.supportedValuesOf('currency')].some(unit => unit && normalized(unit) === normalized(suffix))) return null;
+      if (literals.some(item => {
+        const suffix = item.value.match(/^[\$€£¥]?[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?\s*(.*)$/i)?.[1].trim();
+        return suffix && ![field.unit, field.currency, 'dollar', 'dollars', ...Intl.supportedValuesOf('currency')].some(unit => unit && normalized(unit) === normalized(suffix));
+      })) return null;
     } else if (field.type === 'boolean' && /^(?:true|false|yes|no)\s+/.test(raw)) return null;
     else if (field.type === 'text' || field.type === 'enum') {
       // A whole published multiword value (including "and") is one literal.
-      // Unrecognized prose needs interpretation; quoted literals remain exact.
-      const literals = op === 'any' || op === 'all' ? literal.split(/\s*,\s*/) : [literal];
+      // Unrecognized prose or stray quotes need interpretation; published
+      // apostrophes remain content and complete quoted literals remain exact.
       const known = [...field.values ?? [], ...index.space.records.flatMap(record => record.assertions.filter(assertion => assertion.fieldId === field.id && assertion.value).flatMap(assertion => assertion.value!.value))];
-      if (literals.some(item => !/^(['"]).*\1$/.test(item) && words(item).length > 1 && !known.some(value => typeof value === 'string' && normalized(value) === normalized(item)))) return null;
+      if (literals.some(item => !item.quoted && (words(item.value).length > 1 || /['"]/.test(item.value)) && !known.some(value => typeof value === 'string' && normalized(value) === normalized(item.value)))) return null;
     }
     const scalar = (input: string): string | number | boolean => {
       if (field.type === 'number' || field.type === 'money') {
@@ -199,7 +224,7 @@ export function websiteQueryCommand(text: string, context: Pick<CapabilityContex
       }
       return field.type === 'boolean' ? /^(true|yes)$/.test(input) : input;
     };
-    const data = op === 'any' || op === 'all' ? raw.split(/\s*,\s*/).map(scalar) : scalar(raw);
+    const data = op === 'any' || op === 'all' ? literals.map(item => scalar(item.value)) : scalar(raw);
     if (typeof data === 'number' && !Number.isFinite(data) && /^[a-z ]+$/.test(raw)) return null; // Let the assistant interpret written-out quantities.
     if (!field.operations.includes(op) || typeof data === 'number' && !Number.isFinite(data) || field.type === 'boolean' && !/^(true|false|yes|no)$/.test(raw) || field.type === 'geo') return clarify(`Use a supported ${field.label} value: ${field.operations.join(', ')}${field.unit ? `, measured in ${field.unit}` : ''}.`);
     expression = { kind: 'field', id: randomUUID(), fieldId: field.id, op, value: { type: field.type, value: data, ...(field.unit ? { unit: field.unit } : {}), ...(field.currency ? { currency: field.currency } : {}), ...(field.basis ? { basis: field.basis } : {}) } };
@@ -259,10 +284,12 @@ export function websiteQueryCommand(text: string, context: Pick<CapabilityContex
     // above. Preserve genuine qualifiers (e.g. "winter menu") for retrieval.
     if (/^(?:(?:a|the|your|our) )?(?:menu|list|catalog|catalogue|gallery|collection|selection|options)(?: of)?$/.test(subject)) subject = '';
   } else if (/\b(?:menu|list|catalog|catalogue|gallery|collection|selection|options)\b/.test(subject)) return null;
+  // Unresolved conjunctions must not become alternatives in keyword retrieval either.
+  if (/\band\b/.test(subject)) return null;
   // Tokens are resolved against the complete publication, including full reading text.
   // Singular/plural equivalence is allowed only when that exact alternate token is published.
   const search = (input: string): Expression => ({ kind: 'search', id: randomUUID(), text: words(input).filter(word => !['the', 'your', 'our', 'options', 'instead', 'please'].includes(word)).map(word => index.tokens.has(word) ? word : index.tokens.has(singular(word)) ? singular(word) : index.tokens.has(`${word}s`) ? `${word}s` : word).join(' ') });
-  const parts = subject.split(/\s+(?:or|and)\s+/).map(search).filter(node => node.kind === 'search' && node.text);
+  const parts = subject.split(/\s+or\s+/).map(search).filter(node => node.kind === 'search' && node.text);
   // Resolving a collection does not explain the rest of a display request.
   // Any remaining qualifier needs a published member name/alias; prose such as
   // "all six ... in this guide" must reach the assistant intact, not become

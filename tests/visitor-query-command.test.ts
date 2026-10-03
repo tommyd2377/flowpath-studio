@@ -503,8 +503,8 @@ test('extra calculation, explanation and research tasks bypass shortcuts across 
         `Sort price descending and summarize the choices`,
       ]) assert.equal(websiteQueryCommand(text, context), null, `${kind}: ${text}`);
       assert.deepEqual(context.session, before, 'The full request reaches the model before any query mutation');
-      const alternatives = kind === 'products' ? 'chocolate and vanilla' : 'remote and studio';
-      assert.equal((await ask(`Show ${alternatives}`)).result.count.value, 27, 'A conjunction of filter values remains supported');
+      const alternatives = kind === 'products' ? 'chocolate or vanilla' : 'remote or studio';
+      assert.equal((await ask(`Show ${alternatives}`)).result.count.value, 27, 'Explicit alternatives of filter values remain supported');
       const limited = await ask('Only those under $40');
       assert.equal(limited.result.count.value, 13, 'Ordinary refinements keep the alternative filter and its price bound');
     } finally { await close(); }

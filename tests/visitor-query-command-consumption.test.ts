@@ -43,6 +43,7 @@ test('filter shortcuts consume every prefix and suffix constraint without changi
     'Show wool options without cotton', 'Show wool options safe for a sesame allergy',
     'Show wool options at Downtown', 'Show wool options for 20 people',
     'Only material is wool without cotton', 'Only material is wool and color is blue',
+    'Only material is \'wool\' and material is \'cotton\'', 'Only material is "wool" or "cotton"',
     'Sale price under $1800 without cotton', 'Sale price under $1800 at Downtown',
     'Remove sale price filter for blue rugs',
   ]) {
@@ -84,6 +85,55 @@ test('whole published values, numeric field labels and existing replacement suff
   assert.deepEqual((await run('Only Vitamin B12 per portion at least 12')).records.map(record => record.id), ['record-00002', 'record-00003']);
 });
 
+test('AND defers while explicit OR/all lists and complete quoted literals retain their published meaning', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'filter-conjunctions-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const space = websiteTaskFixture('products', 5);
+  // Leave the optional exhaustive list absent, matching publications whose values come from assertions.
+  delete space.fields.find(field => field.id === 'flavor')!.values;
+  space.fields.push({ id: 'dietary', label: 'Dietary', type: 'enum', cardinality: 'many', aliases: [], recordTypes: ['product'], operations: ['any', 'all'], filter: true, sort: false, facet: true, coverage: { known: 4, total: 5 } });
+  space.records.forEach((record, i) => {
+    record.name = ['Cobalt bowl', 'Amber bowl', 'Salt and Pepper Blend', 'Synthetic bowl 3', 'Synthetic bowl 4'][i];
+    record.assertions.find(assertion => assertion.fieldId === 'flavor')!.value = { type: 'enum', value: ['plain', 'sesame', 'salt and pepper', "chef's choice", 'plain'][i] };
+    const tags = [['vegan'], ['gluten-free'], ['vegan', 'gluten-free'], ['plant based, low sodium'], null][i];
+    record.assertions.push({ id: `dietary-${i}`, fieldId: 'dietary', value: tags === null ? null : { type: 'enum', value: tags }, authority: 'publisher', polarity: 'affirmed', conditions: [] });
+  });
+  const index = compileQueryIndex(space), store = new VisitorTaskStore(localTaskDocuments(directory));
+  const session = await store.create(space.publication), context = { index, session, signal: new AbortController().signal };
+  buildVisitorTaskView(context);
+  const run = async (request: string) => {
+    const command = websiteQueryCommand(request, context); assert.ok(command, request);
+    await visitorCapabilities.get(command.capabilityId)!.execute(context, command.input);
+    return buildVisitorTaskView(context).records.map(record => record.id);
+  };
+  const before = structuredClone(session);
+  for (const request of [
+    'Show vegan and gluten-free options', 'Show dietary vegan and gluten-free', 'Find cobalt and amber',
+    'Only flavor is \'plain\' and flavor is \'sesame\'', 'Only flavor is "plain" or "sesame"',
+    'Only flavor is "plain', 'Only flavor is plain"', 'Only flavor is plain\'', 'Only flavor is \'plain"', 'Only flavor is ""',
+    'Only dietary includes all of "vegan" and "gluten-free"',
+    'Only dietary includes any of "vegan", "gluten-free" without sesame',
+    'Only dietary includes any of vegan, gluten-free"',
+    'Only dietary includes any of "vegan",', 'Only dietary includes all of vegan,,gluten-free',
+  ]) {
+    assert.equal(websiteQueryCommand(request, context), null, request);
+    assert.deepEqual(session, before, 'Unresolved conjunctions and quotes cannot mutate the query');
+  }
+  assert.deepEqual(await run('Show vegan or gluten-free options'), ['record-00000', 'record-00001', 'record-00002']);
+  assert.deepEqual(await run('Only dietary includes all of vegan, gluten-free'), ['record-00002']);
+  assert.deepEqual(await run('Only dietary includes all of "vegan", \'gluten-free\''), ['record-00002']);
+  assert.deepEqual(await run('Only dietary includes any of "vegan", "plant based, low sodium"'), ['record-00000', 'record-00002', 'record-00003']);
+  await run('Show everything');
+  for (const [request, ids] of [
+    ['Only flavor is "plain"', ['record-00000', 'record-00004']],
+    ['Only flavor is \'salt and pepper\'', ['record-00002']],
+    ["Only flavor is chef's choice", ['record-00003']],
+    ['Only flavor is "chef\'s choice"', ['record-00003']],
+  ] as const) assert.deepEqual(await run(request), ids);
+  await run('Show everything');
+  assert.deepEqual(await run('Find cobalt or amber'), ['record-00000', 'record-00001']);
+  assert.equal(websiteQueryCommand('Show Salt and Pepper Blend', context)?.capabilityId, 'record.detail', 'Exact published names containing AND still win');
+});
+
 test('actual typed route and voice fastpath defer compound filters while retaining confirmed sequential filters', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'filter-channel-routes-')), previous = process.env;
   process.env = { NODE_ENV: 'test', VOICE_BACKEND: 'demo', VOICE_AI_MODE: 'demo', VOICE_DATA_DIR: directory };
@@ -122,14 +172,18 @@ test('actual typed route and voice fastpath defer compound filters while retaini
     await ack(view);
   }
   assert.deepEqual(view.records.map(record => record.id), ['record-00000', 'record-00001']);
-  for (const request of ['Show wool rugs sale price under $1800', 'Show blue rugs sale price under $1800']) {
+  const deferred = ['Show wool rugs sale price under $1800', 'Show blue rugs sale price under $1800',
+    'Show blue and red options', 'Only material is "wool" or "cotton"',
+    'Show wool options safe for a sesame allergy at Downtown under $1800'];
+  for (const request of deferred) {
     const before = await context.store.read(view.sessionId, context.publication);
     const result = await call({ action: 'command', sessionId: view.sessionId, generation: view.generation, operationId: randomUUID(), text: request });
     assert.equal(result.handled, false); assert.deepEqual(result.view.query, view.query);
     assert.deepEqual((await context.store.read(view.sessionId, context.publication)).operations, before.operations);
     view = result.view;
   }
-  for (const compound of [false, true]) {
+  for (const request of ['Only color is blue', ...deferred.slice(1)]) {
+    const compound = request !== 'Only color is blue';
     const before = await context.store.read(view.sessionId, context.publication);
     const socket = new FakeLiveSocket(); let calls = 0, sequence = 0;
     const events: VisitorRealtimeEvent[] = [];
@@ -145,7 +199,7 @@ test('actual typed route and voice fastpath defer compound filters while retaini
       fetch: async (_url, init) => {
         assert.equal(compound, true);
         const body = JSON.parse(String(init?.body));
-        assert.ok(JSON.stringify(body.input).includes('Show blue rugs sale price under $1800'), 'The fallback receives the entire original request');
+        assert.ok(JSON.stringify(body.input).includes(JSON.stringify(request).slice(1, -1)), 'The fallback receives the entire original request');
         calls++; return Response.json({ status: 'completed', output: [liveAnswer('Synthetic full-request fallback; no display changes.')] });
       },
       emit: event => {
@@ -167,7 +221,7 @@ test('actual typed route and voice fastpath defer compound filters while retaini
     });
     try {
       socket.open(); await control.ready; control.start();
-      socket.user(compound ? 'Show blue rugs sale price under $1800' : 'Only color is blue');
+      socket.user(request);
       await done;
       assert.equal(calls, compound ? 1 : 0, 'Only compound input reaches the injected offline model');
       const after = await context.store.read(view.sessionId, context.publication);
