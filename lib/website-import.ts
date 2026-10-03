@@ -1,4 +1,5 @@
-import { htmlDocument, textBlocks, parseHtml } from './html-document';
+import { htmlDocument, textBlocks, parseHtml, cleanText, nodeText, type HtmlNode } from './html-document';
+import { hasWebsiteOfferingPrice } from './website-structure';
 import 'server-only';
 import { createHash, randomUUID } from 'node:crypto';
 import { validateCatalog, type KnowledgeCatalog } from '@thevoice/platform-ui/contracts';
@@ -55,7 +56,40 @@ function homepageLogoName(root: ReturnType<typeof parseHtml>, pageUrl: string) {
   // Conflicting labels need publisher review; do not choose a brand by position.
   return names.size === 1 ? [...names][0] : '';
 }
-export type ExtractedWebsitePage = { url: string; title: string; text: string; name: string; headline: string; description: string; accent?: string; rawText?: string; contact?: string; hours?: string; blocks?: ReturnType<typeof textBlocks>; links: { url: string; title: string }[]; images: ReturnType<typeof extractWebsiteImages> };
+export type WebsiteOfferingScope = { lineStart: number; lineEnd: number; headingLine: number; excerpt: string };
+/** Preserve explicit card ownership separately from the unchanged reading text.
+ * A single priced heading in an article/list item/group is a boundary, not product identity.
+ * Ambiguous text matches provide no scope; ordinary unscoped pages still work. */
+function offeringScopes(root: HtmlNode, text: string): WebsiteOfferingScope[] {
+  const candidates = new Map(root.querySelectorAll('article,li,[role="group"]').slice(0, 2000).flatMap(node => {
+    if (node.querySelectorAll('h1,h2,h3,h4,h5,h6').length !== 1) return [];
+    const excerpt = cleanText(nodeText(node)), lines = excerpt.split('\n'), heading = lines.findIndex(line => /^#{1,6}\s/.test(line));
+    // A nested policy/list subsection is not an offering boundary merely because it has a heading.
+    return heading >= 0 && hasWebsiteOfferingPrice(lines[heading], lines[heading + 1]) ? [[node, excerpt] as const] : [];
+  }));
+  const counts = new Map<string, number>();
+  for (const [node, excerpt] of candidates) {
+    let parent = node.parentNode;
+    while (parent && !candidates.has(parent)) parent = parent.parentNode;
+    // The outer single-offering card retains badges and terms outside its nested heading wrapper.
+    if (parent) continue;
+    if (excerpt) counts.set(excerpt, (counts.get(excerpt) ?? 0) + 1);
+  }
+  const padded = `\n${text}\n`, scopes: WebsiteOfferingScope[] = [];
+  for (const [excerpt, count] of counts) {
+    const lines = excerpt.split('\n'), headings = lines.flatMap((line, index) => /^#{1,6}\s/.test(line) ? [index] : []);
+    if (headings.length !== 1) continue;
+    const needle = `\n${excerpt}\n`, matches: number[] = [];
+    for (let at = padded.indexOf(needle); at >= 0 && matches.length <= count; at = padded.indexOf(needle, at + 1)) matches.push(at);
+    if (matches.length !== count) continue;
+    for (const at of matches) {
+      const lineStart = 1 + (text.slice(0, at).match(/\n/g)?.length ?? 0);
+      scopes.push({ lineStart, lineEnd: lineStart + lines.length - 1, headingLine: lineStart + headings[0], excerpt });
+    }
+  }
+  return scopes.sort((a, b) => a.lineStart - b.lineStart).slice(0, 500);
+}
+export type ExtractedWebsitePage = { url: string; title: string; text: string; name: string; headline: string; description: string; accent?: string; rawText?: string; contact?: string; hours?: string; offeringScopes?: WebsiteOfferingScope[]; blocks?: ReturnType<typeof textBlocks>; links: { url: string; title: string }[]; images: ReturnType<typeof extractWebsiteImages> };
 export function extractWebsitePage(html: string, url: string): ExtractedWebsitePage {
   const root = parseHtml(html);
   const meta = new Map(root.querySelectorAll('meta').map(node => { const a=node.attributes;return [a.property || a.name,a.content || '']; }));
@@ -75,6 +109,7 @@ export function extractWebsitePage(html: string, url: string): ExtractedWebsiteP
   const document = htmlDocument(html);
   const text = document.text;
   if (!text) throw new AppError('This webpage did not contain readable text.');
+  const scopes = offeringScopes(document.root, text);
   const accent = meta.get('theme-color');
   // Read primary navigation before product carousels, archives and footer links.
   const navigation = root.querySelectorAll('nav a[href],header a[href],[role="navigation"] a[href],[role="banner"] a[href],[data-elementor-type="header"] a[href]');
@@ -82,7 +117,7 @@ export function extractWebsitePage(html: string, url: string): ExtractedWebsiteP
     const a=node.attributes, target=pageUrl(a.href,url,url);
     return target ? [{url:target,title:(node.text.trim() || a['aria-label'] || a.title || target).slice(0,160)}] : [];
   });
-  return { url, rawText: document.rawText, blocks: textBlocks(text), contact: document.contact, hours: document.hours, title: title || headline || new URL(url).pathname, text, name: (businessName || meta.get('og:site_name') || homepageLogoName(root, url) || title.split(/\s[|–—]\s/)[0] || new URL(url).hostname).slice(0, 80),
+  return { url, rawText: document.rawText, blocks: textBlocks(text), contact: document.contact, hours: document.hours, ...(scopes.length ? { offeringScopes: scopes } : {}), title: title || headline || new URL(url).pathname, text, name: (businessName || meta.get('og:site_name') || homepageLogoName(root, url) || title.split(/\s[|–—]\s/)[0] || new URL(url).hostname).slice(0, 80),
     headline: headline || new URL(url).hostname, description: (meta.get('description') || meta.get('og:description') || text.replace(/^Title:[^\n]*\n?/, '').trim()).slice(0, 1500),
     ...(/^#[\da-f]{6}$/i.test(accent ?? '') ? { accent } : {}), links, images: extractWebsiteImages(html, url) };
 }

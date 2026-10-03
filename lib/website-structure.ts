@@ -65,6 +65,13 @@ function adjacentPrices(line: string, scope?: CurrencyScope): ListedPrice[] {
   const single = new RegExp(`^(${pricePattern})(?:\\s*\\*|\\s+(?:[pP][lL][uU][sS]|[pP][eE][rR])\\s+[^$£€]+)?$`, 'u').exec(line.replace(/^(?:starting at|from)\s+/i, ''));
   return single ? [listedPrice(single[1], scope)] : [];
 }
+/** Card scope discovery must use the extractor's price grammar. A monetary
+ * mention in a shipping policy is not an independently priced offering. */
+export function hasWebsiteOfferingPrice(heading: string, nextLine?: string): boolean {
+  const title = heading.replace(/^#{1,6}\s+/, ''), prices = [...title.matchAll(new RegExp(pricePattern, 'gu'))];
+  if (!prices.length) return !!nextLine && adjacentPrices(nextLine).length > 0;
+  return prices.length === 1 && !!title.slice(0, prices[0].index).replace(/[~–—:\-\s]+$/, '').replace(/\b(?:starting at|from)\s*$/i, '').trim();
+}
 const priceField = (price: ListedPrice) => `source_price_${price.unit ? `${key(price.unit.toLowerCase())}_` : ''}${price.currency?.toLowerCase() ?? 'unknown'}`;
 const priceValue = (price: ListedPrice) => price.currency ? price.price : `${price.unit ? price.unit + ': ' : ''}${price.literal}`;
 const priceDefinition = (price: ListedPrice): AttributeDefinition => ({ id: priceField(price),
@@ -95,13 +102,22 @@ function offeringTerms(literal: string, name: string, category: string) {
     ...(extended ? { blocks: textBlocks(literal) } : {}) };
 }
 /** Explicit price headings/tiers and adjacent prices only. No inferred stock, booking or ordering capability. */
-export function websiteOfferings(pages: Pick<ExtractedWebsitePage, 'url' | 'text'>[], options: OfferingOptions = {}) {
+export function websiteOfferings(pages: Pick<ExtractedWebsitePage, 'url' | 'text' | 'offeringScopes'>[], options: OfferingOptions = {}) {
   const entities: CatalogEntity[] = [], attributes = new Map<string, AttributeDefinition>(), groups = new Map<string, string[]>();
   const evidence: WebsiteOfferingEvidence[] = [], issues: string[] = [];
   const limit = (message: string) => { if (options.strict) throw new AppError(message); if (!issues.includes(message)) issues.push(message); };
   let pricedLines = 0, unmatched = 0, unconfirmedCurrency = 0, unresolvedGiftCards = 0;
   for (const page of pages) {
     const sourceLines = page.text.split('\n');
+    const cardScopes = page.offeringScopes ?? [];
+    if (cardScopes.length > 500 || cardScopes.some((scope, index) => !Number.isInteger(scope.lineStart) || !Number.isInteger(scope.lineEnd) || !Number.isInteger(scope.headingLine)
+      || scope.lineStart < 1 || scope.lineEnd > sourceLines.length || scope.headingLine < scope.lineStart || scope.headingLine > scope.lineEnd
+      || sourceLines.slice(scope.lineStart - 1, scope.lineEnd).join('\n') !== scope.excerpt
+      || !/^#{1,6}\s/.test(sourceLines[scope.headingLine - 1]) || scope.excerpt.split('\n').filter(line => /^#{1,6}\s/.test(line)).length !== 1
+      || index > 0 && scope.lineStart <= cardScopes[index - 1].lineEnd)) {
+      limit('Website card boundaries do not match the captured source. Review the page; no scoped offerings were accepted.');
+      continue;
+    }
     const records = sourceLines.flatMap((raw, sourceIndex) => {
       const line = raw.trim(); if (!line) return [];
       const multi = /^(#{1,6})\s+(.+?)\s*~\s*(.+)$/.exec(line);
@@ -118,18 +134,28 @@ export function websiteOfferings(pages: Pick<ExtractedWebsitePage, 'url' | 'text
       const match = /^(#{1,6})\s+(.+)$/.exec(lines[index]);
       if (!match) { if (new RegExp(pricePattern, 'u').test(lines[index]) && !capturedPriceLines.has(index)) { pricedLines++; unmatched++; } continue; }
       const level = match[1].length, title = match[2].trim();
+      const sourceLine = records[index].sourceIndex + 1;
+      const card = cardScopes.find(scope => scope.headingLine === sourceLine);
+      // Descendant headings can be the current item's own pricing/conditions.
+      // Preserve their established heading ownership even when nested in a group.
+      const nextCard = cardScopes.find(scope => scope.lineStart > sourceLine && /^#+/.exec(sourceLines[scope.headingLine - 1])![0].length <= level);
+      // Only another explicit offering starts a new owner. Text following a card
+      // may still contain its qualifications; do not discard that reading evidence.
+      const endLine = nextCard ? nextCard.lineStart - 1 : sourceLines.length;
+      const leadingIndexes = card ? records.flatMap((record, at) => record.sourceIndex + 1 >= card.lineStart && record.sourceIndex + 1 < card.headingLine ? [at] : []) : [];
       while (stack.length && stack.at(-1)!.level >= level) stack.pop();
       // Descendant headings are still part of this item's source description.
       // Retain their qualifications until the next sibling/ancestor boundary.
       const followingIndexes: number[] = [];
       for (let after = index + 1; after < lines.length; after++) {
+        if (records[after].sourceIndex + 1 > endLine) break;
         const heading = /^(#{1,6})\s/.exec(lines[after]);
         if (heading && heading[1].length <= level) break;
         followingIndexes.push(after);
       }
       const prices = [...title.matchAll(new RegExp(pricePattern, 'gu'))];
       if (prices.length) pricedLines++;
-      const adjacent = !prices.length && lines[index + 1] && !/^#{1,6}\s/.test(lines[index + 1]) ? adjacentPrices(lines[index + 1], scopes[index]) : [];
+      const adjacent = !prices.length && followingIndexes[0] === index + 1 && !/^#{1,6}\s/.test(lines[index + 1]) ? adjacentPrices(lines[index + 1], scopes[index]) : [];
       if (adjacent.length) {
         if (ambiguousZeroGiftCard(title, adjacent, followingIndexes.slice(1).map(at => lines[at]))) {
           unresolvedGiftCards++; stack.push({ level, title, index }); continue;
@@ -140,7 +166,7 @@ export function websiteOfferings(pages: Pick<ExtractedWebsitePage, 'url' | 'text
           const following = followingIndexes.slice(1).map(at => lines[at]);
           const footnoteIndexes = lines[index + 1].includes('*') ? lines.flatMap((line, at) => /^\*.*(?:starting price|additional charges)/i.test(line) ? [at] : []) : [];
           const currencyIndexes = [...new Set(adjacent.flatMap(price => price.currencyIndexes))];
-          const literal = [...new Set([title, lines[index + 1], ...following, ...footnoteIndexes.map(at => lines[at]), ...currencyIndexes.map(at => lines[at])])].join(' ');
+          const literal = [...new Set([...leadingIndexes.map(at => lines[at]), title, lines[index + 1], ...following, ...footnoteIndexes.map(at => lines[at]), ...currencyIndexes.map(at => lines[at])])].join(' ');
           if (title.length > 160 || category.length > 400) { limit('Some offering names or categories exceed the catalog field limits. Split or review the import; no truncated offering was accepted.'); stack.push({ level, title, index }); continue; }
           const details = offeringTerms(literal, title, category);
           for (const field of fields) attributes.set(field.id, field);
@@ -153,7 +179,7 @@ export function websiteOfferings(pages: Pick<ExtractedWebsitePage, 'url' | 'text
           const group = category || 'Offerings'; groups.set(group, [...groups.get(group) ?? [], id]);
           evidence.push({ entityId: id, pageUrl: page.url, fields: [sourceField('name', index), ...adjacent.flatMap(price => priceEvidence(price, index + 1)),
             ...stack.filter(item => item.price === undefined).slice(-2).map(item => sourceField('attributes.source_category', item.index)),
-            sourceField('attributes.source_price_terms', index, index + 1 + following.length), ...[...footnoteIndexes, ...currencyIndexes].map(at => sourceField('attributes.source_price_terms', at))] });
+            sourceField('attributes.source_price_terms', leadingIndexes[0] ?? index, index + 1 + following.length), ...[...footnoteIndexes, ...currencyIndexes].map(at => sourceField('attributes.source_price_terms', at))] });
           capturedPriceLines.add(index + 1); pricedLines++;
           if (adjacent.some(price => !price.currency)) { unconfirmedCurrency++; unmatched++; }
         } else limit('The structured offering or attribute limit was reached. Split or review the import; some offerings remain in source evidence only.');
@@ -198,7 +224,7 @@ export function websiteOfferings(pages: Pick<ExtractedWebsitePage, 'url' | 'text
         const id = `offering-${key(`${page.url}:${category}:${title}`)}`;
         const priceText = prices.length ? title : inherited!.literal!;
         const footnoteIndexes = priceText.includes('*') ? lines.flatMap((line, at) => /^\*.*(?:starting price|additional charges)/i.test(line) ? [at] : []) : [];
-        const literal = [...new Set([priceText,...followingIndexes.map(at => lines[at]),...footnoteIndexes.map(at => lines[at]),...price.currencyIndexes.map(at => lines[at])])].join(' ');
+        const literal = [...new Set([...leadingIndexes.map(at => lines[at]),priceText,...followingIndexes.map(at => lines[at]),...footnoteIndexes.map(at => lines[at]),...price.currencyIndexes.map(at => lines[at])])].join(' ');
         if (name.length > 160 || category.length > 400) { limit('Some offering names or categories exceed the catalog field limits. Split or review the import; no truncated offering was accepted.'); unmatched++; stack.push({ level, title, index }); continue; }
         const details = offeringTerms(literal, name, category);
         entities.push({ id, kind: 'offering', name, summary: details.summary, ...(details.blocks ? { blocks: details.blocks } : {}),
@@ -208,7 +234,7 @@ export function websiteOfferings(pages: Pick<ExtractedWebsitePage, 'url' | 'text
         const priceIndex = prices.length ? index : inherited!.index;
         evidence.push({ entityId: id, pageUrl: page.url, fields: [sourceField('name', index), ...priceEvidence(price, priceIndex),
           ...stack.filter(item => item.price === undefined).slice(-2).map(item => sourceField('attributes.source_category', item.index)),
-          ...[priceIndex, ...followingIndexes, ...footnoteIndexes, ...price.currencyIndexes].map(at => sourceField('attributes.source_price_terms', at))] });
+          ...[...leadingIndexes, priceIndex, ...followingIndexes, ...footnoteIndexes, ...price.currencyIndexes].map(at => sourceField('attributes.source_price_terms', at))] });
         if (prices.length && !price.currency) { unconfirmedCurrency++; unmatched++; }
       } else if (prices.length) unmatched++;
       stack.push({ level, title, index });
@@ -228,7 +254,7 @@ export function websiteOfferings(pages: Pick<ExtractedWebsitePage, 'url' | 'text
       ...(unmatched > unconfirmedCurrency ? ['Some ranges, multiple prices, or prose could not be mapped conservatively. Review the captured source before publishing.'] : [])] };
 }
 
-export function addWebsiteOfferings(catalog: KnowledgeCatalog, pages: Pick<ExtractedWebsitePage, 'url' | 'text'>[], options: OfferingOptions = {}) {
+export function addWebsiteOfferings(catalog: KnowledgeCatalog, pages: Pick<ExtractedWebsitePage, 'url' | 'text' | 'offeringScopes'>[], options: OfferingOptions = {}) {
   const extracted = websiteOfferings(pages, options);
   // Provider-owned identities are never name-merged. A scoped deterministic source ID makes repeat repair idempotent.
   const existing = new Set(catalog.entities.map(e => e.id));
