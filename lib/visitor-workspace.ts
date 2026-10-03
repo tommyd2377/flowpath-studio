@@ -239,10 +239,13 @@ export function planWorkspaceIntent(text: string, state: WorkspaceState, authori
     // Intent classification reads fact references, not prose. Keep full reading
     // blocks in the separate bounded published-content search/pagination path.
     const retrieved = retrieveKnowledge(catalog, { revisionId: catalog.id, query: text, intent: photo ? 'photos' : 'answer', expansion: 1, includeBlocks: false }, media);
-    const terms = query.split(/\W+/).filter(term => !['show', 'give', 'tell', 'please', 'also', 'too', 'the', 'and', 'your', 'me', 'about', 'what', 'where', 'that', 'from', 'open'].includes(term) && term.length > 2);
+    // Match whole label/field tokens: confirm is not unconfirmed, nor now unknown.
+    // Keep punctuation between digits so 100.50, 100.99 and 100 remain distinct.
+    const tokens = (value: string) => value.toLowerCase().match(/(?:[\p{L}\p{N}]|(?<=\p{N})[.,/](?=\p{N}))+/gu) ?? [];
+    const terms = tokens(query).filter(term => !['show', 'give', 'tell', 'please', 'also', 'too', 'the', 'and', 'your', 'me', 'about', 'what', 'where', 'that', 'from', 'open'].includes(term) && term.length > 2);
     const subjects = named.filter(record => record.reference.kind === 'entity');
     matches = authority.records.filter(record => record.reference.kind === 'fact' && (!subjects.length || subjects.some(subject => subject.reference.id === record.parent?.id)) && retrieved.facts.some(fact => fact.id === record.reference.id)
-      && terms.some(term => `${record.name.split(' · ')[0]} ${record.keywords}`.toLowerCase().includes(term)));
+      && tokens(`${record.name.split(' · ')[0]} ${record.keywords ?? ''}`).some(token => terms.includes(token)));
     if (!matches.length && !photo && !map) matches = named.filter(record => record.reference.kind === 'entity');
   }
   if (map) {

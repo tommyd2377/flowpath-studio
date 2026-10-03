@@ -1,0 +1,9 @@
+# Deterministic workspace fact matching
+
+`planWorkspaceIntent` uses a small lexical check to choose published fact views in the offline visitor workspace. After bounded knowledge retrieval, the check matches complete, case-insensitive tokens from the request against the fact's label and field key. It excludes the entity-name suffix from the label. An exact named entity still limits the candidate facts to that entity.
+
+This prevents `confirm` from matching `unconfirmed` in a price label and `now` from matching `unknown` in `source_price_unknown`. Both collisions previously caused unrelated price views for confirmation or current-stock questions. It is not a semantic answer generator: an unmatched request keeps the existing explicit fallback, or the existing detail view for an exact named subject. Published text never establishes live inventory or confirms an order.
+
+The existing request stopwords and minimum token length of three remain. Letters and digits form tokens; ordinary punctuation and field separators such as underscores separate them. Periods, commas and slashes between digits remain within a token, preserving literal distinctions such as `100.50` versus `100.99`, `1,000` versus `1000`, and `2/5` versus `2/50`. These tokens match literally, with no numeric equivalence, unit conversion, range interpretation or quantity calculation. Other punctuation, including signs and percent suffixes, remains a separator. The matcher does not compare fact values, add synonyms, infer availability, or change retrieval ranking and publication validation.
+
+The synthetic regressions in [workspace-fact-token-match.test.ts](../tests/workspace-fact-token-match.test.ts) exercise the observed confirmation and stock collisions, exact factual labels and field keys, named-subject scope and detail fallback, retained views on unmatched requests, and numeric punctuation. These offline checks do not establish live provider quality or current business facts.
