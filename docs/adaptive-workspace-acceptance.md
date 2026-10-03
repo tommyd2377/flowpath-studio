@@ -131,6 +131,12 @@ tests/semantic-lifecycle.test.ts
 tests/visitor-realtime-control.test.ts
 ```
 
+## Calendar-question routing follow-up (2026-10-03)
+
+The offline command guard leaves questions such as “Will you close next Saturday?” and “Can you close every Sunday?” on the ordinary content path instead of closing the focused object. Calendar periods following `this`, `next` or `every` defer; “close this panel” and the published title “Next Steps” remain valid close targets. This is a routing safeguard, not a source of business hours or general language understanding.
+
+Six focused command tests passed, including sixteen calendar formulations that retain the focused card and three explicit closes that remove it. Scoped lint, TypeScript and the isolated production webpack build passed. No new browser, voice or live-model test was run for this follow-up.
+
 ## Remaining live and platform limits
 
 - Live GPT-Live/Luna speech comprehension, natural delivery of the three greeting points, real audio latency and physical-device acoustics need a separately authorized bounded live test. Offline success does not establish these.

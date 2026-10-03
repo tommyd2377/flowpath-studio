@@ -8,6 +8,9 @@ export function workspaceControlIntent(text: string): WorkspaceControlIntent | n
     .replace(/(?:,?\s+please)$/, '');
   if (/^(?:reset(?: the (?:workspace|view))?|start over|clear (?:the )?workspace|close everything)$/.test(query)) return 'reset';
   if (/^(?:(?:go )?back|return)(?: to (?:the )?(?:previous (?:view|card)|workspace))?$/.test(query)) return 'return';
+  // Calendar phrases ask about business hours, not the focused object. Match
+  // the period as well so "this panel" and a title such as "Next Steps" survive.
+  if (/^close\s+(?:this|next|every)\s+(?:(?:mon|tues|wednes|thurs|fri|satur|sun)days?|(?:day|week(?:day|end)?|month|year|morning|afternoon|evening|night|holiday|spring|summer|autumn|fall|winter)s?|january|february|march|april|may|june|july|august|september|october|november|december)\b/.test(query)) return null;
   if (/^(?:close|dismiss)(?:$|\s+(?!to\b|at\b|on\b|by\b|for\b|over\b|until\b|during\b|early\b|late\b|today\b|tomorrow\b|tonight\b).+)/.test(query)
     || /^(?:(?:i am|i'm|im) (?:all )?)?done with (?:this|that|the)\b/.test(query)) return 'close';
   if (/^expand(?:$|\s+(?!on\b|upon\b|about\b).+)/.test(query) || query === 'bigger' || query === 'more context' || /^make\s+.+\s+bigger$/.test(query)) return 'expand';

@@ -50,6 +50,42 @@ test('question words neither close nor focus an existing workspace object', () =
   assert.deepEqual(close.batch.operations, [{ kind: 'close', instanceId: 'visible-card' }]);
 });
 
+test('calendar close questions leave the focused object intact while explicit closes still work', () => {
+  const contentCatalog = structuredClone(catalog);
+  contentCatalog.entities.find(entity => entity.id === 'blue')!.name = 'Next Steps';
+  const authority = publishedWorkspace(sampleContent('general'), contentCatalog, media);
+  const record = authority.records.find(entry => entry.reference.kind === 'entity' && entry.reference.id === 'blue')!;
+  const initial = emptyWorkspace(authority.publicationId);
+  const state = applyWorkspaceBatch(initial, workspaceBatch(initial, [{ kind: 'add', object: objectInput(record, record.component, 'visible-card') }, { kind: 'focus', instanceId: 'visible-card' }]), authority).state;
+  const original = structuredClone(state);
+  const scene: WorkspaceScene = { revision: 1, workspaceRevision: state.revision, focusedId: state.focusedId, visibility: 'visible', objects: [{ instanceId: 'visible-card', name: record.name, references: [record.reference], order: 1, mounted: true, open: true, expanded: state.objects[0].expanded, selected: false, visibility: 'full', position: 'center', rect: { x: 0, y: 0, width: 250, height: 200 }, controls: ['focus', 'expand', 'collapse', 'close'], scroll: null }] };
+  for (const question of [
+    'Will you close next Saturday?', 'Will you close this Saturday?', 'Can you close every Sunday?',
+    'Could you please close next Thursday morning?', 'Will you close every weekday?',
+    'Will you close next week?', 'Will you close this weekend?', 'Do you close every month?',
+    'Will you close every month?', 'Will you close next year?', 'Will you close this afternoon?',
+    'Will you close every night?', 'Will you close next January?', 'Will you close every summer?',
+    'Will you close this holiday?', 'Will you close next Saturday at seven?',
+  ]) {
+    assert.equal(workspaceControlIntent(question), null, question);
+    const reply = planWorkspaceIntent(question, state, authority, scene, contentCatalog, media);
+    assert.equal(reply.batch, undefined, question);
+    assert.notEqual(reply.message, 'Which open object do you mean? Choose its title or open it with its control.', question);
+    assert.deepEqual(state, original, question);
+    assert.equal(state.focusedId, 'visible-card');
+    assert.equal(state.objects.length, 1);
+  }
+  for (const command of ['Could you close this panel for me?', 'Close Next Steps', 'Please close Next Steps.']) {
+    assert.equal(workspaceControlIntent(command), 'close', command);
+    const reply = planWorkspaceIntent(command, state, authority, scene, contentCatalog, media);
+    assert.ok(reply.batch, command);
+    assert.deepEqual(reply.batch.operations, [{ kind: 'close', instanceId: 'visible-card' }]);
+    const closed = applyWorkspaceBatch(state, reply.batch, authority, scene.revision).state;
+    assert.equal(closed.objects.length, 0, command);
+    assert.equal(closed.focusedId, null, command);
+  }
+});
+
 test('deictic opens and standalone resize commands keep their observed workspace operations', () => {
   const authority = publishedWorkspace(sampleContent('general'), catalog, media);
   const record = authority.records.find(entry => entry.reference.kind === 'entity' && entry.reference.id === 'blue')!;
