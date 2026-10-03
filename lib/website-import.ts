@@ -94,7 +94,6 @@ export function extractWebsitePage(html: string, url: string): ExtractedWebsiteP
   const root = parseHtml(html);
   const meta = new Map(root.querySelectorAll('meta').map(node => { const a=node.attributes;return [a.property || a.name,a.content || '']; }));
   const title = (root.querySelector('title')?.text.trim() ?? '').slice(0,160);
-  const headline = (root.querySelector('h1')?.text.trim() || title).slice(0,140);
   let businessName = '';
   for (const node of root.querySelectorAll('script[type="application/ld+json"]').slice(0,20)) {
     try {
@@ -107,6 +106,7 @@ export function extractWebsitePage(html: string, url: string): ExtractedWebsiteP
   for(const node of root.querySelectorAll('script,style,noscript,template'))node.remove();
   // Keep contact/navigation/footer text as source evidence; exact repeated pages are deduplicated later.
   const document = htmlDocument(html);
+  const headline = (document.headline || title).slice(0,140);
   const text = document.text;
   if (!text) throw new AppError('This webpage did not contain readable text.');
   const scopes = offeringScopes(document.root, text);
