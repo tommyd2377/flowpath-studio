@@ -63,6 +63,61 @@ function removeFormFeedback(root: HtmlNode) {
     }
   }
 }
+const assistiveClasses = new Set(['sr-only', 'visually-hidden', 'screen-reader-text', 'screen-reader-only']);
+const classTokens = (node: HtmlNode) => (node.getAttribute('class') ?? '').split(/\s+/);
+const assistiveOnly = (node: HtmlNode) => classTokens(node).some(value => assistiveClasses.has(value));
+/** Headline eligibility is separate from evidence retention: visually hidden
+ * qualifications still belong in the text, even when they are not a hero. */
+function visiblePageHeading(root: HtmlNode) {
+  const main = root.querySelector('main,[role="main"]');
+  const eligible = (node: HtmlNode) => {
+    for (let current: HtmlNode | undefined = node; current; current = current.parentNode) {
+      if (assistiveOnly(current) || current.getAttribute('hidden') !== undefined || current.getAttribute('aria-hidden') === 'true'
+        || /^(?:nav|aside|footer|form|button|template|pre|code|blockquote)$/i.test(current.rawTagName ?? '')
+        || /^(?:navigation|contentinfo|button)$/i.test(current.getAttribute('role') ?? '')
+        || current.getAttribute('data-elementor-type') === 'footer'
+        || /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*(?:hidden|collapse))\s*(?:!important\s*)?(?:;|$)/i.test(current.getAttribute('style') ?? '')) return false;
+    }
+    return Boolean(cleanText(nodeText(node)).replace(/^#{1,6}\s*/, '').trim());
+  };
+  const scope = main ?? root;
+  const heading = scope.querySelectorAll('h1').find(eligible)
+    ?? (main ? scope.querySelectorAll('h2,h3,h4,h5,h6').find(eligible) : undefined);
+  return heading ? cleanText(nodeText(heading)).replace(/^#{1,6}\s*/, '').trim() : '';
+}
+function skipLinkTargets(root: HtmlNode) {
+  return new Set(root.querySelectorAll('a[href]').flatMap(link => {
+    const href = link.getAttribute('href') ?? '';
+    const label = (link.getAttribute('aria-label') || link.text).trim();
+    if (!href.startsWith('#') || !/^skip (?:to )?(?:the )?(?:main )?content$/i.test(label)) return [];
+    try { return [decodeURIComponent(href.slice(1))]; } catch { return []; }
+  }));
+}
+/** Remove only complete, explicitly assistive interface labels. Never delete a
+ * whole accessibility class, gallery, caption, or a label with qualifications. */
+function removeAccessibleChrome(root: HtmlNode, skipTargets: Set<string>) {
+  const main = root.querySelector('main,[role="main"]');
+  if (main && visiblePageHeading(root)) {
+    for (const heading of main.childNodes) {
+      if (heading.rawTagName?.toLowerCase() === 'h1' && assistiveOnly(heading) && /^(?:home|homepage)$/i.test(heading.text.trim())) heading.remove();
+    }
+  }
+  for (const node of root.querySelectorAll('span')) {
+    if (!assistiveOnly(node) || node.childNodes.some(child => child.nodeType === 1)) continue;
+    const label = node.text.trim().replace(/\s+/g, ' ');
+    if (skipTargets.has(node.getAttribute('id') ?? '') && /^main content starts here, tab to start navigating\.?$/i.test(label)) {
+      node.remove(); continue;
+    }
+    const counter = /^slide ([1-9]\d*) of ([1-9]\d*)$/i.exec(label);
+    if (!counter || Number(counter[1]) > Number(counter[2])) continue;
+    for (let ancestor = node.parentNode; ancestor; ancestor = ancestor.parentNode) {
+      if (classTokens(ancestor).some(value => ['gallery', 'carousel', 'slideshow'].includes(value))
+        || /^(?:gallery|carousel|slideshow)$/i.test(ancestor.getAttribute('aria-roledescription') ?? '')) {
+        node.remove(); break;
+      }
+    }
+  }
+}
 const footerSelector = 'footer,[data-elementor-type="footer"],[role="contentinfo"]';
 const genericMetadataHeading = /^(?:(?:(?:opening|business|store|operating) )?hours|contact(?: us)?|find us|visit(?: us)?|about this site|search|quick links)$/i;
 /** A nearby named heading may be a location. Keep its values out of a flattened
@@ -184,6 +239,7 @@ export function htmlDocument(html: string, stripChrome = true) {
   const contact = inline.phones.length ? inline.phones.length === 1 && !mixedContactScope && combinedContacts.length <= 180 ? combinedContacts : '' : [...new Set(contacts)].join(' · ').slice(0,180);
   for (const node of root.querySelectorAll('title,head,form,select,button,input,textarea,[hidden],[aria-hidden="true"]')) node.remove();
   if (stripChrome) {
+    const skipTargets = skipLinkTargets(root);
     retainFooterInformation(root);
     for (const node of root.querySelectorAll('nav,[role="navigation"]')) node.remove();
     for (const node of root.querySelectorAll('header,[role="banner"],[data-elementor-type="header"]')) {
@@ -193,9 +249,10 @@ export function htmlDocument(html: string, stripChrome = true) {
       while (parent && !/^(?:main|article|section)$/i.test(parent.rawTagName ?? '') && parent.getAttribute('role') !== 'main') parent = parent.parentNode;
       if (node.rawTagName?.toLowerCase() !== 'header' || !parent) node.remove();
     }
+    removeAccessibleChrome(root, skipTargets);
   }
   const text = cleanText(nodeText(root));
-  return { root, title, text, rawText, contact, hours };
+  return { root, title, text, rawText, contact, hours, headline: visiblePageHeading(root) };
 }
 export function textBlocks(text: string) {
   // Match the catalog reading-block bounds without dropping a paragraph's tail.
