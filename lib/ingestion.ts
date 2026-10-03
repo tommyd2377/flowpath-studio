@@ -17,6 +17,7 @@ import { getEditorStatus } from './editor-config';
 import { getSite, downloadFile, modifySite, reserveAiRequest } from './site-store';
 import { updateDraft } from './local-store';
 import { extractSource, interpretSourceWithProvenance, unlinkedSourceProvenance, MAX_EXTRACTED_CHARACTERS, type ExtractedSource } from './source-extractors';
+import { sourceQualityWarnings, sourceQualityMessage, type SourceQualityWarning } from './source-quality';
 import { assertPublicWebsiteUrl, fetchWebsiteText } from './source-adapters';
 import { catalogForPublication, refreshAssertionReviews, resolveAssertionReviews, type AssertionDecision } from './knowledge-assertions';
 import { validateSourceProvenance, MAX_SOURCE_PROVENANCE_BYTES, type SourceProvenance } from './source-provenance';
@@ -223,7 +224,7 @@ export function parseSemanticProviderReply(output: string, source?: SourceProven
 }
 
 type SemanticResult = { catalog: KnowledgeCatalog; provenance?: SourceProvenance };
-type SemanticSource = { sourceId: string; name: string; text: string; provenance: SourceProvenance };
+type SemanticSource = { sourceId: string; name: string; text: string; provenance: SourceProvenance; warnings?: SourceQualityWarning[] };
 type SemanticContext = { siteId: string; requestId: string; operation: 'interpret' | 'correct'; website?: boolean; related?: boolean; structuredOfferings?: ReturnType<typeof websiteOfferings> };
 const semanticBatchSchema = z.object({ sources: z.array(z.object({ sourceId: id, interpretation: semanticReplySchema }).strict()).min(1).max(6) }).strict();
 
@@ -236,7 +237,8 @@ export async function interpretRelatedSources(sources: SemanticSource[], request
     || Buffer.byteLength(JSON.stringify(sources.map(source => source.provenance))) > MAX_SOURCE_PROVENANCE_BYTES) {
     throw new AppError('These related documents exceed the combined interpretation limit (60,000 extracted characters or 400 KB of source evidence). Review smaller groups. No AI request was made; nothing was truncated.', 413);
   }
-  const output = await request({ sources: sources.map(source => ({ sourceId: source.sourceId, filename: source.name, source: source.text, sourceAnchors: source.provenance.anchors })) }, strictJsonSchema(z.toJSONSchema(semanticBatchSchema)));
+  const output = await request({ sources: sources.map(source => ({ sourceId: source.sourceId, filename: source.name, source: source.text, sourceAnchors: source.provenance.anchors,
+    ...(source.warnings?.length ? { sourceLimitations: source.warnings.map(sourceQualityMessage) } : {}) })) }, strictJsonSchema(z.toJSONSchema(semanticBatchSchema)));
   if (output.length > 300_000) throw new AppError('The interpreted catalog exceeds the pilot limit.', 413);
   let replies: { sourceId: string; interpretation?: unknown }[];
   try { replies = z.object({ sources: z.array(z.object({ sourceId: id, interpretation: z.unknown() }).strict()).max(6) }).strict().parse(JSON.parse(output)).sources; }
@@ -412,12 +414,17 @@ export async function analyzeKnowledgeFiles(user: WorkspaceUser, siteId: string,
       try {
         const { file, bytes } = await downloadFile(user, siteId, selected.fileId);
         const sourceHash = createHash('sha256').update(bytes).digest('hex'); report.hash = sourceHash;
-        if (current?.origins.some(origin => origin.hash === sourceHash)) { report.status = 'unchanged'; report.message = 'Exact source already reviewed; no interpretation call or duplicate records.'; continue; }
+        if (current?.origins.some(origin => origin.hash === sourceHash)) {
+          if (file.mime === 'application/pdf') report.warnings = sourceQualityWarnings('pdf');
+          report.status = 'unchanged'; report.message = 'Exact source already reviewed; no interpretation call or duplicate records.'; continue;
+        }
         const duplicate = hashes.get(sourceHash);
         if (duplicate !== undefined) { duplicates.set(index, duplicate); report.message = 'Identical to ' + files[duplicate].name + '; sharing its result.'; continue; }
         hashes.set(sourceHash, index);
         await recordPlatformEvent(siteId, { type: 'extraction', surface: 'preview', operation: 'extract', requestId: job.id, operationId: job.id, status: 'started' }).catch(() => undefined);
         const source = await extractSource(file.name, file.mime, bytes);
+        const warnings = sourceQualityWarnings(source.format);
+        if (warnings.length) report.warnings = warnings;
         await recordPlatformEvent(siteId, { type: 'extraction', surface: 'preview', operation: 'extract', requestId: job.id, operationId: job.id, status: 'succeeded', kind: source.format === 'csv' ? 'csv' : source.format === 'pdf' ? 'pdf' : source.format === 'text' ? 'txt' : 'text', durationMs: Date.now() - startedAt, count: source.pages ?? 1 }).catch(() => undefined);
         const sourceProvenance = unlinkedSourceProvenance(source);
         const htmlPage = source.format === 'html' ? extractWebsitePage(new TextDecoder().decode(bytes), 'https://uploaded.example/') : undefined;
@@ -436,7 +443,7 @@ export async function analyzeKnowledgeFiles(user: WorkspaceUser, siteId: string,
     if (pending.length) {
       try {
         if (!connected) throw new AppError('This document contains prose that needs the connected semantic interpreter. In this offline demo, use CSV or TXT item blocks with Name:, Kind:, Summary: and attribute lines separated by blank lines. The source was stored but not interpreted.');
-        interpretations = await interpretRelatedSources(pending.map(item => ({ sourceId: files[item.index].fileId, name: files[item.index].name, text: item.source.text, provenance: item.provenance })), async (input, schema) => {
+        interpretations = await interpretRelatedSources(pending.map(item => ({ sourceId: files[item.index].fileId, name: files[item.index].name, text: item.source.text, provenance: item.provenance, warnings: files[item.index].warnings })), async (input, schema) => {
           await reserveAiRequest(user, siteId, site.revision, job.id);
           await changeKnowledgeLedger(user, siteId, state => changeKnowledgeJob(state, job.id, job.claim, { files, stage: 'interpreting', paidAttempt: true, message: 'Interpreting related source meaning together. One bounded AI request; no automatic retries.' }));
           return semanticProviderOutput(input, schema, { siteId, requestId: job.id, operation: 'interpret', related: true, website: pending.some(item => Boolean(item.htmlPage)) });
@@ -464,6 +471,7 @@ export async function analyzeKnowledgeFiles(user: WorkspaceUser, siteId: string,
         artifact.assertionReviews = refreshAssertionReviews(artifact, structured ? 'source' : 'model', current?.assertionReviews);
         if (htmlPage) artifact.website = { capturedAt: new Date().toISOString(), design: designWebsite(htmlPage, 1, artifact.catalog), pages: [{ url: report.name, title: htmlPage.title, status: 'imported', message: 'Uploaded HTML file; linked pages and images were not fetched.', characters: source.text.length }], notes: ['Native FlowPath design proposed from this HTML document. Review branding and add approved photos separately.'] };
         artifact.notes.unshift(`${source.format.toUpperCase()}: ${source.text.length} extracted characters, ${interpretedProvenance.anchors.length} source locations, ${interpretedProvenance.anchors.filter(anchor => anchor.truncated).length} shortened excerpts (not usable as evidence). ${source.format === 'pdf' ? `Text from all ${source.pages} PDF pages; embedded images were not interpreted.` : source.format === 'docx' ? 'Paragraphs, tables, headers and footers only; embedded images and drawing layout were not interpreted.' : source.format === 'ocr' ? 'OCR used the sanitized display image; recognition accuracy and omitted visual information remain unverified.' : source.format === 'xlsx' ? 'Represented cells from every declared sheet were read; formulas remain unevaluated.' : source.format === 'html' ? 'HTML text only, not a rendered page or a crawl.' : 'Text extraction completed within the shared import limit.'} Review all claims; extraction completeness does not prove semantic coverage.`);
+        if (report.warnings?.length) artifact.notes.unshift(`${report.name}: ${report.warnings.map(sourceQualityMessage).join(' ')}`);
 
         // Earlier files' review choices remain available in the combined proposal.
         if (added && current) {
@@ -488,6 +496,7 @@ export async function analyzeKnowledgeFiles(user: WorkspaceUser, siteId: string,
       }
     }
     for (const [index, original] of duplicates) {
+      if (files[original].warnings?.length) files[index].warnings = [...files[original].warnings];
       files[index].status = files[original].status === 'ready' ? 'unchanged' : 'failed';
       files[index].message = files[original].status === 'ready' ? 'Identical source represented by ' + files[original].name + '; no duplicate records or interpretation request.' : 'Identical to ' + files[original].name + ', which could not be processed. Previous information is retained.';
     }

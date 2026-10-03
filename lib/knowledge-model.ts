@@ -6,8 +6,9 @@ import { AppError } from './errors';
 import { sourceAnchorSchema, validateSourceProvenance, type SourceAnchor, type SourceGraphReference, type SourceProvenance } from './source-provenance';
 import { refreshAssertionReviews, remapAssertionReviews, type AssertionReview } from './knowledge-assertions';
 import type { WebsiteProposal } from './website-import-model';
+import { sourceQualityWarningSchema } from './source-quality';
 
-export const sourceFileReportSchema = z.object({ fileId: z.string().uuid(), name: z.string().max(255), hash: z.string().max(128), status: z.enum(['waiting', 'processing', 'ready', 'unchanged', 'failed']), message: z.string().max(2000) }).strict();
+export const sourceFileReportSchema = z.object({ fileId: z.string().uuid(), name: z.string().max(255), hash: z.string().max(128), status: z.enum(['waiting', 'processing', 'ready', 'unchanged', 'failed']), message: z.string().max(2000), warnings: z.array(sourceQualityWarningSchema).max(1).optional() }).strict();
 export type SourceFileReport = z.infer<typeof sourceFileReportSchema>;
 export type KnowledgeJob = {
   id: string; fileId?: string; files?: SourceFileReport[]; sourceUrl?: string; operation?: 'source' | 'review' | 'website' | 'batch'; sourceName: string; sourceHash: string; baseDraftHash: string; baseRevision: number;
