@@ -3,6 +3,58 @@ import { htmlToText } from './source-adapters';
 import { parseHtml } from './html-document';
 import { WEBSITE_LIMITS, type WebsiteImage } from './website-import-model';
 
+const asciiWhitespace = /[\t\n\f\r ]/;
+/** URL tokens can contain commas; only trailing commas and descriptor separators
+ * delimit candidates. Keep malformed descriptor groups out of discovery.
+ * https://html.spec.whatwg.org/multipage/images.html#parsing-a-srcset-attribute */
+function responsiveCandidates(input: string): { url: string; rank: number }[] {
+  const candidates: { url: string; rank: number }[] = [];
+  let position = 0;
+  while (position < input.length) {
+    while (position < input.length && (asciiWhitespace.test(input[position]) || input[position] === ',')) position++;
+    const start = position;
+    while (position < input.length && !asciiWhitespace.test(input[position])) position++;
+    let url = input.slice(start, position);
+    if (!url) break;
+    const descriptors: string[] = [];
+    if (url.endsWith(',')) url = url.replace(/,+$/, '');
+    else {
+      let descriptor = '', inParens = false;
+      while (position < input.length) {
+        const character = input[position++];
+        if (!inParens && (asciiWhitespace.test(character) || character === ',')) {
+          if (descriptor) descriptors.push(descriptor);
+          descriptor = '';
+          if (character === ',') break;
+        } else {
+          descriptor += character;
+          if (character === '(') inParens = true;
+          else if (character === ')') inParens = false;
+        }
+      }
+      if (descriptor) descriptors.push(descriptor);
+    }
+    let width: number | undefined, density: number | undefined, height: number | undefined, invalid = false;
+    for (const descriptor of descriptors) {
+      const integer = /^(\d+)([wh])$/.exec(descriptor);
+      const floating = /^(-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?)x$/.exec(descriptor);
+      if (integer) {
+        const value = Number(integer[1]);
+        if (!Number.isFinite(value) || value <= 0 || density !== undefined) invalid = true;
+        if (integer[2] === 'w') { if (width !== undefined) invalid = true; width = value; }
+        else { if (height !== undefined) invalid = true; height = value; }
+      } else if (floating) {
+        const value = Number(floating[1]);
+        if (!Number.isFinite(value) || value < 0 || width !== undefined || height !== undefined || density !== undefined) invalid = true;
+        density = value;
+      } else invalid = true;
+    }
+    if (height !== undefined && width === undefined) invalid = true;
+    if (url && !invalid) candidates.push({ url, rank: width ?? density ?? 1 });
+  }
+  return candidates;
+}
+
 /** Bounded original candidates for common builders; download validation decides what exists. */
 export function originalImageCandidates(value: string, pageUrl: string): string[] {
   const url = new URL(value), candidates: string[] = [];
@@ -42,9 +94,12 @@ export function extractWebsiteImages(html: string, pageUrl: string): WebsiteImag
   for (const node of document.querySelectorAll('img,source,meta')) {
     const a = node.attributes;
     if (node.rawTagName?.toLowerCase() === 'meta') { if (['og:image', 'og:image:url', 'twitter:image'].includes(a.property || a.name)) add(a.content || ''); continue; }
-    const responsive = [a['data-srcset'], a.srcset].filter(Boolean).flatMap(value => value.split(',').map(entry => entry.trim().split(/\s+/)))
-      .filter(entry => entry[0] && !entry[0].startsWith('data:'))
-      .sort((a, b) => parseFloat(b[1] || '1') - parseFloat(a[1] || '1')).map(entry => entry[0]);
+    const hiddenPixel = node.rawTagName?.toLowerCase() === 'img' && /^0*1$/.test(a.width?.trim() ?? '') && /^0*1$/.test(a.height?.trim() ?? '')
+      && (a.hidden !== undefined || a['aria-hidden']?.toLowerCase() === 'true' || /(?:^|;)\s*display\s*:\s*none\s*(?:!important\s*)?(?:;|$)/i.test(a.style ?? ''));
+    if (hiddenPixel) continue;
+    const responsive = [a['data-srcset'], a.srcset].filter(Boolean).flatMap(responsiveCandidates)
+      .filter(entry => { try { assertPublicWebsiteUrl(new URL(text(entry.url), pageUrl).toString()); return true; } catch { return false; } })
+      .sort((a, b) => b.rank - a.rank).map(entry => entry.url);
     // Explicit originals first; reserve room for src/lazy URLs whose true dimensions may exceed srcset.
     const variants = [...new Set([a['data-original'], a['data-full-src'], a['data-src'], a['data-lazy-src'], a.src, ...responsive.slice(0, 3)].filter(Boolean))];
     const preferred = a['data-original'] || a['data-full-src'] || responsive[0] || a['data-src'] || a['data-lazy-src'] || a.src || '';
