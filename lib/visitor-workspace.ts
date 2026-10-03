@@ -290,7 +290,7 @@ export function planWorkspaceIntent(text: string, state: WorkspaceState, authori
   }
   if (!matches.length) matches = named.filter(record => ['source', 'collection'].includes(record.reference.kind));
   if (!matches.length) matches = authority.records.filter(record => record.reference.kind === 'source' && (record.reference.id === 'contact' && /email|contact|touch|phone/.test(query) || record.reference.id === 'hours' && /hours|availability/.test(query)));
-  if (!matches.length) return { message: 'That information is not provided, or the request needs a more specific name. You can browse the approved information below.' };
+  if (!matches.length) return { message: 'I couldn’t match that request. Try a more specific name, or choose “Close assistant” to return to the website.' };
   matches = [...new Map(matches.map(record => [referenceKey(record.reference), record])).values()];
   if (matches.length > 8) return { message: 'There are several matches. Please name an item or collection to narrow the view.' };
   const comparing = /\bcompare|versus|side by side\b/.test(query);
