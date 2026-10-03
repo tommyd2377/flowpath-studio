@@ -198,11 +198,11 @@ export function websiteQueryCommand(text: string, context: Pick<CapabilityContex
     expression = { kind: 'state', id: randomUUID(), fieldId: field.id, state: state === 'missing' || state === 'not published' ? 'unknown' : state as 'known' };
   } else if (bound && explicitlyTyped) {
     if (!filterPrefix(value.slice(0, bound.index), field ? [field] : candidates)) return null;
-    if (!field) return clarify('Which published attribute or price basis should I use? Name the field with your limit.');
     const op: Extract<Expression, { kind: 'field' }>['op'] = ({ under: 'lt', below: 'lt', 'less than': 'lt', 'smaller than': 'lt', over: 'gt', above: 'gt', 'greater than': 'gt', 'larger than': 'gt', 'at least': 'gte', 'at most': 'lte', before: 'lt', after: 'gt', equals: 'eq', equal: 'eq', is: 'eq', contains: 'contains', include: 'contains', includes: 'contains', 'include all of': 'all', 'includes all of': 'all', 'include any of': 'any', 'includes any of': 'any' } as Record<string, Extract<Expression, { kind: 'field' }>['op']>)[bound[1]];
     const literal = bound[2].replace(/\s+(?:please|too)$/, '').trim();
     const literals = filterLiterals(literal, op === 'any' || op === 'all');
     if (!literals) return null;
+    if (!field) return clarify('Which published attribute or price basis should I use? Name the field with your limit.');
     const raw = literals[0].value;
     if (field.type === 'number' || field.type === 'money') {
       if (literals.some(item => {

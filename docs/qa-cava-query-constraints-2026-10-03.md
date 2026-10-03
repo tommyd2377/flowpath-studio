@@ -12,6 +12,8 @@ The bounded repair requires a filter shortcut to consume the complete request. U
 
 Independent integration review identified two additional consumption errors before acceptance. Separate values joined by `and` could become an `any` expression, and separately quoted clauses could be swallowed as one malformed equality value. The follow-up declines ambiguous conjunctions and requires one complete quoted literal per scalar or explicit list item. Complete published names/values containing `and`, explicit `or` alternatives and supported `includes all of` lists retain their meaning. Generic keyword fallback must not reintroduce the conjunction error after a field parser declines it.
 
+An actual typed-browser probe also exposed an ordering case when a literal, such as `sesame`, names another published field. Complete-literal validation now precedes ambiguous-field clarification, so compound quoted clauses still reach the ordinary assistant intact. A complete single literal with ambiguous candidates retains the existing clarification behavior; general field resolution is unchanged.
+
 ## Source and visual coverage
 
 - Production HTTPS discovery of `https://cava.com/` stopped at `robots.txt`: HTTP 403 with a Cloudflare challenge. The importer correctly refused to crawl when it could not verify robots rules. No website pages were automatically imported, and no guard was bypassed.

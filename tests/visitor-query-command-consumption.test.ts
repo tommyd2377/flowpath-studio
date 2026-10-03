@@ -91,11 +91,14 @@ test('AND defers while explicit OR/all lists and complete quoted literals retain
   // Leave the optional exhaustive list absent, matching publications whose values come from assertions.
   delete space.fields.find(field => field.id === 'flavor')!.values;
   space.fields.push({ id: 'dietary', label: 'Dietary', type: 'enum', cardinality: 'many', aliases: [], recordTypes: ['product'], operations: ['any', 'all'], filter: true, sort: false, facet: true, coverage: { known: 4, total: 5 } });
+  // A mentioned value can also name a populated field and tie the candidate score.
+  space.fields.push({ id: 'sesame', label: 'Sesame', type: 'boolean', cardinality: 'one', aliases: [], recordTypes: ['product'], operations: ['eq'], filter: true, sort: false, facet: true, coverage: { known: 5, total: 5 } });
   space.records.forEach((record, i) => {
     record.name = ['Cobalt bowl', 'Amber bowl', 'Salt and Pepper Blend', 'Synthetic bowl 3', 'Synthetic bowl 4'][i];
     record.assertions.find(assertion => assertion.fieldId === 'flavor')!.value = { type: 'enum', value: ['plain', 'sesame', 'salt and pepper', "chef's choice", 'plain'][i] };
     const tags = [['vegan'], ['gluten-free'], ['vegan', 'gluten-free'], ['plant based, low sodium'], null][i];
     record.assertions.push({ id: `dietary-${i}`, fieldId: 'dietary', value: tags === null ? null : { type: 'enum', value: tags }, authority: 'publisher', polarity: 'affirmed', conditions: [] });
+    record.assertions.push({ id: `sesame-${i}`, fieldId: 'sesame', value: { type: 'boolean', value: i === 1 }, authority: 'publisher', polarity: 'affirmed', conditions: [] });
   });
   const index = compileQueryIndex(space), store = new VisitorTaskStore(localTaskDocuments(directory));
   const session = await store.create(space.publication), context = { index, session, signal: new AbortController().signal };
@@ -118,6 +121,8 @@ test('AND defers while explicit OR/all lists and complete quoted literals retain
     assert.equal(websiteQueryCommand(request, context), null, request);
     assert.deepEqual(session, before, 'Unresolved conjunctions and quotes cannot mutate the query');
   }
+  assert.equal(websiteQueryCommand("Only flavor is 'sesame'", context)?.capabilityId, 'task.clarify', 'A complete literal with ambiguous field candidates retains clarification');
+  assert.deepEqual(session, before, 'Candidate clarification cannot mutate the query');
   assert.deepEqual(await run('Show vegan or gluten-free options'), ['record-00000', 'record-00001', 'record-00002']);
   assert.deepEqual(await run('Only dietary includes all of vegan, gluten-free'), ['record-00002']);
   assert.deepEqual(await run('Only dietary includes all of "vegan", \'gluten-free\''), ['record-00002']);
