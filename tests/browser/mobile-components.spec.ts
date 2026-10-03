@@ -10,6 +10,7 @@ import { validateCatalog } from '@thevoice/platform-ui/contracts';
 import { comparisonPlan, initialInteraction } from '@thevoice/platform-ui/interaction';
 import { publishedEstimateNote, publishedEstimateRounding, publishedEstimateSchema } from '@thevoice/platform-ui/estimate';
 import { websiteTaskFixture } from '../../fixtures/visitor-tasks';
+import { comparisonMissingnessCatalog } from '../helpers/v1-comparison-missingness.fixture';
 
 // Exercise the real shared markup and styles in an isolated browser document.
 // Shell integration, hydration and Motion transitions have their own browser suites.
@@ -104,6 +105,40 @@ test('v1 comparison uses compact records in a narrow desktop panel and restores 
   await page.locator('#comparison-panel').evaluate(node => { node.style.width = '390px'; });
   await expect(cards).toBeVisible(); await expect(table).toBeHidden();
   expect(await fitsViewport(page)).toBe(true);
+});
+
+for (const width of [320, 390, 1440]) test(`v1 comparison keeps labeled missing values accessible at ${width}px`, async ({ page }, testInfo) => {
+  const catalog = comparisonMissingnessCatalog;
+  await page.setViewportSize({ width, height: 852 });
+  await show(page, createElement(PresentationView, { catalog, plan: comparisonPlan(catalog, catalog.entities.map(entity => entity.id)), state: initialInteraction(catalog) }));
+  const comparison = page.getByRole('region', { name: 'Compare published attributes' });
+  const compact = width < 600, cards = comparison.locator('.platform-comparison-mobile'), table = comparison.locator('.platform-comparison-table');
+  await expect(compact ? cards : table).toBeVisible();
+  await expect(compact ? table : cards).toBeHidden();
+  if (compact) {
+    for (const id of ['missing', 'omitted']) {
+      const card = cards.locator(`article[data-entity-id="${id}"]`);
+      for (const label of ['Material', 'Listed price', 'Machine washable', 'Additional fringe', 'Source qualifications']) {
+        await expect(card.locator('dl > div').filter({ has: page.getByText(label, { exact: true }) }).locator('dd')).toHaveText('Not specified');
+      }
+      await expect(card).not.toContainText('100% wool');
+    }
+    await expect(cards.locator('article[data-entity-id="stated"]')).toContainText('100% wool');
+  } else {
+    await expect(table.getByRole('columnheader', { name: /Rug with missing details/ })).toBeVisible();
+    for (const label of ['Material', 'Listed price', 'Machine washable', 'Additional fringe', 'Source qualifications']) {
+      const row = table.getByRole('row').filter({ has: page.getByRole('rowheader', { name: label, exact: true }) });
+      await expect(row.getByRole('cell')).toHaveText([label === 'Material' ? '100% wool' : label === 'Listed price' ? '$0.00' : label === 'Machine washable' ? 'No' : label === 'Additional fringe' ? '0 cm' : String(catalog.entities[0].attributes.terms), 'Not specified', 'Not specified']);
+    }
+  }
+  for (const entity of catalog.entities) {
+    const control = (compact ? cards : table).getByRole('button', { name: entity.name, exact: true });
+    await control.focus(); await expect(control).toBeFocused();
+  }
+  await expect(comparison).not.toContainText('Live inventory');
+  await expect(comparison).not.toContainText('Unspecified for every item');
+  expect(await fitsViewport(page)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath(`v1-missingness-${width}.png`), fullPage: true });
 });
 
 for (const width of [320, 375, 393, 430]) {

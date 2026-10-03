@@ -145,6 +145,12 @@ The original CSS fails the new 320 px compact-visibility regression. Eighteen br
 
 Nine compiled-app cases used the frozen T. Schreiber, Arms Acres and Roberta publications at 320/390/1440 px, with all non-GET traffic mocked locally. Both compared entities and their formatted values survived; all eighteen keyboard detail/Back cycles, hidden-control focus exclusions and one live reduced-motion toggle passed, with no horizontal clipping. All 35 workspace/public-catalog/media file hashes remained unchanged. An initial harness check omitted the revision from an expected reference key; that failed run was retained and the incomplete cases passed with the exact key. T. Schreiber and Arms are manually curated controls; none of these checks proves automatic interpretation or live provider quality.
 
+## Missing published values in v1 comparisons (2026-10-03)
+
+When at least one compared item supplies an attribute, every item now keeps that attribute's label and shows `Not specified` for null, omitted or whitespace-only values. This replaces empty desktop cells and omitted mobile rows. Attributes missing for every compared item remain suppressed; published zero, false, units and qualified source wording remain intact. The change is local to v1 comparison rendering and does not fill the catalog, infer material or stock, or change v2 comparisons.
+
+The two missingness rendering regressions fail against the prior implementation. With the fix, fourteen focused rendering checks, scoped lint, product TypeScript and the independent packed-package check pass. Fourteen distinct offline comparison browser checks pass across the existing v1/v2 controls and new 320/390/1440 px missingness cases, including semantic table/list labels, focus and overflow checks. The first desktop missingness run failed because its expected accessible name omitted browser-inserted whitespace; the corrected selector and all three new viewport cases pass. An independent source-fidelity review found no blockers. Browser evidence uses synthetic data and static shared-component markup with network requests blocked; it does not establish hydration, live-provider quality or automated website interpretation.
+
 ## Remaining live and platform limits
 
 - Live GPT-Live/Luna speech comprehension, natural delivery of the three greeting points, real audio latency and physical-device acoustics need a separately authorized bounded live test. Offline success does not establish these.

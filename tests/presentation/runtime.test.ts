@@ -10,6 +10,7 @@ import { PresentationView } from '../../packages/platform-ui/src/Runtime.js';
 import { validateCatalog, validatePlan, type PresentationPlan } from '../../packages/platform-ui/src/contracts.js';
 import { defaultPresentation } from '../../packages/platform-ui/src/catalog.js';
 import { detailPlan, comparisonPlan, initialInteraction } from '../../packages/platform-ui/src/interaction.js';
+import { comparisonMissingnessCatalog } from '../helpers/v1-comparison-missingness.fixture';
 
 const fixture = (name: string) => validateCatalog(JSON.parse(readFileSync(new URL(`../../fixtures/catalogs/${name}.json`, import.meta.url), 'utf8')));
 
@@ -69,15 +70,39 @@ test('hostile publisher strings remain escaped React data, never OpenUI instruct
   assert.doesNotMatch(html, /<script>|<iframe/);
 });
 
-test('comparison resolves the same attributes and leaves missing values empty on desktop and mobile', () => {
+test('comparison resolves the same attributes and labels missing values on desktop and mobile', () => {
   const catalog = fixture('tequila');
   const plan = comparisonPlan(catalog, ['agave-blanco', 'agave-small']);
   const html = renderToStaticMarkup(createElement(PresentationView, { catalog, plan, state: initialInteraction(catalog) }));
   assert.match(html, /scope="row">Price/);
   assert.match(html, /\$36\.00/);
   assert.doesNotMatch(html, /Not provided/);
-  assert.match(html, /data-entity-id="agave-small"><\/td>/);
+  assert.match(html, /data-entity-id="agave-small">Not specified<\/td>/);
   assert.match(html, /platform-comparison-mobile/);
+});
+
+test('comparison missingness preserves source values and labels without inventing facts', () => {
+  const catalog = comparisonMissingnessCatalog, before = structuredClone(catalog);
+  const plan = comparisonPlan(catalog, catalog.entities.map(entity => entity.id));
+  const html = renderToStaticMarkup(createElement(PresentationView, { catalog, plan, state: initialInteraction(catalog) }));
+  const table = html.slice(html.indexOf('<table>'), html.indexOf('</table>'));
+  assert.match(table, /<th scope="col"[^>]*data-entity-id="missing"/);
+  for (const label of ['Material', 'Listed price', 'Machine washable', 'Additional fringe', 'Source qualifications']) {
+    assert.ok(table.includes(`<th scope="row">${label}</th>`));
+  }
+  for (const value of ['100% wool', '$0.00', 'No', '0 cm', String(catalog.entities[0].attributes.terms)]) {
+    assert.ok(table.includes(`data-entity-id="stated">${value}</td>`), value);
+  }
+  for (const id of ['missing', 'omitted']) {
+    assert.equal((table.match(new RegExp(`data-entity-id="${id}">Not specified</td>`, 'g')) ?? []).length, 5);
+    const article = html.match(new RegExp(`<article data-entity-id="${id}">([\\s\\S]*?)</article>`))![1];
+    for (const label of ['Material', 'Listed price', 'Machine washable', 'Additional fringe', 'Source qualifications']) {
+      assert.ok(article.includes(`<dt>${label}</dt><dd>Not specified</dd>`), `${id}: ${label}`);
+    }
+    assert.doesNotMatch(article, /100% wool|\$0\.00|<dd>No<\/dd>|0 cm/);
+  }
+  assert.doesNotMatch(html, /Live inventory|Unspecified for every item|Not provided/);
+  assert.deepEqual(catalog, before, 'Rendering must not fill or change published attributes.');
 });
 
 test('plans cannot invent a registered destination or escape the snapshot', () => {

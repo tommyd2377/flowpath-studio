@@ -262,12 +262,17 @@ function ComparisonContent({ entityIds, attributeIds }: ComponentProps) {
   const { catalog } = useCatalog();
   const action = useAction();
   const entities = entityIds.flatMap(id => catalog.entities.find(entity => entity.id === id) ?? []);
-  const attributes = definitions(catalog, attributeIds).filter(attribute => entities.some(entity => knownAttributes(entity, [attribute]).length));
+  const valueFor = (entity: typeof entities[number], attribute: AttributeDefinition) => {
+    const value = entity.attributes[attribute.id];
+    if (!knownAttributes(entity, [attribute]).length || typeof value === 'string' && !value.trim()) return null;
+    return formatAttribute(value, attribute);
+  };
+  const attributes = definitions(catalog, attributeIds).filter(attribute => entities.some(entity => valueFor(entity, attribute) !== null));
   return <section className="platform-comparison" aria-label="Compare published attributes">
     <SectionHeading eyebrow="A LITTLE PERSPECTIVE" title="Side by side"><Icon name="compare" size={22}/></SectionHeading>
     <p className="platform-section-intro">The details that make the difference.</p>
-    <div className="platform-comparison-table"><table><caption className="platform-sr-only">Comparison of {entities.map(entity => entity.name).join(', ')}</caption><thead><tr><th scope="col">Published details</th>{entities.map(entity => <th scope="col" key={entity.id} data-entity-id={entity.id}><EntityMedia targetId={entity.id} variant="comparison"/><span>{entity.kind}</span><button type="button" onClick={() => action('focus', { id: entity.id })}>{entity.name}<Icon name="arrow" size={14}/></button></th>)}</tr></thead><tbody>{attributes.map(attribute => <tr key={attribute.id}><th scope="row">{attribute.label}</th>{entities.map(entity => <td key={entity.id} data-entity-id={entity.id}>{knownAttributes(entity, [attribute]).length ? formatAttribute(entity.attributes[attribute.id], attribute) : ''}</td>)}</tr>)}</tbody></table></div>
-    <div className="platform-comparison-mobile">{entities.map(entity => { const details = knownAttributes(entity, attributes); return <article key={entity.id} data-entity-id={entity.id}><EntityMedia targetId={entity.id} variant="comparison"/><button type="button" className="platform-item-open" onClick={() => action('focus', { id: entity.id })}><h4>{entity.name}</h4><Icon name="arrow"/></button>{!!details.length && <dl>{details.map(attribute => <div key={attribute.id}><dt>{attribute.label}</dt><dd>{formatAttribute(entity.attributes[attribute.id], attribute)}</dd></div>)}</dl>}</article>; })}</div>
+    <div className="platform-comparison-table"><table><caption className="platform-sr-only">Comparison of {entities.map(entity => entity.name).join(', ')}</caption><thead><tr><th scope="col">Published details</th>{entities.map(entity => <th scope="col" key={entity.id} data-entity-id={entity.id}><EntityMedia targetId={entity.id} variant="comparison"/><span>{entity.kind}</span><button type="button" onClick={() => action('focus', { id: entity.id })}>{entity.name}<Icon name="arrow" size={14}/></button></th>)}</tr></thead><tbody>{attributes.map(attribute => <tr key={attribute.id}><th scope="row">{attribute.label}</th>{entities.map(entity => <td key={entity.id} data-entity-id={entity.id}>{valueFor(entity, attribute) ?? 'Not specified'}</td>)}</tr>)}</tbody></table></div>
+    <div className="platform-comparison-mobile">{entities.map(entity => <article key={entity.id} data-entity-id={entity.id}><EntityMedia targetId={entity.id} variant="comparison"/><button type="button" className="platform-item-open" onClick={() => action('focus', { id: entity.id })}><h4>{entity.name}</h4><Icon name="arrow"/></button>{!!attributes.length && <dl>{attributes.map(attribute => <div key={attribute.id}><dt>{attribute.label}</dt><dd>{valueFor(entity, attribute) ?? 'Not specified'}</dd></div>)}</dl>}</article>)}</div>
   </section>;
 }
 
