@@ -6,17 +6,30 @@ function Github() {
 function Linkedin() {
   return <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 10v7m5 0v-7m0 3c0-4 5-4 5 0v4"/><circle cx="7" cy="7" r=".7" fill="currentColor" stroke="none"/></svg>;
 }
+function Twitter() {
+  return <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="m4 3 12 18h4L8 3H4ZM20 3 4 21"/></svg>;
+}
+
+const links = [
+  { label: 'Website', href: 'https://thomasdevito.me/', Icon: Globe },
+  { label: 'X / Twitter', href: 'https://x.com/thomasfdevito', Icon: Twitter },
+  { label: 'Telegram', href: 'https://t.me/doubting_tom', Icon: Send },
+  { label: 'LinkedIn', href: 'https://www.linkedin.com/in/tdevito', Icon: Linkedin },
+  { label: 'GitHub', href: 'https://github.com/tommyd2377', Icon: Github },
+];
 
 export default function PersonalFooter() {
-  return <footer className="personal-footer">
-    <p>Presented by Thomas DeVito</p>
-    <div className="personal-links">
-      <a href="https://thomasdevito.me/" target="_blank" rel="noopener noreferrer" aria-label="Thomas DeVito website"><Globe size={16}/></a>
-      <a href="https://x.com/thomasfdevito" target="_blank" rel="noopener noreferrer" aria-label="Thomas DeVito on X"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.64 7.584H.47l8.6-9.835L0 1.153h7.594l5.243 6.932 6.064-6.932Zm-1.29 19.49h2.039L6.487 3.24H4.3L17.61 20.644Z"/></svg></a>
-      <a href="https://t.me/doubting_tom" target="_blank" rel="noopener noreferrer" aria-label="Thomas DeVito on Telegram"><Send size={16}/></a>
-      <a href="https://www.linkedin.com/in/tdevito" target="_blank" rel="noopener noreferrer" aria-label="Thomas DeVito on LinkedIn"><Linkedin/></a>
-      <a href="https://github.com/tommyd2377" target="_blank" rel="noopener noreferrer" aria-label="Thomas DeVito on GitHub"><Github/></a>
-    </div>
-    <span className="made-in">Made with <svg aria-hidden="true" viewBox="0 0 24 24" style={{ width: '1.15em', height: '1.15em', color: '#e25555', fill: 'currentColor', display: 'inline-block', flexShrink: 0, transform: 'translateY(0.06em)' }}><path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"/></svg><span className="sr-only">love</span> in NYC</span>
-  </footer>;
+  return (
+    <footer className="personal-footer">
+      <p className="presented-by">Presented by Thomas DeVito</p>
+      <nav className="social-links" aria-label="Thomas DeVito’s links">
+        {links.map(({ label, href, Icon }) => (
+          <a key={href} href={href} target="_blank" rel="noopener noreferrer" aria-label={label} title={label}>
+            <Icon aria-hidden="true" />
+          </a>
+        ))}
+      </nav>
+      <p className="made-in">Made with <svg aria-hidden="true" viewBox="0 0 24 24" className="heart"><path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5" /></svg><span className="sr-only">love </span>in NYC</p>
+    </footer>
+  );
 }

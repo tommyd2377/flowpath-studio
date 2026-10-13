@@ -11,14 +11,12 @@ export type VoicePhase =
   | "error";
 
 type WaveformProps = {
-  color?: string;
   phase: VoicePhase;
   inputAnalyser: AnalyserNode | null;
   outputAnalyser: AnalyserNode | null;
 };
 
 export default function Waveform({
-  color,
   phase,
   inputAnalyser,
   outputAnalyser,
@@ -51,7 +49,6 @@ export default function Waveform({
     let sampleAnalyser: AnalyserNode | null = null;
     let samples = new Float32Array(0);
     let stroke: CanvasPattern | string = "#f6eddb";
-    let shadow = "rgba(239, 201, 143, 0.3)";
 
     const resize = () => {
       const bounds = canvas.getBoundingClientRect();
@@ -67,26 +64,18 @@ export default function Waveform({
       palette.width = canvas.width;
       palette.height = 1;
       const gradient = paletteContext.createLinearGradient(0, 0, width * dpr, 0);
-      // A chosen voice hue keeps the same soft, transparent tails as the default.
-      const customColor = color && /^#[\da-f]{6}$/i.test(color) ? color : '';
-      const brand = customColor || (canvas.closest('[data-site-template]') ? getComputedStyle(canvas).getPropertyValue('--platform-accent').trim() : '');
-      if (/^#[\da-f]{6}$/i.test(brand)) {
-        for (const [position, alpha] of [[0, '00'], [.13, '52'], [.36, 'dd'], [.5, 'ff'], [.64, 'dd'], [.87, '52'], [1, '00']] as const) gradient.addColorStop(position, brand + alpha);
-        shadow = brand + (customColor ? '33' : '4d');
-      } else {
-        gradient.addColorStop(0, "rgba(221, 191, 146, 0)");
-        gradient.addColorStop(0.13, "rgba(221, 191, 146, 0.32)");
-        gradient.addColorStop(0.36, "#d9b98c");
-        gradient.addColorStop(0.5, "#fff7e7");
-        gradient.addColorStop(0.64, "#e9d6b6");
-        gradient.addColorStop(0.87, "rgba(221, 191, 146, 0.32)");
-        gradient.addColorStop(1, "rgba(221, 191, 146, 0)");
-      }
+      gradient.addColorStop(0, "rgba(221, 191, 146, 0)");
+      gradient.addColorStop(0.13, "rgba(221, 191, 146, 0.32)");
+      gradient.addColorStop(0.36, "#d9b98c");
+      gradient.addColorStop(0.5, "#fff7e7");
+      gradient.addColorStop(0.64, "#e9d6b6");
+      gradient.addColorStop(0.87, "rgba(221, 191, 146, 0.32)");
+      gradient.addColorStop(1, "rgba(221, 191, 146, 0)");
       paletteContext.fillStyle = gradient;
       paletteContext.fillRect(0, 0, palette.width, 1);
       const pattern = context.createPattern(palette, "repeat-y");
       pattern?.setTransform(new DOMMatrix().scale(1 / dpr, 1));
-      stroke = pattern ?? (/^#[\da-f]{6}$/i.test(brand) ? brand : "#f6eddb");
+      stroke = pattern ?? "#f6eddb";
       previousDraw = 0;
       // Resizing clears the bitmap after animation frames have run. Paint before
       // this frame reaches the screen, without creating a second animation loop.
@@ -162,7 +151,7 @@ export default function Waveform({
         context.beginPath();
         context.globalAlpha = isError ? (isMain ? 0.4 : 0.04) : isMain ? 0.95 : 0.12;
         context.lineWidth = isMain ? 1.45 : 0.85;
-        context.shadowColor = shadow;
+        context.shadowColor = "rgba(239, 201, 143, 0.3)";
         context.shadowBlur = isMain ? 7 : 0;
 
         for (let i = 0; i <= pointCount; i += 1) {
@@ -200,13 +189,12 @@ export default function Waveform({
       window.removeEventListener("resize", resize);
       motionQuery.removeEventListener("change", onMotionChange);
     };
-  }, [color]);
+  }, []);
 
   return (
     <canvas
       ref={canvasRef}
       aria-hidden="true"
-      data-wave-color={color}
       // Trim the surrounding vertical space without scaling the drawn strands.
       style={{ display: "block", position: "absolute", top: "50%", transform: "translateY(-50%)",
         width: "100%", height: "calc(100% / var(--wave-vertical-scale, 1))", pointerEvents: "none" }}

@@ -1,13 +1,7 @@
-# Security and private data
+# Local prototype boundaries
 
-This is a private pilot repository. Keep credentials, environment files, original publisher material, local databases and generated logs out of commits and review attachments. Use synthetic fixtures in tests.
+The session route accepts same-origin loopback HTTP requests only. Live access is disabled by default and in production. Before any paid test, obtain explicit authorization for this application, host, task and budget.
 
-Report a suspected issue to the repository owner through an already approved private channel. Share the affected code path, impact and a minimal redacted reproduction; do not include credentials or private source documents. Do not file public issues containing sensitive details. Coding agents should draft a report and leave external communication to the owner unless explicitly authorized.
+The local controller admits one session, up to three starts per minute and at most three provider starts across the whole process, including failed starts. It caps created sessions at 180 seconds and requires confirmed sideband closure before allowing another paid start. An uncertain creation/cleanup blocks further starts. These are single-process development guards, not public trial/account entitlements. Restarting does not grant authorization for additional paid tests.
 
-If a credential may have been exposed, stop using it and notify the owner for rotation through the appropriate service. Deleting a committed file does not remove it from Git history. Never rewrite shared history or change account/security settings without explicit owner authorization.
-
-The local demo is a single-owner development mode, not a production authentication boundary. Connected routes enforce owner access; published knowledge/media are separate from private drafts and originals. Keep provider credentials and usage enforcement server-side. Treat source documents, image text and model output as untrusted input.
-
-Live API tests require explicit approval of the app/host, task and call budget. Use demo/mocked paths by default. Do not deploy, change billing, configure providers, trigger real transactions or publish packages as part of ordinary verification.
-
-See [Architecture](docs/architecture.md), [Contributing](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md) for the implementation and workflow boundaries. No security audit or production certification is implied by the current test suite.
+No audio/transcripts are stored or logged. Provider IDs and credentials stay server-side. Owner accounts, public quotas and payment handling are future milestones. Private Studio data/credentials and existing deployment files remain untouched.

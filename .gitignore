@@ -11,6 +11,7 @@ playwright-report/
 .visitor-recordings/
 
 # Local tooling, reports and archives
+archives/
 .codex/
 .agents/
 .vercel/

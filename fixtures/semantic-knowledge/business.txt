@@ -1,6 +1,0 @@
-Name: Harbor Studio
-Kind: business
-Address: 12 Example Lane, Brooklyn, NY
-Email: hello@harbor.example
-Latitude:
-Longitude:
