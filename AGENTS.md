@@ -12,7 +12,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 Read README.md and docs/architecture.md before changing behavior. Use Node.js 24.
 
-The current product is a centered waveform talking to GPT-Live using its own knowledge. Keep changes small and modular. Accounts, minute entitlements, cross-session memory and plugins are future milestones. News is an independent application in ../flowpath; never import from or compare source files against that checkout.
+The current product opens with a centered waveform talking to GPT-Live using its own knowledge. On connection it glides to the fading logo's position over 800 milliseconds. Keep changes small and modular. Accounts, minute entitlements, cross-session memory and plugins are future milestones. News is an independent application in ../flowpath; never import from or compare source files against that checkout.
 
 Studio's exact source and Git history are in the verified local archive at archives/studio-2026-10-13. Do not restore it into the active application or delete the archive automatically. Credentials and private runtime data remain untouched and separate from that source archive. Legacy Firebase rules and next.config.ts were preserved; they do not authorize cloud operations.
 

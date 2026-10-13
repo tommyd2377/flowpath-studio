@@ -268,25 +268,30 @@ test('the real local readiness route is paused and creates no microphone session
   expect((await tracker(page)).microphoneCalls).toBe(0);
 });
 
-for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
-  test(`the waveform stays centered and the introduction fades and returns at ${viewport.width}px`, async ({ page }) => {
+for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }, { width: 844, height: 390 }]) {
+  test(`the waveform glides to the fading logo and returns at ${viewport.width}px`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await fakeMedia(page);
     await mockSession(page);
     await page.goto('/');
     const wave = page.locator('.wave-control');
     const initial = (await wave.boundingBox())!;
+    const logo = (await page.locator('.wordmark img').boundingBox())!;
     expect(Math.abs(initial.y + initial.height / 2 - viewport.height / 2)).toBeLessThan(1);
     await expect(page.locator('.wordmark')).toHaveCSS('opacity', '1');
     await page.screenshot({ path: `test-results/waveform-${viewport.width}-idle.png` });
     await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
     await expect(page.locator('main')).toHaveAttribute('data-voice-phase', 'listening');
-    await expect(page.locator('.wordmark')).toHaveCSS('transition-duration', '1.5s');
+    for (const selector of ['.wordmark', '.voice-hint', '.wave-control']) {
+      await expect(page.locator(selector)).toHaveCSS('transition-duration', '0.8s');
+      await expect(page.locator(selector)).toHaveCSS('transition-timing-function', 'ease-in-out');
+    }
     await expect(page.locator('.wordmark')).toHaveCSS('opacity', '0');
     await expect(page.locator('.voice-hint')).toHaveCSS('opacity', '0');
     await page.screenshot({ path: `test-results/waveform-${viewport.width}-connected.png` });
     const connected = (await wave.boundingBox())!;
-    expect(connected.y).toBe(initial.y);
+    expect(Math.abs(connected.y + connected.height / 2 - (logo.y + logo.height / 2))).toBeLessThan(1);
+    expect(connected.width).toBe(initial.width);
     expect(connected.height).toBe(initial.height);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
     const pixels = await page.locator('canvas').evaluate(canvas => {
@@ -298,6 +303,8 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     await page.getByRole('button', { name: 'End conversation', exact: true }).click();
     await expect(page.locator('.wordmark')).toHaveCSS('opacity', '1');
     await expect(page.locator('.voice-hint')).toHaveCSS('opacity', '1');
+    const returned = (await wave.boundingBox())!;
+    expect(Math.abs(returned.y - initial.y)).toBeLessThan(1);
   });
 }
 
@@ -311,6 +318,7 @@ test('reduced motion keeps the opening transition immediate and the control keyb
   await page.keyboard.press('Enter');
   await expect(page.locator('main')).toHaveAttribute('data-voice-phase', 'listening');
   await expect(page.locator('.wordmark')).toHaveCSS('transition-duration', '0s');
+  await expect(page.locator('.wave-control')).toHaveCSS('transition-duration', '0s');
   await expect(page.locator('.voice-hint')).toHaveCSS('opacity', '0');
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeFocused();

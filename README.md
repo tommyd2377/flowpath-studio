@@ -1,6 +1,6 @@
 # FlowPath — The Voice
 
-A small local voice interface: the FlowPath logo, one centered waveform, and an invitation to tap. A connected conversation fades the logo and invitation over 1.5 seconds while the waveform stays centered. Tap again or press Escape to end.
+A small local voice interface: the FlowPath logo, one centered waveform, and an invitation to tap. On connection, the logo and invitation fade while the waveform glides up to the logo's center; all three transitions run together over 800 milliseconds. Tap again or press Escape to end and return to the centered opening view.
 
 GPT-Live uses its own knowledge with one saved application instruction prompt. Conversations start fresh. Search, delegated models, account creation, plugins, billing and persistent conversational memory are not part of this milestone.
 

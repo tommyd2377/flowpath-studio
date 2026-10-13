@@ -20,3 +20,9 @@ The actual local readiness check caught Next's internal localhost normalization.
 Live remains disabled by default and in production. The localhost development preview was started with FLOWPATH_LIVE_ENABLED=0. Tapping it requests neither microphone access nor a provider session. GPT-Live independent answer quality, real audio, WebRTC provider behavior, physical devices, deployment supervision and public quota/account behavior remain unverified.
 
 The active prototype has only the home page and local session endpoint. Account creation, owner instructions UI, prepaid minutes, News subdomain migration and plugins remain later milestones. The current application prompt is in lib/voice-config.ts.
+
+## Opening transition update
+
+At the user's request, the logo and invitation now fade together over 800 milliseconds while the waveform glides to the logo image's center using the same duration and easing. Ending returns all three to the opening view. Reduced motion applies the transition immediately.
+
+Lint, types, all 15 mocked server tests, production build and all 13 mocked browser tests passed. The browser checks include desktop, mobile and short landscape alignment, unchanged waveform dimensions, return position and keyboard/reduced-motion behavior. Mobile and landscape connected screenshots were visually inspected. No live API calls were initiated by the agent for this visual update. The user explicitly requested a fresh local live-test allowance.
