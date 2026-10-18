@@ -176,14 +176,15 @@ test('Next normalized loopback URLs retain the browser host origin and exact por
 });
 
 test('create sends one audio-only GPT-Live request with no backend, tools, or history', async () => {
-  const { server, calls, sockets } = harness();
+  const now = 100_000;
+  const { server, calls, sockets } = harness({ now: () => now });
   const sessionId = randomUUID();
   const response = await server.POST(request('POST', { sessionId, sdp }));
   assert.equal(response.status, 201);
   const body = await response.json();
   assert.equal(body.sessionId, sessionId);
   assert.equal(body.sdp, sdp);
-  assert.equal(typeof body.expiresAt, 'number');
+  assert.equal(body.expiresAt, now + 900_000, 'the default local conversation lasts fifteen minutes');
   assert.equal(JSON.stringify(body).includes('live_synthetic'), false);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, 'https://api.openai.com/v1/live/sessions');

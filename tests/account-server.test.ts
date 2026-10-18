@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import sharp from 'sharp';
 import { createAccountServer, waveformRecord, type FirebaseAccountAdapter } from '../lib/account-server';
-import type { Waveform } from '../lib/account-model';
+import { WAVEFORM_DEFAULT_COLOR, WAVEFORM_PHOTO_MAX_BYTES, type Waveform } from '../lib/account-model';
 
 const origin = 'http://127.0.0.1:3220';
 const input = { name: 'Tom’s waveform', initialPrompt: 'You are Tom’s assistant. Speak warmly and keep answers concise.' };
@@ -177,15 +178,78 @@ test('a saved voice survives reload and changing it preserves waveform identity 
   assert.equal((await (await fresh.waveformGET(request('waveform', 'GET', undefined, newCookie))).json()).waveform.voice, 'vesper');
 });
 
-test('legacy records without a voice read as Marin without rewriting saved instructions', async t => {
+test('legacy records read with default voice and appearance without rewriting saved instructions', async t => {
   const { server, directory, signIn } = await harness(t);
   const legacy = { id: randomUUID(), ...input, updatedAt: new Date().toISOString() };
   const filename = `${createHash('sha256').update('local-owner-a').digest('hex')}.json`;
   await writeFile(join(directory, filename), JSON.stringify(legacy));
   const cookie = await signIn();
   const loaded = (await (await server.waveformGET(request('waveform', 'GET', undefined, cookie))).json()).waveform;
-  assert.deepEqual(loaded, { ...legacy, voice: 'marin' });
+  assert.deepEqual(loaded, { ...legacy, voice: 'marin', accentColor: WAVEFORM_DEFAULT_COLOR, profilePhoto: null });
+  assert.equal(await readFile(join(directory, filename), 'utf8'), JSON.stringify(legacy));
   assert.equal(waveformRecord({ ...legacy, voice: 'not-a-supported-voice' }), null);
+  assert.equal(waveformRecord({ ...legacy, accentColor: '#12345' }), null);
+  assert.equal(waveformRecord({ ...legacy, profilePhoto: 'https://example.com/photo.png' }), null);
+});
+
+test('owner appearance persists, canonicalizes color and normalizes a photo once without retaining metadata', async t => {
+  const { server, signIn, settings } = await harness(t);
+  const cookie = await signIn();
+  const original = await sharp({ create: { width: 512, height: 400, channels: 3, background: '#7353cb' } })
+    .withMetadata({ orientation: 6 }).png().toBuffer();
+  const profilePhoto = `data:image/png;base64,${original.toString('base64')}`;
+  const response = await server.waveformPUT(request('waveform', 'PUT', { ...input, accentColor: '#A61CE3', profilePhoto }, cookie));
+  assert.equal(response.status, 200);
+  const saved = (await response.json()).waveform as Waveform;
+  assert.equal(saved.accentColor, '#a61ce3');
+  assert.match(saved.profilePhoto!, /^data:image\/webp;base64,/);
+  const metadata = await sharp(Buffer.from(saved.profilePhoto!.split(',')[1], 'base64')).metadata();
+  assert.equal(Math.max(metadata.width!, metadata.height!), 256);
+  assert.equal(metadata.exif, undefined);
+  assert.equal(metadata.orientation, undefined);
+  const edited = (await (await server.waveformPUT(request('waveform', 'PUT', {
+    name: saved.name, initialPrompt: 'Different instructions.', voice: saved.voice,
+    accentColor: saved.accentColor, profilePhoto: saved.profilePhoto,
+  }, cookie))).json()).waveform as Waveform;
+  assert.equal(edited.profilePhoto, saved.profilePhoto, 'unrelated saves must not re-encode the existing photo');
+  assert.equal(edited.id, saved.id);
+  const fresh = createAccountServer(settings);
+  const login = await fresh.accountPOST(request('account', 'POST', { localAccount: 'owner-a' }));
+  const nextCookie = login.headers.get('set-cookie')!.split(';')[0];
+  assert.deepEqual((await (await fresh.waveformGET(request('waveform', 'GET', undefined, nextCookie))).json()).waveform, edited);
+  const cleared = (await (await fresh.waveformPUT(request('waveform', 'PUT', {
+    ...input, accentColor: '#000000', profilePhoto: null,
+  }, nextCookie))).json()).waveform;
+  assert.equal(cleared.profilePhoto, null);
+  assert.equal(cleared.accentColor, '#000000');
+  assert.equal(cleared.id, saved.id);
+});
+
+test('appearance rejects remote, executable, corrupt, animated, oversized and mismatched photo data', async t => {
+  const { server, signIn } = await harness(t);
+  const cookie = await signIn();
+  const png = await sharp({ create: { width: 16, height: 16, channels: 3, background: '#7353cb' } }).png().toBuffer();
+  const oversized = await sharp({ create: { width: 513, height: 16, channels: 3, background: '#7353cb' } }).png().toBuffer();
+  const corrupt = Buffer.from(png);
+  const pixelOffset = corrupt.indexOf(Buffer.from('IDAT')) + 4;
+  corrupt[pixelOffset] ^= 0xff;
+  const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16"/></svg>');
+  const animation = await sharp(Buffer.concat([Buffer.alloc(12, 0), Buffer.alloc(12, 255)]), {
+    raw: { width: 2, height: 4, channels: 3, pageHeight: 2 },
+  }).webp({ loop: 0, delay: [100, 100] }).toBuffer();
+  for (const fields of [
+    { accentColor: 'red' }, { accentColor: '#fff' }, { accentColor: '#ffffff00' },
+    { accentColor: 'url(https://example.com)' }, { accentColor: null },
+    { profilePhoto: 'https://example.com/photo.png' }, { profilePhoto: 'data:image/svg+xml;base64,' + svg.toString('base64') },
+    { profilePhoto: 'data:image/png;base64,' + svg.toString('base64') },
+    { profilePhoto: 'data:image/jpeg;base64,' + png.toString('base64') },
+    { profilePhoto: 'data:image/png;base64,' + corrupt.toString('base64') },
+    { profilePhoto: 'data:image/png;base64,' + oversized.toString('base64') },
+    { profilePhoto: 'data:image/png;base64,' + Buffer.alloc(WAVEFORM_PHOTO_MAX_BYTES + 1).toString('base64') },
+    { profilePhoto: 'data:image/webp;base64,' + animation.toString('base64') },
+    { profilePhoto: 'data:image/png;base64,abcd===' }, { profilePhoto: false },
+  ]) assert.equal((await server.waveformPUT(request('waveform', 'PUT', { ...input, ...fields }, cookie))).status, 400);
+  assert.deepEqual(await (await server.waveformGET(request('waveform', 'GET', undefined, cookie))).json(), { waveform: null });
 });
 
 test('expired local sessions cannot read or overwrite the saved prompt', async t => {

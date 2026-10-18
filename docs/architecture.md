@@ -6,7 +6,13 @@ The waveform host owns visuals and browser media. Short application instructions
 
 ## One owner, one waveform
 
-The home waveform stays available without an account. `/account` holds sign-in and a small form for name, voice and initial prompt; `/w/<id>` is the owner's private waveform. Each verified account has one settings record with a random stable ID, name, voice, initial prompt and update time. Updates preserve that ID; no usernames, custom domains, multiple waveforms, publishing workflow or dashboard are introduced.
+The home waveform stays available without an account. `/account` holds sign-in and a small form for name, voice, color, optional photo and initial prompt; `/w/<id>` is the owner's private waveform. Each verified account has one settings record with a random stable ID, those settings and update time. Updates preserve that ID; no usernames, custom domains, multiple waveforms, publishing workflow or dashboard are introduced.
+
+Appearance stays outside the voice instructions. A six-digit hex accent drives a shared palette for the canvas and interface, lifting dark colors for contrast. The home page retains its original amber palette and FlowPath logo. Private photos replace the logo and use its existing 800 ms fade; the waveform moves to the portrait's center. Missing legacy appearance settings default to amber and no photo without rewriting the record.
+
+Photo uploads accept JPEG, PNG or WebP up to 5 MB in the browser, which center-crops to a 256-pixel square JPEG. The settings endpoint limits its whole JSON body to 200 KiB and the image to 128 KiB and 512 pixels per side. Sharp fully decodes new images, strips metadata and re-encodes to a static WebP no larger than 256 pixels per side. The bounded data URL lives in the owner-only settings record; no public asset URL, Storage bucket or cloud upload is introduced. Unchanged photos are not re-encoded on unrelated saves.
+
+The saved initial prompt is capped at 4,000 characters. GPT-Live currently allows up to 16,384 instruction tokens including the application's platform instructions; that provider capacity is not this editor's limit or cross-session memory.
 
 Voice choices and short language/regional descriptions live in `lib/voice-options.ts`, sourced from the [official GPT-Live voice options](https://developers.openai.com/api/docs/guides/live-conversations#voice-options). The server accepts only those registered names and sets `audio.output.voice` when creating a conversation. Voice changes apply to the next conversation. Legacy records and requests without a voice retain Marin by default; loading a legacy record does not rewrite the saved file. No sample playback, extra speech model, custom voice creation or automatic paid preview is added.
 
@@ -28,7 +34,7 @@ Official Firebase references: [Google sign-in](https://firebase.google.com/docs/
 
 Live is disabled unless development mode explicitly opts in. Readiness is checked before microphone access. Local requests require a loopback host and matching origin; bodies and SDP are bounded, and non-audio media is rejected. A browser-generated UUID identifies a local reservation so a canceled handshake can still close a late-created provider session. Provider IDs stay on the server.
 
-The controller admits one local session, up to three starts per minute and at most three provider starts for the entire local process, including failed starts. It has a 30-second startup watchdog and a 180-second absolute cap from the confirmed creation response. Browser inactivity closes after 45 seconds of silence. These local test limits are distinct from future customer trial accounting. Normal closure waits for session.closed and final usage; uncertainty blocks new starts. No automatic retries are performed.
+The controller admits one local session, up to three starts per minute and at most three provider starts for the entire local process, including failed starts. It has a 30-second startup watchdog and a 15-minute absolute cap from the confirmed creation response. Browser inactivity closes after 45 seconds of silence. These local test limits are distinct from future customer trial accounting. Normal closure waits for session.closed and final usage; uncertainty blocks new starts. No automatic retries are performed.
 
 Standard WebRTC is the starting transport. WARP and hosting optimizations are deferred until actual latency is measured. Deployment runtime supervision, durable public quotas, concurrent owner budgets and payment reconciliation remain future work.
 
@@ -38,6 +44,7 @@ News is an independent application. Later a News module will own its data, actio
 
 - https://developers.openai.com/api/docs/guides/voice-webrtc?api=live
 - https://developers.openai.com/api/docs/guides/live-conversations
+- https://developers.openai.com/api/docs/guides/live-conversations#configuration-fields
 - https://developers.openai.com/api/docs/guides/live-prompting
 - https://developers.openai.com/api/docs/guides/voice-server-controls?api=live
 

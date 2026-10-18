@@ -306,7 +306,7 @@ export function useVoiceSession(waveformId?: string) {
         if (!alive()) return;
         const remaining = Math.max(0, Math.ceil((session.expiresAt! - Date.now()) / 1000));
         setRemainingSeconds(remaining);
-        if (!remaining) stop('The three-minute conversation has ended.');
+        if (!remaining) stop('The 15-minute conversation has ended.');
         else if (session.ready && Date.now() - session.lastActivity >= 45_000) stop('Conversation ended after 45 seconds of silence.');
       };
       session.tick = setInterval(tick, 1_000);

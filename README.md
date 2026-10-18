@@ -24,11 +24,15 @@ FLOWPATH_ACCOUNT_MODE=local FLOWPATH_LIVE_ENABLED=0 npm run dev
 
 Choose **Create your waveform**, then a clearly labeled test owner. Save a waveform name, voice and initial prompt and choose **Open waveform**. The voice selector shows a short language/regional description; Marin remains the default for existing waveforms. Saved prompt and voice changes apply to new conversations. Its stable `/w/<id>` address requires that same owner to be signed in. A second test owner cannot read its prompt or open/start/close its private conversation. Account controls disappear while talking; the existing opening/closing motion is retained.
 
+Choose any accent using the native color picker or a six-digit hex code. The personal waveform, interface accents and subtly tinted background share that color, with contrast adjustments for readability. An optional JPEG, PNG or WebP photo (up to 5 MB) is cropped into a small portrait in the browser, validated and re-encoded server-side, then saved privately with the waveform. It replaces the personal logo and fades during the same 800 ms opening transition. Remove it to return to the logo. The main FlowPath page retains its original logo and amber appearance.
+
+The initial prompt currently allows 4,000 characters. This app limit is separate from GPT-Live's documented 16,384-token instructions limit, which must also accommodate the platform instructions. Saved instructions do not add conversation memory or tools.
+
 The two identities are synthetic fixtures, not real Google/Firebase accounts. Their opaque HttpOnly sessions expire after five days or a server restart. Synthetic settings persist in the new Git-ignored `.local-waveforms/` directory; sign out and back in as the same test owner to retrieve them. Do not use this fixture mode for private or production data. The application never accesses Studio's private runtime directory for accounts.
 
 Google sign-in and a server-only Firestore adapter are implemented but inactive. No Firebase project, authentication provider, database, security rules or credentials were changed. Account routes remain development-only and loopback-only, including Firebase mode. Connecting a selected Firebase project, confirming its database edition and reviewing its access rules are a separate, explicitly authorized activation step. Existing Firebase rules are legacy files, not a configuration for this milestone. See [architecture](docs/architecture.md).
 
-The initial milestone used offline/mocked verification. Live testing requires explicit approval for the app, localhost host, task and call budget. Only after that approval may development use FLOWPATH_LIVE_ENABLED=1 with already-configured server credentials. Do not create/copy keys or change environment files. Production mode rejects live access. Each local process admits at most three provider starts, including failed starts; this budget does not reset each minute. See the dated verification notes for actual live results.
+The initial milestone used offline/mocked verification. Live testing requires explicit approval for the app, localhost host, task and call budget. Only after that approval may development use FLOWPATH_LIVE_ENABLED=1 with already-configured server credentials. Do not create/copy keys or change environment files. Production mode rejects live access. Each conversation has a 15-minute absolute limit and closes after 45 seconds of silence. Each local process admits at most three provider starts, including failed starts; this budget does not reset each minute. See the dated verification notes for actual live results.
 
 ## Verification
 
@@ -43,6 +47,8 @@ The October 18, 2026 account milestone passed `npm run check` (lint, types, 35 u
 
 The voice-selection follow-up passed the same checks with 37 unit/integration tests and 19 browser checks in an isolated source copy, including selected-voice persistence, legacy Marin defaults, invalid-voice rejection and selected voice in the provider request. No additional paid call was started by these checks. The local preview was restarted while idle with live voice enabled for the user's listening test; hearing each new voice remains live verification.
 
+The personal-appearance and 15-minute follow-up passed `npm run check` (42 unit/integration tests) and all 25 isolated browser checks. Synthetic photos and custom colors were verified through save, reload, sign-out, owner isolation, removal, invalid input and failed saves. Desktop, mobile and landscape checks cover the portrait-aligned 800 ms opening/return transition and reduced motion; desktop/mobile previews were visually inspected. The server's 900-second expiry is asserted with a fake clock, and short injected deadlines verify closure without waiting 15 minutes. No paid API calls, cloud changes or deployment were performed. The preview server remains stopped.
+
 ## Small source map
 
 - app/page.tsx and components/VoiceExperience.tsx: the opening/closing experience.
@@ -53,6 +59,7 @@ The voice-selection follow-up passed the same checks with 37 unit/integration te
 - components/AccountSettings.tsx and components/OwnerWaveform.tsx: the small settings page and private waveform gate.
 - lib/voice-config.ts: the platform instructions and per-conversation saved prompt snapshot.
 - lib/voice-options.ts: the documented GPT-Live voice choices and short descriptions, shared by the form and server validation.
+- lib/appearance-theme.ts, lib/prepare-profile-photo.ts and lib/profile-photo.ts: readable personal colors, browser portrait preparation and server raster validation.
 - lib/voice-server.ts and app/api/session/route.ts: local admission and server supervision.
 
 The existing personal footer is retained below the opening screen and hidden during a conversation. No News code or sibling checkout dependency is loaded.

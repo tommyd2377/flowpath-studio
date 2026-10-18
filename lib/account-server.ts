@@ -2,8 +2,9 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DEFAULT_VOICE, isVoiceName } from './voice-options';
+import { normalizeProfilePhoto, validProfilePhoto } from './profile-photo';
 import {
-  WAVEFORM_NAME_LIMIT, WAVEFORM_PROMPT_LIMIT,
+  WAVEFORM_DEFAULT_COLOR, WAVEFORM_NAME_LIMIT, WAVEFORM_PROMPT_LIMIT,
   type AccountMode, type AccountUser, type FirebasePublicConfig, type Waveform, type WaveformInput,
 } from './account-model';
 
@@ -51,8 +52,7 @@ function localRequest(request: Request, mutation: boolean) {
   return mutation ? origin === publicUrl.origin : !origin || origin === publicUrl.origin;
 }
 
-async function readBody(request: Request) {
-  const maxBytes = 20_000;
+async function readBody(request: Request, maxBytes = 20_000) {
   if (request.headers.get('content-type')?.split(';')[0] !== 'application/json' || !request.body) throw new Error('Invalid body');
   const length = request.headers.get('content-length');
   if (length && (!/^\d+$/.test(length) || Number(length) > maxBytes)) throw new Error('Invalid body');
@@ -84,23 +84,30 @@ async function readBody(request: Request) {
 }
 
 function waveformInput(value: Record<string, unknown>): WaveformInput | null {
-  if (Object.keys(value).some(key => key !== 'name' && key !== 'initialPrompt' && key !== 'voice')
+  if (Object.keys(value).some(key => !['name', 'initialPrompt', 'voice', 'accentColor', 'profilePhoto'].includes(key))
     || typeof value.name !== 'string' || typeof value.initialPrompt !== 'string') return null;
   const voice = value.voice === undefined ? DEFAULT_VOICE : value.voice;
   if (!isVoiceName(voice)) return null;
+  const accentColor = value.accentColor === undefined ? WAVEFORM_DEFAULT_COLOR : value.accentColor;
+  const profilePhoto = value.profilePhoto === undefined ? null : value.profilePhoto;
+  if (typeof accentColor !== 'string' || !/^#[0-9a-f]{6}$/i.test(accentColor)
+    || profilePhoto !== null && !validProfilePhoto(profilePhoto)) return null;
   const name = value.name.trim();
   const initialPrompt = value.initialPrompt.trim();
   if (!name || name.length > WAVEFORM_NAME_LIMIT || /[\u0000-\u001f\u007f]/.test(name)
     || !initialPrompt || initialPrompt.length > WAVEFORM_PROMPT_LIMIT
     || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(initialPrompt)) return null;
-  return { name, initialPrompt, voice };
+  return { name, initialPrompt, voice, accentColor: accentColor.toLowerCase(), profilePhoto };
 }
 
 export function waveformRecord(value: unknown): Waveform | null {
   const row = object(value);
   if (!row || typeof row.id !== 'string' || !/^[0-9a-f-]{36}$/.test(row.id)
     || typeof row.updatedAt !== 'string' || !Number.isFinite(Date.parse(row.updatedAt))) return null;
-  const input = waveformInput({ name: row.name, initialPrompt: row.initialPrompt, voice: row.voice });
+  const input = waveformInput({
+    name: row.name, initialPrompt: row.initialPrompt, voice: row.voice,
+    accentColor: row.accentColor, profilePhoto: row.profilePhoto,
+  });
   return input ? { id: row.id, ...input, updatedAt: row.updatedAt } : null;
 }
 
@@ -284,10 +291,22 @@ export function createAccountServer(options: Options = {}) {
       const identity = await resolveIdentity(request);
       if (!identity) return unauthorized();
       let input: WaveformInput | null;
-      try { input = waveformInput(await readBody(request)); } catch { input = null; }
-      if (!input) return json({ error: `Use a name up to ${WAVEFORM_NAME_LIMIT} characters and instructions up to ${WAVEFORM_PROMPT_LIMIT} characters.` }, 400);
+      try { input = waveformInput(await readBody(request, 200 * 1024)); } catch { input = null; }
+      if (!input) return json({ error: `Use a name up to ${WAVEFORM_NAME_LIMIT} characters, instructions up to ${WAVEFORM_PROMPT_LIMIT} characters, a six-digit hex color and a PNG, JPEG or WebP photo up to 128 KB and 512 pixels.` }, 400);
       if (!identity.isCurrent()) return unauthorized();
-      try { return json({ waveform: await store().saveWaveform(identity.owner.uid, input) }); }
+      try {
+        if (input.profilePhoto !== null) {
+          const existing = await store().readWaveform(identity.owner.uid);
+          if (!identity.isCurrent()) return unauthorized();
+          if (input.profilePhoto !== existing?.profilePhoto) {
+            const normalized = await normalizeProfilePhoto(input.profilePhoto);
+            if (!normalized) return json({ error: 'Choose a valid PNG, JPEG or WebP photo up to 128 KB and 512 pixels.' }, 400);
+            input.profilePhoto = normalized;
+          }
+        }
+        if (!identity.isCurrent()) return unauthorized();
+        return json({ waveform: await store().saveWaveform(identity.owner.uid, input) });
+      }
       catch { return json({ error: 'Your waveform could not be saved. Please try again.' }, 503); }
     },
   };

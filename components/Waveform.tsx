@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { appearancePalette } from "@/lib/appearance-theme";
+import { WAVEFORM_DEFAULT_COLOR } from "@/lib/account-model";
 
 export type VoicePhase =
   | "idle"
@@ -14,12 +16,14 @@ type WaveformProps = {
   phase: VoicePhase;
   inputAnalyser: AnalyserNode | null;
   outputAnalyser: AnalyserNode | null;
+  accentColor?: string;
 };
 
 export default function Waveform({
   phase,
   inputAnalyser,
   outputAnalyser,
+  accentColor,
 }: WaveformProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const audioRef = useRef({ phase, inputAnalyser, outputAnalyser });
@@ -36,6 +40,10 @@ export default function Waveform({
     const palette = document.createElement("canvas");
     const paletteContext = palette.getContext("2d");
     if (!paletteContext) return;
+    const colors = accentColor && accentColor.toLowerCase() !== WAVEFORM_DEFAULT_COLOR
+      ? appearancePalette(accentColor).accent : null;
+    const base = colors?.join(", ");
+    const highlight = colors?.map(channel => Math.round(channel * 0.35 + 255 * 0.65)).join(", ");
 
     const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
     let reducedMotion = motionQuery.matches;
@@ -64,18 +72,18 @@ export default function Waveform({
       palette.width = canvas.width;
       palette.height = 1;
       const gradient = paletteContext.createLinearGradient(0, 0, width * dpr, 0);
-      gradient.addColorStop(0, "rgba(221, 191, 146, 0)");
-      gradient.addColorStop(0.13, "rgba(221, 191, 146, 0.32)");
-      gradient.addColorStop(0.36, "#d9b98c");
-      gradient.addColorStop(0.5, "#fff7e7");
-      gradient.addColorStop(0.64, "#e9d6b6");
-      gradient.addColorStop(0.87, "rgba(221, 191, 146, 0.32)");
-      gradient.addColorStop(1, "rgba(221, 191, 146, 0)");
+      gradient.addColorStop(0, base ? `rgba(${base}, 0)` : "rgba(221, 191, 146, 0)");
+      gradient.addColorStop(0.13, base ? `rgba(${base}, 0.32)` : "rgba(221, 191, 146, 0.32)");
+      gradient.addColorStop(0.36, base ? `rgb(${base})` : "#d9b98c");
+      gradient.addColorStop(0.5, highlight ? `rgb(${highlight})` : "#fff7e7");
+      gradient.addColorStop(0.64, highlight ? `rgb(${highlight})` : "#e9d6b6");
+      gradient.addColorStop(0.87, base ? `rgba(${base}, 0.32)` : "rgba(221, 191, 146, 0.32)");
+      gradient.addColorStop(1, base ? `rgba(${base}, 0)` : "rgba(221, 191, 146, 0)");
       paletteContext.fillStyle = gradient;
       paletteContext.fillRect(0, 0, palette.width, 1);
       const pattern = context.createPattern(palette, "repeat-y");
       pattern?.setTransform(new DOMMatrix().scale(1 / dpr, 1));
-      stroke = pattern ?? "#f6eddb";
+      stroke = pattern ?? (base ? `rgb(${base})` : "#f6eddb");
       previousDraw = 0;
       // Resizing clears the bitmap after animation frames have run. Paint before
       // this frame reaches the screen, without creating a second animation loop.
@@ -151,7 +159,7 @@ export default function Waveform({
         context.beginPath();
         context.globalAlpha = isError ? (isMain ? 0.4 : 0.04) : isMain ? 0.95 : 0.12;
         context.lineWidth = isMain ? 1.45 : 0.85;
-        context.shadowColor = "rgba(239, 201, 143, 0.3)";
+        context.shadowColor = base ? `rgba(${base}, 0.3)` : "rgba(239, 201, 143, 0.3)";
         context.shadowBlur = isMain ? 7 : 0;
 
         for (let i = 0; i <= pointCount; i += 1) {
@@ -189,7 +197,7 @@ export default function Waveform({
       window.removeEventListener("resize", resize);
       motionQuery.removeEventListener("change", onMotionChange);
     };
-  }, []);
+  }, [accentColor]);
 
   return (
     <canvas

@@ -6,8 +6,12 @@ import { useEffect } from 'react';
 import { useVoiceSession } from '@/lib/use-voice-session';
 import Waveform from './Waveform';
 import PersonalFooter from './PersonalFooter';
+import { appearanceTheme } from '@/lib/appearance-theme';
+import { WAVEFORM_DEFAULT_COLOR } from '@/lib/account-model';
 
-export default function VoiceExperience({ waveformId, name }: { waveformId?: string; name?: string }) {
+export default function VoiceExperience({ waveformId, name, accentColor = WAVEFORM_DEFAULT_COLOR, profilePhoto = null }: {
+  waveformId?: string; name?: string; accentColor?: string; profilePhoto?: string | null;
+}) {
   const voice = useVoiceSession(waveformId);
   const { active, stop } = voice;
   const connected = voice.phase === 'listening' || voice.phase === 'speaking';
@@ -26,19 +30,25 @@ export default function VoiceExperience({ waveformId, name }: { waveformId?: str
     return () => window.removeEventListener('keydown', onKey);
   }, [active, stop]);
 
-  return <div className="voice-experience" data-active={voice.active} data-connected={connected}>
+  return <div className="voice-experience" data-active={voice.active} data-connected={connected}
+    data-personal={Boolean(waveformId)} data-profile-photo={Boolean(waveformId && profilePhoto)}
+    style={waveformId ? appearanceTheme(accentColor) : undefined}>
     <nav className="voice-navigation" aria-label="Account" hidden={voice.active}>
       {name && <span>{name}</span>}
       <Link href="/account">{waveformId ? 'My waveform' : 'Create your waveform'}</Link>
     </nav>
     <main className="voice-page" data-voice-phase={voice.phase}>
       <header className="wordmark" aria-hidden={connected}>
-        <Image src="/brand/flowpath-logo-full.png" alt="FlowPath" width={1536} height={1024} priority />
+        {waveformId && profilePhoto
+          // Raster-only, bounded owner photo; bypass the remote image optimizer.
+          // eslint-disable-next-line @next/next/no-img-element
+          ? <img className="profile-photo" src={profilePhoto} alt={`${name ?? 'Waveform'} profile photo`} width={96} height={96} />
+          : <Image src="/brand/flowpath-logo-full.png" alt="FlowPath" width={1536} height={1024} priority />}
       </header>
       <button className="wave-control" type="button" aria-label={label} aria-pressed={voice.active}
         aria-describedby={showStatus && status ? 'voice-status' : !connected ? 'voice-hint' : undefined}
         onClick={() => { if (voice.needsAudioResume || !voice.active) void voice.start(); else void voice.stop(); }}>
-        <Waveform phase={voice.phase} inputAnalyser={voice.inputAnalyser} outputAnalyser={voice.outputAnalyser} />
+        <Waveform phase={voice.phase} inputAnalyser={voice.inputAnalyser} outputAnalyser={voice.outputAnalyser} accentColor={waveformId ? accentColor : undefined} />
       </button>
       <p className="voice-hint" id="voice-hint" aria-hidden={connected}>Tap the wave whenever you’re ready</p>
       <p className="voice-status" id="voice-status" role="status" aria-live="polite" aria-atomic="true">{showStatus ? status : ''}</p>

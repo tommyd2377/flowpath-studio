@@ -119,6 +119,16 @@ async function emit(page: Page, event: object) {
   await page.evaluate(event => (window as unknown as { voiceTest: MediaTracker }).voiceTest.emit(event), event);
 }
 
+async function syntheticProfilePhoto(page: Page) {
+  return page.evaluate(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 12; canvas.height = 12;
+    const context = canvas.getContext('2d')!;
+    context.fillStyle = '#ba54d2'; context.fillRect(0, 0, 12, 12);
+    return canvas.toDataURL('image/png');
+  });
+}
+
 async function mockSession(page: Page, options: { enabled?: boolean; delayPost?: Promise<void>; durationMs?: number } = {}) {
   const calls: { method: string; sessionId?: string; waveformId?: string }[] = [];
   await page.route('**/api/session*', async route => {
@@ -129,7 +139,7 @@ async function mockSession(page: Page, options: { enabled?: boolean; delayPost?:
     else if (method === 'DELETE') await route.fulfill({ status: 204 });
     else {
       await options.delayPost;
-      await route.fulfill({ json: { sessionId: body.sessionId, sdp: 'v=0\r\n', expiresAt: Date.now() + (options.durationMs ?? 180_000) } });
+      await route.fulfill({ json: { sessionId: body.sessionId, sdp: 'v=0\r\n', expiresAt: Date.now() + (options.durationMs ?? 900_000) } });
     }
   });
   return calls;
@@ -257,7 +267,7 @@ test('the server deadline also ends a conversation with continuing speech', asyn
   await emit(page, { type: 'media.output.active' });
   await page.clock.fastForward(6_000);
   await expect.poll(async () => (await tracker(page)).stoppedTracks).toBe(1);
-  await expect(page.getByText('The three-minute conversation has ended.', { exact: true })).toBeVisible();
+  await expect(page.getByText('The 15-minute conversation has ended.', { exact: true })).toBeVisible();
 });
 
 test('the real local readiness route is paused and creates no microphone session', async ({ page }) => {
@@ -362,4 +372,90 @@ test('account changes unmount a private conversation and release its microphone'
   await expect.poll(async () => (await tracker(page)).stoppedTracks).toBe(1);
   await expect.poll(async () => (await tracker(page)).closedPeers).toBe(1);
   expect(calls.some(call => call.method === 'DELETE' && call.waveformId === waveformId)).toBe(true);
+});
+
+for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }, { width: 844, height: 390 }]) {
+  test(`a private photo and color keep the opening transition aligned at ${viewport.width}px`, async ({ page }) => {
+    const waveformId = '00000000-0000-4000-8000-000000000003';
+    const profilePhoto = await syntheticProfilePhoto(page);
+    await page.setViewportSize(viewport);
+    await fakeMedia(page);
+    await mockSession(page);
+    await page.route('**/api/waveform?id=*', route => route.fulfill({ json: { waveform: {
+      id: waveformId, name: 'Synthetic profile', accentColor: '#4069e1', profilePhoto,
+    } } }));
+    await page.goto(`/w/${waveformId}`);
+    const photo = page.getByRole('img', { name: 'Synthetic profile profile photo', exact: true });
+    await expect(photo).toBeVisible();
+    await expect(photo).toHaveAttribute('src', profilePhoto);
+    const accent = await page.locator('.voice-experience').evaluate(element => getComputedStyle(element).getPropertyValue('--accent-rgb').replace(/\s/g, ''));
+    expect(accent).toBe('64,105,225');
+    const wave = page.locator('.wave-control');
+    const initial = (await wave.boundingBox())!;
+    const identity = (await photo.boundingBox())!;
+    expect(Math.abs(initial.y + initial.height / 2 - viewport.height / 2)).toBeLessThan(1);
+    await page.screenshot({ path: `test-results/private-profile-${viewport.width}-idle.png` });
+    await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+    await expect(page.locator('main')).toHaveAttribute('data-voice-phase', 'listening');
+    for (const selector of ['.wordmark', '.voice-hint', '.wave-control']) {
+      await expect(page.locator(selector)).toHaveCSS('transition-duration', '0.8s');
+      await expect(page.locator(selector)).toHaveCSS('transition-timing-function', 'ease-in-out');
+    }
+    await expect(page.locator('.wordmark')).toHaveCSS('opacity', '0');
+    await expect(page.locator('.voice-hint')).toHaveCSS('opacity', '0');
+    const connected = (await wave.boundingBox())!;
+    expect(Math.abs(connected.y + connected.height / 2 - (identity.y + identity.height / 2))).toBeLessThan(1);
+    expect(connected.width).toBe(initial.width);
+    expect(connected.height).toBe(initial.height);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    const tinted = await page.locator('canvas').evaluate(canvas => {
+      const element = canvas as HTMLCanvasElement;
+      const pixels = element.getContext('2d')!.getImageData(0, 0, element.width, element.height).data;
+      for (let index = 0; index < pixels.length; index += 4) {
+        if (pixels[index + 3] > 30 && pixels[index + 2] > pixels[index] + 20) return true;
+      }
+      return false;
+    });
+    expect(tinted).toBe(true);
+    await page.screenshot({ path: `test-results/private-profile-${viewport.width}-connected.png` });
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.wordmark')).toHaveCSS('opacity', '1');
+    await expect(page.locator('.voice-hint')).toHaveCSS('opacity', '1');
+    const returned = (await wave.boundingBox())!;
+    expect(Math.abs(returned.y - initial.y)).toBeLessThan(1);
+    await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeFocused();
+    await page.goto('/');
+    await expect(page.getByRole('img', { name: 'FlowPath', exact: true })).toHaveAttribute('src', /flowpath-logo-full/);
+    await expect(page.locator('.profile-photo')).toHaveCount(0);
+    await expect(page.locator('.voice-experience')).toHaveCSS('background-color', 'rgb(16, 17, 16)');
+    await expect(page.locator('.voice-hint')).toHaveCSS('color', 'rgb(197, 187, 166)');
+    const defaultAccent = await page.locator('.voice-experience').evaluate(element => getComputedStyle(element).getPropertyValue('--accent-rgb').replace(/\s/g, ''));
+    expect(defaultAccent).toBe('');
+  });
+}
+
+test('a private profile remains accessible with reduced motion and an immediate transition', async ({ page }) => {
+  const waveformId = '00000000-0000-4000-8000-000000000004';
+  const profilePhoto = await syntheticProfilePhoto(page);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await fakeMedia(page);
+  await mockSession(page);
+  await page.route('**/api/waveform?id=*', route => route.fulfill({ json: { waveform: {
+    id: waveformId, name: 'Reduced motion profile', accentColor: '#f24051',
+    profilePhoto,
+  } } }));
+  await page.goto(`/w/${waveformId}`);
+  const photo = (await page.getByRole('img', { name: 'Reduced motion profile profile photo', exact: true }).boundingBox())!;
+  const wave = page.locator('.wave-control');
+  await wave.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('main')).toHaveAttribute('data-voice-phase', 'listening');
+  await expect(page.locator('.wordmark')).toHaveCSS('transition-duration', '0s');
+  await expect(page.locator('.wave-control')).toHaveCSS('transition-duration', '0s');
+  await expect(page.locator('.voice-hint')).toHaveCSS('opacity', '0');
+  const connected = (await wave.boundingBox())!;
+  expect(Math.abs(connected.y + connected.height / 2 - (photo.y + photo.height / 2))).toBeLessThan(1);
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeFocused();
+  await expect(page.locator('.wordmark')).toHaveCSS('opacity', '1');
 });
