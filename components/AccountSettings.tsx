@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { signInAccount, signOutAccount } from '@/lib/account-client';
+import { authenticateWithEmail, signInAccount, signOutAccount, type EmailAccountAction } from '@/lib/account-client';
 import { WAVEFORM_DEFAULT_COLOR, WAVEFORM_NAME_LIMIT, WAVEFORM_PROMPT_LIMIT, type AccountMode, type AccountUser, type Waveform } from '@/lib/account-model';
 import { appearanceTheme } from '@/lib/appearance-theme';
 import { prepareProfilePhoto } from '@/lib/prepare-profile-photo';
@@ -35,6 +35,11 @@ export default function AccountSettings() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
+  const [emailAction, setEmailAction] = useState<Exclude<EmailAccountAction, 'resend-verification'>>('sign-in');
+  const [verificationAvailable, setVerificationAvailable] = useState(false);
   const accountRevision = useRef(0);
   const photoRevision = useRef<symbol | null>(null);
 
@@ -48,6 +53,7 @@ export default function AccountSettings() {
         accountRevision.current++;
         photoRevision.current = null;
         setAccentColor(WAVEFORM_DEFAULT_COLOR); setPreviewColor(WAVEFORM_DEFAULT_COLOR); setProfilePhoto(null); setPreparingPhoto(false);
+        setEmail(''); setPassword(''); setInviteCode(''); setEmailAction('sign-in'); setVerificationAvailable(false);
         setBusy(false); setLoading(true); setAccount(null); setWaveform(null); setName(''); setVoice(DEFAULT_VOICE); setInitialPrompt(''); setMessage(''); setError('');
       }
       void (async () => {
@@ -77,7 +83,7 @@ export default function AccountSettings() {
     if (!account || account.mode === 'unavailable') return;
     setBusy(true); setError(''); setMessage('');
     try {
-      await signInAccount(account.mode, localAccount);
+      await signInAccount(account.mode, localAccount, inviteCode);
     } catch (error) { setError(error instanceof Error ? error.message : 'Sign-in could not be completed. Please try again.'); }
     finally { setBusy(false); }
   }
@@ -88,6 +94,35 @@ export default function AccountSettings() {
       await signOutAccount();
     } catch { setError('Sign-out could not be completed. Please try again.'); }
     finally { setBusy(false); }
+  }
+
+  function chooseEmailAction(action: typeof emailAction) {
+    setEmailAction(action); setPassword(''); setError(''); setMessage('');
+  }
+
+  async function submitEmail(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy || account?.mode !== 'firebase') return;
+    const submitter = (event.nativeEvent as SubmitEvent).submitter;
+    const action = submitter?.getAttribute('value') === 'resend-verification' ? 'resend-verification' : emailAction;
+    const requestedRevision = accountRevision.current;
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const result = await authenticateWithEmail(action, email, password, inviteCode);
+      if (requestedRevision !== accountRevision.current) return;
+      if (result === 'verification-sent' || result === 'verification-required') {
+        setEmailAction('sign-in'); setVerificationAvailable(true);
+        setMessage(result === 'verification-sent'
+          ? 'Check your inbox for a verification link, then sign in here. If you’re new, include your invitation code. Enter your password again if you need to resend the email.'
+          : 'Verify your email before signing in. Check your inbox, or enter your password again to resend the verification email. If you’re new, include your invitation code when you sign in.');
+      } else if (result === 'password-reset-sent') {
+        setMessage('If an account uses that email, a password reset link is on its way.');
+      }
+    } catch (error) {
+      if (requestedRevision === accountRevision.current) setError(error instanceof Error ? error.message : 'Your account request could not be completed. Please try again.');
+    } finally {
+      if (requestedRevision === accountRevision.current) { setBusy(false); setPassword(''); }
+    }
   }
 
   async function save(event: FormEvent<HTMLFormElement>) {
@@ -169,7 +204,30 @@ export default function AccountSettings() {
       {account.mode === 'local' ? <>
         <p className="local-account-note">Local preview: use a test account. This does not create a Google or Firebase account.</p>
         <div className="account-actions"><button className="primary-button" type="button" onClick={() => void signIn('owner-a')} disabled={busy}>Use test owner A</button><button className="secondary-button" type="button" onClick={() => void signIn('owner-b')} disabled={busy}>Use test owner B</button></div>
-      </> : account.mode === 'firebase' ? <button className="primary-button" type="button" onClick={() => void signIn()} disabled={busy}>{busy ? 'Signing in…' : 'Continue with Google'}</button> : <p>Account sign-in is not connected for this preview.</p>}
+      </> : account.mode === 'firebase' ? <>
+        <label htmlFor="invitation-code">Invitation code</label>
+        <input id="invitation-code" value={inviteCode} onChange={event => setInviteCode(event.target.value)} disabled={busy} maxLength={64} autoComplete="off" spellCheck={false} aria-describedby="invitation-help" />
+        <p id="invitation-help" className="field-help">New here? Enter your invitation code to join FlowPath Studio. Already joined? Sign in normally.</p>
+        <button className="secondary-button google-sign-in" type="button" onClick={() => void signIn()} disabled={busy}>Continue with Google</button>
+        <p className="auth-divider">or use your email</p>
+        <form className="email-sign-in" onSubmit={event => void submitEmail(event)} aria-label="Email account">
+          <h2>{emailAction === 'create-account' ? 'Create an account' : emailAction === 'reset-password' ? 'Reset your password' : 'Sign in with email'}</h2>
+          <label htmlFor="account-email">Email</label>
+          <input id="account-email" type="email" value={email} onChange={event => { setEmail(event.target.value); setVerificationAvailable(false); setError(''); setMessage(''); }} required disabled={busy} autoComplete="email" autoCapitalize="none" spellCheck={false} />
+          {emailAction !== 'reset-password' && <>
+            <label htmlFor="account-password">Password</label>
+            <input id="account-password" type="password" value={password} onChange={event => setPassword(event.target.value)} required disabled={busy} minLength={emailAction === 'create-account' ? 6 : undefined} autoComplete={emailAction === 'create-account' ? 'new-password' : 'current-password'} aria-describedby={emailAction === 'create-account' ? 'password-help' : undefined} />
+            {emailAction === 'create-account' && <p id="password-help" className="field-help">Use at least six characters. We’ll send a link to verify your email before you sign in.</p>}
+          </>}
+          <div className="account-actions">
+            <button className="primary-button" type="submit" disabled={busy}>{busy ? 'Please wait…' : emailAction === 'create-account' ? 'Create account' : emailAction === 'reset-password' ? 'Send reset link' : 'Sign in'}</button>
+            {verificationAvailable && emailAction === 'sign-in' && <button className="secondary-button" type="submit" value="resend-verification" disabled={busy}>Resend verification email</button>}
+          </div>
+        </form>
+        <div className="auth-options">
+          {emailAction === 'sign-in' ? <><button type="button" disabled={busy} onClick={() => chooseEmailAction('create-account')}>Create an account</button><button type="button" disabled={busy} onClick={() => chooseEmailAction('reset-password')}>Forgot password?</button></> : <button type="button" disabled={busy} onClick={() => chooseEmailAction('sign-in')}>Back to email sign-in</button>}
+        </div>
+      </> : <p>Account sign-in is not connected for this preview.</p>}
     </section> : null}
     <p className="account-status" role="status" aria-live="polite">{message}</p>
     {error && <p className="account-error" role="alert">{error}</p>}

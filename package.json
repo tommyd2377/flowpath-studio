@@ -7,6 +7,8 @@
     "dev": "next dev --hostname 127.0.0.1 --port 3220",
     "build": "next build",
     "start": "next start --hostname 127.0.0.1 --port 3220",
+    "start:hosting": "next start --hostname 0.0.0.0",
+    "invites:create": "node --import tsx scripts/create-invites.ts",
     "lint": "eslint app components lib tests scripts playwright.config.ts",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "node --import tsx --test tests/*.test.ts",
@@ -19,6 +21,7 @@
   "dependencies": {
     "firebase": "12.19.0",
     "firebase-admin": "14.5.0",
+    "google-auth-library": "11.3.1",
     "lucide-react": "1.41.0",
     "next": "16.3.4",
     "react": "19.2.8",

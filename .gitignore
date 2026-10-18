@@ -10,6 +10,7 @@ test-results/
 playwright-report/
 .visitor-recordings/
 .local-waveforms/
+.local-invites/
 
 # Local tooling, reports and archives
 archives/

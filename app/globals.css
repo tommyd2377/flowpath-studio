@@ -63,6 +63,12 @@ button { font: inherit; }
 .account-page :focus-visible, .voice-navigation a:focus-visible { outline: 2px solid var(--accent, #c5b69a); outline-offset: 4px; }
 .account-status { font-size: 13px; color: var(--accent, #c5bba6); }
 .account-error { font-size: 13px; color: #edb8aa; }
+.google-sign-in { width: 100%; margin-top: 12px; }
+.auth-divider { display: flex; align-items: center; gap: 14px; margin: 26px 0; font-size: 12px; color: var(--muted, #a59e90); }
+.auth-divider::before, .auth-divider::after { content: ''; flex: 1; height: 1px; background: var(--border, #5f594e); }
+.email-sign-in h2 { margin: 0; font-size: 19px; font-weight: 500; }
+.auth-options { display: flex; flex-wrap: wrap; gap: 12px 24px; }
+.auth-options button { border: 0; background: none; color: var(--accent, #c5bba6); padding: 3px 0; font: inherit; font-size: 13px; text-decoration: underline; text-underline-offset: 4px; cursor: pointer; }
 @media (max-height: 650px) { .voice-page { --logo-top: max(12px, calc(50svh - 190px)); } .voice-hint { top: calc(50svh + 105px); } .voice-status { top: calc(50svh + 140px); } }
 @media (max-width: 600px) { .voice-page { --logo-width: 145px; } .wave-control { width: calc(100% - 24px); height: 150px; } .voice-hint, .voice-status { font-size: 12px; } }
 @media (prefers-reduced-motion: reduce) { .wordmark, .voice-hint, .wave-control { transition: none; } }

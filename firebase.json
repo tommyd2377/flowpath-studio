@@ -1,0 +1,47 @@
+{
+  "apphosting": {
+    "backendId": "flowpath-studio",
+    "rootDir": ".",
+    "alwaysDeployFromSource": true,
+    "ignore": [
+      "node_modules",
+      ".git",
+      ".next",
+      ".env*",
+      ".npmrc",
+      ".local-waveforms",
+      ".local-invites",
+      "data",
+      "archives",
+      ".visitor-recordings",
+      ".codex",
+      ".agents",
+      ".vercel",
+      ".firebase",
+      "test-results",
+      "playwright-report",
+      "coverage",
+      "*.log",
+      "*.pem",
+      "*.key",
+      "*.p12",
+      "*.pfx",
+      "*service-account*.json",
+      "*serviceAccount*.json"
+    ]
+  },
+  "firestore": {
+    "database": "(default)",
+    "location": "us-east4",
+    "rules": "firestore.rules"
+  },
+  "auth": {
+    "providers": {
+      "emailPassword": true,
+      "googleSignIn": {
+        "oAuthBrandDisplayName": "FlowPath Studio",
+        "supportEmail": "tomdevito27@gmail.com"
+      }
+    }
+  }
+}

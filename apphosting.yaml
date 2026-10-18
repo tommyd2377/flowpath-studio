@@ -1,0 +1,59 @@
+# This launch profile is for the new FlowPath Studio project only.
+# Enabling this hosted runtime incurs Cloud Run usage, including a warm instance.
+runConfig:
+  cpu: 1
+  memoryMiB: 512
+  minInstances: 1
+  maxInstances: 2
+  concurrency: 80
+  cpuAlwaysAllocated: true
+
+# Use the standard Next server rather than depend on preview Next 16 adapters.
+scripts:
+  buildCommand: npm run build
+  runCommand: npm run start:hosting
+
+env:
+  - variable: FLOWPATH_PUBLIC_ORIGIN
+    value: https://flowpath.studio
+    availability: [RUNTIME]
+  - variable: FLOWPATH_ACCOUNT_MODE
+    value: firebase
+    availability: [RUNTIME]
+  - variable: FLOWPATH_FIREBASE_PROJECT_ID
+    value: flowpath-studio
+    availability: [RUNTIME]
+  - variable: FLOWPATH_FIREBASE_AUTO_CONFIG
+    value: "1"
+    availability: [RUNTIME]
+  - variable: FLOWPATH_FIRESTORE_EDITION
+    value: standard
+    availability: [RUNTIME]
+  - variable: FLOWPATH_LIVE_ENABLED
+    value: "1"
+    availability: [RUNTIME]
+  # Application sign-in itself requires a redeemed invitation.
+  - variable: FLOWPATH_VOICE_ACCESS
+    value: signed-in
+    availability: [RUNTIME]
+  - variable: FLOWPATH_VOICE_OWNER_DAILY_SECONDS
+    value: "900"
+    availability: [RUNTIME]
+  - variable: FLOWPATH_VOICE_GLOBAL_DAILY_SECONDS
+    value: "3600"
+    availability: [RUNTIME]
+  - variable: FLOWPATH_VOICE_GLOBAL_CONCURRENCY
+    value: "2"
+    availability: [RUNTIME]
+  - variable: FLOWPATH_VOICE_TASKS_LOCATION
+    value: us-east4
+    availability: [RUNTIME]
+  - variable: FLOWPATH_VOICE_TASKS_QUEUE
+    value: flowpath-voice-expiry
+    availability: [RUNTIME]
+  - variable: FLOWPATH_VOICE_TASKS_SERVICE_ACCOUNT
+    value: flowpath-voice-expiry@flowpath-studio.iam.gserviceaccount.com
+    availability: [RUNTIME]
+  - variable: OPENAI_API_KEY
+    secret: OPENAI_API_KEY
+    availability: [RUNTIME]
