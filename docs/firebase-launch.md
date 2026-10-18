@@ -10,9 +10,10 @@ Prepared October 18, 2026. This is the new waveform product, not the archived St
 - Existing TheVoice project `thevoice-93998` and News are untouched.
 - Twenty-five single-use invitations were published. Their plaintext is in a private, Git-ignored `.local-invites/` batch file; Firebase contains hashes only. Codes expire after 30 days.
 - Blaze was activated by the user. The `flowpath-studio` App Hosting backend is linked to the web app; Google/email sign-in and the `flowpath.studio` authorized domain are configured. The expiry queue and its scoped service identities are configured with three closure attempts.
-- The first rollout, `build-2026-10-18-001`, failed during preparation with `fah/misconfigured-secret`. Metadata-only checks found the `OPENAI_API_KEY` secret container and correct backend IAM access, but no secret versions. The user is adding a private version; its value must not be requested, read or printed. No runtime or framework failure has been established.
-- The custom-domain wizard has generated DNS records, but the Squarespace changes have not been saved. At the last inspection, its Add Record dialog was loading `Reauthentication`; user interaction is pending.
-- No successful application rollout, custom DNS cutover, HTTPS verification, real user sign-in or paid voice test has been completed yet.
+- The first rollout, `build-2026-10-18-001`, failed during preparation with `fah/misconfigured-secret`: metadata-only checks found correct backend IAM access, but no `OPENAI_API_KEY` versions. The user privately added version `1`, now confirmed enabled; its value remains unread. The next build and rollout, `build-2026-10-18-002`, completed successfully. Cloud Run is ready and directs 100% of traffic to this revision; an HTTPS HEAD request to the Firebase-provided hostname returned `200`.
+- All five generated apex/`www` DNS records were saved in Squarespace and verified on all four authoritative nameservers. The Squarespace parking preset's apex A, `www` CNAME and apex HTTPS hint were removed; mail/security records and `_domainconnect` were preserved. App Hosting has `www.flowpath.studio` configured to redirect to `https://flowpath.studio`.
+- Both custom domains currently report `OWNERSHIP_ACTIVE`, `HOST_NON_FAH` and `CERT_VALIDATING`, with reconciliation in progress. Their DNS status snapshots can lag the authoritative records. Custom-domain HTTPS HEAD checks still fail during the TLS handshake, including when directly resolving to the correct App Hosting address; certificate provisioning is incomplete.
+- Custom-domain HTTPS, real user sign-in and paid voice remain unverified. The successful rollout and default-hostname HTTPS check do not establish those flows.
 
 Local verification passed `npm run check` (95 unit/integration tests, lint, types and production build) and 31 isolated browser checks. Independent review found a provider-ID recovery gap; it was fixed and rechecked before rollout. These tests use synthetic Firebase/voice fixtures. Real invitation hashes were published, database rules were deployed, and infrastructure metadata was verified; real user sign-in and paid voice remain separate verification.
 
@@ -22,7 +23,7 @@ Local verification passed `npm run check` (95 unit/integration tests, lint, type
 
 The prepared hosting profile permits one 900-second reservation per member per UTC day, 3,600 seconds across the beta, and two simultaneous conversations. Every attempt consumes its full reservation, including short or failed calls. These are conservative beta allowances, not measured paid balances. Customer billing is absent. Public homepage visitors cannot start paid voice anonymously.
 
-App Hosting runs a standard Node.js 24/Next.js server with CPU kept available for realtime sideband processing. One warm instance and up to two instances incur ongoing Cloud Run usage. The explicit build/run commands avoid reliance on preview Next 16 adapter behavior. Browser Firebase defaults must be injected at install/build time by linking the web app to the backend; do not disable install scripts or copy real SDK keys into source.
+App Hosting runs the deployed standard Node.js 24/Next.js server. Runtime metadata confirms CPU throttling is disabled, a service-level minimum of one instance, a revision maximum of two, concurrency of 80, and a 300-second request timeout. One warm instance and up to two instances incur ongoing Cloud Run usage. The explicit build/run commands avoid reliance on preview Next 16 adapter behavior. Browser Firebase defaults must be injected at install/build time by linking the web app to the backend; do not disable install scripts or copy real SDK keys into source.
 
 ## Activation sequence
 
@@ -61,15 +62,17 @@ npm run test:browser
 firebase deploy --only apphosting --project flowpath-studio
 ```
 
-7. Add `flowpath.studio` through App Hosting's custom-domain wizard. The generated records below are verified, but **not yet saved in Squarespace**:
+7. Add `flowpath.studio` through App Hosting's custom-domain wizard and add `www.flowpath.studio` as a redirect to `https://flowpath.studio`. These exact generated records are now **saved in Squarespace and verified on all four authoritative nameservers**:
 
 | Type | Squarespace host | Value |
 | --- | --- | --- |
 | A | `@` | `35.219.200.199` |
 | TXT | `@` | `fah-claim=023-02-71ffda3c-da4d-46f9-aabd-c44791ee6e84` |
+| A | `www` | `35.219.200.199` |
+| TXT | `www` | `fah-claim=023-02-2ca884c9-cdce-4524-b22d-45a5ec159dcc` |
 | CNAME | `_acme-challenge_iovrwfvptd5miz7t` | `2ae0c608-1113-454f-bf10-111a1a5bb19f.8.authorize.certificatemanager.goog` |
 
-The new apex A record replaces Squarespace's four website A records (`198.185.159.144`, `198.185.159.145`, `198.49.23.144`, `198.49.23.145`). Preserve mail/security records and `_domainconnect`; do not remove unrelated records. The existing `www` CNAME to `ext-sq.squarespace.com` and apex HTTPS hint also require review against the wizard before cutover; the records above do not establish a `www` connection. Keep the certificate challenge CNAME for renewal. DNS/TLS can take up to 24 hours after the required changes are saved. Squarespace reauthentication currently prevents completion; no DNS or certificate success is claimed.
+The new apex A record replaced Squarespace's four website A records (`198.185.159.144`, `198.185.159.145`, `198.49.23.144`, `198.49.23.145`). The old `www` CNAME to `ext-sq.squarespace.com` and apex HTTPS hint were also removed with the parking preset. Mail/security records and `_domainconnect` remain intact. Both domains share the certificate challenge CNAME; keep it for renewal. DNS/TLS can take up to 24 hours after the required changes are saved. App Hosting now recognizes both ownership claims, but its host checks still show `HOST_NON_FAH` and certificates remain `CERT_VALIDATING`; authoritative DNS verification does not yet establish working custom-domain HTTPS.
 
 8. Verify HTTPS, invitation rejection/redemption, both sign-in paths, settings privacy/persistence, task authentication, and closure. Real sign-in/verification mail and paid voice remain separate from synthetic checks; user credentials and microphone permission require user interaction.
 
