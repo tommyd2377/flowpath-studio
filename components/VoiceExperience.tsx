@@ -18,7 +18,7 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
   const label = voice.needsAudioResume ? 'Resume voice playback' : voice.active
     ? voice.phase === 'connecting' ? 'Cancel connection' : 'End conversation'
     : 'Start conversation';
-  const showStatus = !connected || voice.needsAudioResume || (voice.remainingSeconds !== null && voice.remainingSeconds <= 15);
+  const showStatus = Boolean(voice.status) || !connected || voice.needsAudioResume || (voice.remainingSeconds !== null && voice.remainingSeconds <= 15);
   const status = connected && !voice.needsAudioResume && voice.remainingSeconds !== null && voice.remainingSeconds <= 15
     ? `${voice.remainingSeconds} seconds remaining in this conversation.` : voice.status;
 

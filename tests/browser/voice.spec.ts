@@ -238,6 +238,43 @@ test('mocked speech animates the waveform and ending releases every resource', a
   expect(calls[1].sessionId).toBe(calls[2].sessionId);
 });
 
+test('startup status follows setup and first audible speech, then resets for the next call', async ({ page }) => {
+  await fakeMedia(page);
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const calls = await mockSession(page, { delayPost: pending });
+  await page.clock.install();
+  await page.goto('/');
+  const status = page.getByRole('status');
+  try {
+    await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+    await expect.poll(() => calls.some(call => call.method === 'POST')).toBe(true);
+    await expect(status).toHaveText('Connecting…');
+    await expect(page.getByRole('button', { name: 'Cancel connection', exact: true })).toHaveAttribute('aria-describedby', 'voice-status');
+    release();
+    await expect(page.locator('main')).toHaveAttribute('data-voice-phase', 'listening');
+    await expect(status).toHaveText('Getting ready…');
+    await emit(page, { type: 'media.input.active' });
+    await page.clock.fastForward(3_000);
+    await expect(status).toHaveText('Getting ready…');
+    await page.screenshot({ path: 'test-results/waveform-getting-ready.png' });
+    await emit(page, { type: 'media.output.active' });
+    await expect(page.locator('main')).toHaveAttribute('data-voice-phase', 'speaking');
+    await expect(status).toBeEmpty();
+    await emit(page, { type: 'media.output.quiet' });
+    await page.clock.fastForward(800);
+    await expect(page.locator('main')).toHaveAttribute('data-voice-phase', 'listening');
+    await expect(status).toBeEmpty();
+    await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+    await expect.poll(async () => (await tracker(page)).closedPeers).toBe(1);
+    await expect(status).toBeEmpty();
+    await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+    await expect(status).toHaveText('Getting ready…');
+    await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+    await expect.poll(async () => (await tracker(page)).closedPeers).toBe(2);
+  } finally { release(); }
+});
+
 test('the public account link stays available while talking and navigation closes the conversation', async ({ page }) => {
   await fakeMedia(page);
   const calls = await mockSession(page);
@@ -298,8 +335,12 @@ test('a new waveform gesture resumes blocked playback and Escape can end it', as
   await mockSession(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('status')).toHaveText('Tap the wave to resume audio playback.');
   await page.getByRole('button', { name: 'Resume voice playback', exact: true }).click();
   await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await expect(page.getByRole('status')).toHaveText('Getting ready…');
+  await emit(page, { type: 'media.output.active' });
+  await expect(page.getByRole('status')).toBeEmpty();
   expect((await tracker(page)).playedAudio).toBe(2);
   expect((await tracker(page)).microphoneCalls).toBe(1);
   await page.keyboard.press('Escape');

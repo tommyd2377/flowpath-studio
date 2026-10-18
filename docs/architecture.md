@@ -36,6 +36,8 @@ Official Firebase references: [Google sign-in](https://firebase.google.com/docs/
 
 Live is disabled unless development mode explicitly opts in. Readiness is checked before microphone access. Local requests require a loopback host and matching origin; bodies and SDP are bounded, and non-audio media is rejected. A browser-generated UUID identifies a local reservation so a canceled handshake can still close a late-created provider session. Provider IDs stay on the server.
 
+Startup uses the existing status line: Connecting during setup, then Getting ready after connection until the first unblocked output audio is detected. Playback-blocked guidance takes precedence. These messages follow actual connection/media state, with no artificial delay, rotating timer, provider retry or change to the 800 ms opening motion.
+
 The controller admits one local session, up to three starts per minute and at most three provider starts for the entire local process, including failed starts. It has a 30-second startup watchdog and a 15-minute absolute cap from the confirmed creation response. Browser inactivity closes after 45 seconds of silence. These local test limits are distinct from future customer trial accounting. Normal closure waits for session.closed and final usage; uncertainty blocks new starts. No automatic retries are performed.
 
 Standard WebRTC is the starting transport. WARP and hosting optimizations are deferred until actual latency is measured. Customer payment reconciliation and public visitor allowances remain future work.

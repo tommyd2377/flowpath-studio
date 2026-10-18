@@ -14,6 +14,7 @@ type VoiceSession = {
   started: boolean;
   finalized: boolean;
   needsAudioResume: boolean;
+  heardOutput?: boolean;
   lastActivity: number;
   expiresAt?: number;
   peer?: RTCPeerConnection;
@@ -162,7 +163,7 @@ export function useVoiceSession(waveformId?: string) {
         if (current.current !== existing) return;
         existing.needsAudioResume = false;
         setNeedsAudioResume(false);
-        setStatus('');
+        setStatus(existing.heardOutput ? '' : existing.ready ? 'Getting ready…' : 'Connecting…');
       } catch { setStatus('Playback is still blocked. Tap the wave to resume audio.'); }
       return;
     }
@@ -177,7 +178,7 @@ export function useVoiceSession(waveformId?: string) {
     revision.current++;
     setActive(true);
     setPhase('connecting');
-    setStatus('');
+    setStatus('Connecting…');
     const alive = () => mounted.current && current.current === session;
     const becomeReady = () => {
       if (!alive() || session.ready || !session.started || !session.answerApplied) return;
@@ -185,6 +186,7 @@ export function useVoiceSession(waveformId?: string) {
       session.lastActivity = Date.now();
       clearTimeout(session.setupTimer);
       setPhase('listening');
+      if (!session.needsAudioResume) setStatus('Getting ready…');
     };
 
     try {
@@ -277,6 +279,10 @@ export function useVoiceSession(waveformId?: string) {
       session.stopMonitor = monitorAudio(input, () => session.output, (inputActive, outputActive) => {
         if (!alive() || !session.ready) return;
         if (inputActive || outputActive) session.lastActivity = Date.now();
+        if (outputActive && !session.needsAudioResume && !session.heardOutput) {
+          session.heardOutput = true;
+          setStatus('');
+        }
         setPhase(outputActive && !session.needsAudioResume ? 'speaking' : 'listening');
       });
       const offer = await peer.createOffer();

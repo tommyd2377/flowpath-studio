@@ -25,7 +25,9 @@ test('a personal waveform keeps its saved identity without the public welcome pi
 });
 
 test('the public greeting invites a general conversation and points to both visible links before listening', () => {
+  assert.match(PUBLIC_GREETING_INSTRUCTIONS, /talk with an AI voice and make your own personal waveform/);
   assert.match(PUBLIC_GREETING_INSTRUCTIONS, /any general question/);
+  assert.match(PUBLIC_GREETING_INSTRUCTIONS, /interrupt you and talk naturally at any time/);
   assert.match(PUBLIC_GREETING_INSTRUCTIONS, /Create your waveform at the top right/);
   assert.match(PUBLIC_GREETING_INSTRUCTIONS, /FlowPath News example at the top left/);
   assert.match(PUBLIC_GREETING_INSTRUCTIONS, /pause and listen/);
