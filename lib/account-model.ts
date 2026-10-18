@@ -1,10 +1,12 @@
+import type { VoiceName } from './voice-options';
+
 export type AccountMode = 'local' | 'firebase' | 'unavailable';
 
 export type AccountUser = { uid: string; displayName: string };
 
 export type FirebasePublicConfig = { apiKey: string; authDomain: string; projectId: string; appId: string };
 
-export type WaveformInput = { name: string; initialPrompt: string };
+export type WaveformInput = { name: string; initialPrompt: string; voice: VoiceName };
 
 export type Waveform = WaveformInput & { id: string; updatedAt: string };
 

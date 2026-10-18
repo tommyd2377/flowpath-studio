@@ -7,7 +7,7 @@ test.beforeEach(async ({ context }) => {
   });
 });
 
-async function saveWaveform(page: Page, owner: 'A' | 'B', name: string, prompt: string) {
+async function saveWaveform(page: Page, owner: 'A' | 'B', name: string, prompt: string, voice = 'marin') {
   await page.goto('/account');
   const signOut = page.getByRole('button', { name: 'Sign out', exact: true });
   await expect(page.getByRole('heading', { name: 'My waveform', exact: true })).toBeVisible();
@@ -15,9 +15,10 @@ async function saveWaveform(page: Page, owner: 'A' | 'B', name: string, prompt: 
   if (await signOut.isVisible()) await signOut.click();
   await page.getByRole('button', { name: `Use test owner ${owner}`, exact: true }).click();
   await page.getByLabel('Waveform name', { exact: true }).fill(name);
+  await page.getByLabel('Voice', { exact: true }).selectOption(voice);
   await page.getByLabel('What should your voice know about itself?', { exact: true }).fill(prompt);
   await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('Saved. Your instructions will apply to your next conversation.');
+  await expect(page.getByRole('status')).toContainText('Saved. Your settings will apply to your next conversation.');
   const address = await page.getByRole('link', { name: 'Open waveform', exact: true }).getAttribute('href');
   expect(address).toMatch(/^\/w\/[a-f0-9-]+$/);
   return address!;
@@ -26,9 +27,11 @@ async function saveWaveform(page: Page, owner: 'A' | 'B', name: string, prompt: 
 test('one local test account saves one waveform and recovers it after signing out', async ({ page }) => {
   const name = 'Tom’s private assistant';
   const prompt = 'You are Tom’s assistant. Speak warmly and keep answers concise.';
-  const address = await saveWaveform(page, 'A', name, prompt);
+  const address = await saveWaveform(page, 'A', name, prompt, 'meridian');
   await page.reload();
   await expect(page.getByLabel('Waveform name', { exact: true })).toHaveValue(name);
+  await expect(page.getByLabel('Voice', { exact: true })).toHaveValue('meridian');
+  await expect(page.locator('#voice-help')).toContainText('North American English');
   await expect(page.getByLabel('What should your voice know about itself?', { exact: true })).toHaveValue(prompt);
   await expect(page.getByRole('link', { name: 'Open waveform', exact: true })).toHaveAttribute('href', address);
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -38,6 +41,7 @@ test('one local test account saves one waveform and recovers it after signing ou
   expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.getByLabel('Waveform name', { exact: true }).fill('Tom’s updated assistant');
+  await page.getByLabel('Voice', { exact: true }).selectOption('marin');
   await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Saved.');
   await expect(page.getByRole('link', { name: 'Open waveform', exact: true })).toHaveAttribute('href', address);
@@ -50,6 +54,7 @@ test('one local test account saves one waveform and recovers it after signing ou
   await page.getByRole('link', { name: 'Go to my account', exact: true }).click();
   await page.getByRole('button', { name: 'Use test owner A', exact: true }).click();
   await expect(page.getByLabel('Waveform name', { exact: true })).toHaveValue('Tom’s updated assistant');
+  await expect(page.getByLabel('Voice', { exact: true })).toHaveValue('marin');
   await expect(page.getByLabel('What should your voice know about itself?', { exact: true })).toHaveValue(prompt);
   await page.getByRole('link', { name: 'Open waveform', exact: true }).click();
   await expect(page.locator('.voice-navigation')).toContainText('Tom’s updated assistant');
@@ -98,8 +103,10 @@ test('a failed save keeps the edited prompt available for retry', async ({ page 
   await page.route('**/api/waveform', route => route.request().method() === 'PUT'
     ? route.fulfill({ status: 503, json: { error: 'Your waveform could not be saved. Please try again.' } }) : route.continue());
   await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('These are my unsaved changes.');
+  await page.getByLabel('Voice', { exact: true }).selectOption('meridian');
   await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
   await expect(page.getByRole('main').getByRole('alert')).toContainText('Your waveform could not be saved.');
   await expect(page.getByLabel('What should your voice know about itself?', { exact: true })).toHaveValue('These are my unsaved changes.');
+  await expect(page.getByLabel('Voice', { exact: true })).toHaveValue('meridian');
   await expect(page.getByRole('button', { name: 'Save waveform', exact: true })).toBeEnabled();
 });

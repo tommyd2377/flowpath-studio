@@ -40,7 +40,7 @@ button { font: inherit; }
 .account-identity { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 24px; font-size: 13px; }
 .account-identity button { border: 0; padding: 4px 0; background: none; color: #c5bba6; text-decoration: underline; text-underline-offset: 4px; cursor: pointer; flex-shrink: 0; }
 .account-page label { display: block; margin: 24px 0 8px; font-size: 14px; }
-.account-page input, .account-page textarea { display: block; width: 100%; padding: 13px 14px; border: 1px solid #5f594e; border-radius: 8px; background: #ffffff04; color: inherit; font: inherit; line-height: 1.6; }
+.account-page input, .account-page textarea, .account-page select { display: block; width: 100%; padding: 13px 14px; border: 1px solid #5f594e; border-radius: 8px; background: #ffffff04; color: inherit; font: inherit; line-height: 1.6; }
 .account-page textarea { resize: vertical; min-height: 190px; }
 .account-page input::placeholder, .account-page textarea::placeholder { color: #79746a; }
 .field-help, .local-account-note { color: #a59e90; font-size: 12px; }
@@ -49,7 +49,7 @@ button { font: inherit; }
 .primary-button, .secondary-button { display: inline-block; border: 1px solid #c5bba666; border-radius: 8px; padding: 11px 17px; font: inherit; font-size: 13px; line-height: 1.5; text-align: center; text-decoration: none; cursor: pointer; }
 .primary-button { background: #e7dfcd; color: #101110; border-color: #e7dfcd; }
 .secondary-button { background: transparent; color: #e7dfcd; }
-.account-page button:disabled, .account-page input:disabled, .account-page textarea:disabled { opacity: .6; cursor: wait; }
+.account-page button:disabled, .account-page input:disabled, .account-page textarea:disabled, .account-page select:disabled { opacity: .6; cursor: wait; }
 .account-page :focus-visible, .voice-navigation a:focus-visible { outline: 2px solid #c5b69a; outline-offset: 4px; }
 .account-status { font-size: 13px; color: #c5bba6; }
 .account-error { font-size: 13px; color: #edb8aa; }

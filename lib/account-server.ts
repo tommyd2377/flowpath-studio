@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { DEFAULT_VOICE, isVoiceName } from './voice-options';
 import {
   WAVEFORM_NAME_LIMIT, WAVEFORM_PROMPT_LIMIT,
   type AccountMode, type AccountUser, type FirebasePublicConfig, type Waveform, type WaveformInput,
@@ -83,21 +84,23 @@ async function readBody(request: Request) {
 }
 
 function waveformInput(value: Record<string, unknown>): WaveformInput | null {
-  if (Object.keys(value).some(key => key !== 'name' && key !== 'initialPrompt')
+  if (Object.keys(value).some(key => key !== 'name' && key !== 'initialPrompt' && key !== 'voice')
     || typeof value.name !== 'string' || typeof value.initialPrompt !== 'string') return null;
+  const voice = value.voice === undefined ? DEFAULT_VOICE : value.voice;
+  if (!isVoiceName(voice)) return null;
   const name = value.name.trim();
   const initialPrompt = value.initialPrompt.trim();
   if (!name || name.length > WAVEFORM_NAME_LIMIT || /[\u0000-\u001f\u007f]/.test(name)
     || !initialPrompt || initialPrompt.length > WAVEFORM_PROMPT_LIMIT
     || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(initialPrompt)) return null;
-  return { name, initialPrompt };
+  return { name, initialPrompt, voice };
 }
 
 export function waveformRecord(value: unknown): Waveform | null {
   const row = object(value);
   if (!row || typeof row.id !== 'string' || !/^[0-9a-f-]{36}$/.test(row.id)
     || typeof row.updatedAt !== 'string' || !Number.isFinite(Date.parse(row.updatedAt))) return null;
-  const input = waveformInput({ name: row.name, initialPrompt: row.initialPrompt });
+  const input = waveformInput({ name: row.name, initialPrompt: row.initialPrompt, voice: row.voice });
   return input ? { id: row.id, ...input, updatedAt: row.updatedAt } : null;
 }
 

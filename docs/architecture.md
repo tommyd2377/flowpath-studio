@@ -6,7 +6,9 @@ The waveform host owns visuals and browser media. Short application instructions
 
 ## One owner, one waveform
 
-The home waveform stays available without an account. `/account` holds sign-in and a two-field form; `/w/<id>` is the owner's private waveform. Each verified account has one settings record with a random stable ID, name, initial prompt and update time. Updates preserve that ID; no usernames, custom domains, multiple waveforms, publishing workflow or dashboard are introduced.
+The home waveform stays available without an account. `/account` holds sign-in and a small form for name, voice and initial prompt; `/w/<id>` is the owner's private waveform. Each verified account has one settings record with a random stable ID, name, voice, initial prompt and update time. Updates preserve that ID; no usernames, custom domains, multiple waveforms, publishing workflow or dashboard are introduced.
+
+Voice choices and short language/regional descriptions live in `lib/voice-options.ts`, sourced from the [official GPT-Live voice options](https://developers.openai.com/api/docs/guides/live-conversations#voice-options). The server accepts only those registered names and sets `audio.output.voice` when creating a conversation. Voice changes apply to the next conversation. Legacy records and requests without a voice retain Marin by default; loading a legacy record does not rewrite the saved file. No sample playback, extra speech model, custom voice creation or automatic paid preview is added.
 
 The browser sends only the waveform ID when requesting a voice session. The server verifies the owner's HttpOnly session and reads the owner's saved record, rather than accepting a prompt or owner ID from the session request. Private readiness, creation and teardown enforce the same ownership and waveform scope. Saved instructions are snapshotted once and cannot enable search, tools or delegated models. The greeting follows that waveform's saved identity.
 

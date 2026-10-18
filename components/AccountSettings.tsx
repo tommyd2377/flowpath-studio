@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { signInAccount, signOutAccount } from '@/lib/account-client';
 import { WAVEFORM_NAME_LIMIT, WAVEFORM_PROMPT_LIMIT, type AccountMode, type AccountUser, type Waveform } from '@/lib/account-model';
+import { DEFAULT_VOICE, VOICE_OPTIONS, isVoiceName, type VoiceName } from '@/lib/voice-options';
 
 type Account = { mode: AccountMode; user: AccountUser | null };
 
@@ -17,6 +18,7 @@ export default function AccountSettings() {
   const [account, setAccount] = useState<Account | null>(null);
   const [waveform, setWaveform] = useState<Waveform | null>(null);
   const [name, setName] = useState('');
+  const [voice, setVoice] = useState<VoiceName>(DEFAULT_VOICE);
   const [initialPrompt, setInitialPrompt] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -32,7 +34,7 @@ export default function AccountSettings() {
       const current = () => !cancelled && requestedRevision === revision;
       if (changed) {
         accountRevision.current++;
-        setBusy(false); setLoading(true); setAccount(null); setWaveform(null); setName(''); setInitialPrompt(''); setMessage(''); setError('');
+        setBusy(false); setLoading(true); setAccount(null); setWaveform(null); setName(''); setVoice(DEFAULT_VOICE); setInitialPrompt(''); setMessage(''); setError('');
       }
       void (async () => {
         const result = await readResponse<Account>(await fetch('/api/account', { cache: 'no-store' }));
@@ -41,6 +43,7 @@ export default function AccountSettings() {
         setAccount(result);
         setWaveform(saved?.waveform ?? null);
         setName(saved?.waveform?.name ?? '');
+        setVoice(saved?.waveform?.voice ?? DEFAULT_VOICE);
         setInitialPrompt(saved?.waveform?.initialPrompt ?? '');
       })().catch(() => { if (current()) setError('Your account could not be loaded. Refresh to try again.'); })
         .finally(() => { if (current()) setLoading(false); });
@@ -76,11 +79,11 @@ export default function AccountSettings() {
     setBusy(true); setError(''); setMessage('');
     try {
       const saved = await readResponse<{ waveform: Waveform }>(await fetch('/api/waveform', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, initialPrompt }),
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, voice, initialPrompt }),
       }));
       if (requestedRevision !== accountRevision.current) return;
-      setWaveform(saved.waveform); setName(saved.waveform.name); setInitialPrompt(saved.waveform.initialPrompt);
-      setMessage('Saved. Your instructions will apply to your next conversation.');
+      setWaveform(saved.waveform); setName(saved.waveform.name); setVoice(saved.waveform.voice); setInitialPrompt(saved.waveform.initialPrompt);
+      setMessage('Saved. Your settings will apply to your next conversation.');
     } catch (error) { if (requestedRevision === accountRevision.current) setError(error instanceof Error ? error.message : 'Your waveform could not be saved. Please try again.'); }
     finally { if (requestedRevision === accountRevision.current) setBusy(false); }
   }
@@ -95,6 +98,11 @@ export default function AccountSettings() {
       <form onSubmit={event => void save(event)}>
         <label htmlFor="waveform-name">Waveform name</label>
         <input id="waveform-name" value={name} onChange={event => setName(event.target.value)} maxLength={WAVEFORM_NAME_LIMIT} required disabled={busy} autoComplete="off" placeholder="Tom’s assistant" />
+        <label htmlFor="waveform-voice">Voice</label>
+        <select id="waveform-voice" value={voice} onChange={event => { if (isVoiceName(event.target.value)) setVoice(event.target.value); }} disabled={busy} aria-describedby="voice-help">
+          {VOICE_OPTIONS.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
+        </select>
+        <p id="voice-help" className="field-help">{VOICE_OPTIONS.find(option => option.id === voice)?.description} Your choice applies to your next conversation.</p>
         <label htmlFor="initial-prompt">What should your voice know about itself?</label>
         <textarea id="initial-prompt" value={initialPrompt} onChange={event => setInitialPrompt(event.target.value)} maxLength={WAVEFORM_PROMPT_LIMIT} required rows={8} disabled={busy} aria-describedby="prompt-help" placeholder="You are Tom’s assistant. Speak warmly and keep your answers concise." />
         <p id="prompt-help" className="field-help">Give it an identity and a style. Conversations start fresh; these instructions don’t add tools or conversation memory.</p>

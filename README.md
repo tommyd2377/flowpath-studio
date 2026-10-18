@@ -22,7 +22,7 @@ Open http://127.0.0.1:3220. Live voice is paused by default: tapping the wavefor
 FLOWPATH_ACCOUNT_MODE=local FLOWPATH_LIVE_ENABLED=0 npm run dev
 ```
 
-Choose **Create your waveform**, then a clearly labeled test owner. Save a waveform name and initial prompt and choose **Open waveform**. Its stable `/w/<id>` address requires that same owner to be signed in. A second test owner cannot read its prompt or open/start/close its private conversation. Account controls disappear while talking; the existing opening/closing motion is retained.
+Choose **Create your waveform**, then a clearly labeled test owner. Save a waveform name, voice and initial prompt and choose **Open waveform**. The voice selector shows a short language/regional description; Marin remains the default for existing waveforms. Saved prompt and voice changes apply to new conversations. Its stable `/w/<id>` address requires that same owner to be signed in. A second test owner cannot read its prompt or open/start/close its private conversation. Account controls disappear while talking; the existing opening/closing motion is retained.
 
 The two identities are synthetic fixtures, not real Google/Firebase accounts. Their opaque HttpOnly sessions expire after five days or a server restart. Synthetic settings persist in the new Git-ignored `.local-waveforms/` directory; sign out and back in as the same test owner to retrieve them. Do not use this fixture mode for private or production data. The application never accesses Studio's private runtime directory for accounts.
 
@@ -41,6 +41,8 @@ Unit tests inject fake providers, Firebase adapters and sideband sockets. Browse
 
 The October 18, 2026 account milestone passed `npm run check` (lint, types, 35 unit/integration tests and production build) and all 19 isolated browser checks. Desktop/mobile settings were visually inspected. Google sign-in, Firestore and paid voice were not live-tested; nothing was deployed.
 
+The voice-selection follow-up passed the same checks with 37 unit/integration tests and 19 browser checks in an isolated source copy, including selected-voice persistence, legacy Marin defaults, invalid-voice rejection and selected voice in the provider request. No additional paid call was started by these checks. The local preview was restarted while idle with live voice enabled for the user's listening test; hearing each new voice remains live verification.
+
 ## Small source map
 
 - app/page.tsx and components/VoiceExperience.tsx: the opening/closing experience.
@@ -50,6 +52,7 @@ The October 18, 2026 account milestone passed `npm run check` (lint, types, 35 u
 - lib/account-client.ts and lib/firebase-accounts.ts: optional Google sign-in and server-only Firebase adapter, inactive by default.
 - components/AccountSettings.tsx and components/OwnerWaveform.tsx: the small settings page and private waveform gate.
 - lib/voice-config.ts: the platform instructions and per-conversation saved prompt snapshot.
+- lib/voice-options.ts: the documented GPT-Live voice choices and short descriptions, shared by the form and server validation.
 - lib/voice-server.ts and app/api/session/route.ts: local admission and server supervision.
 
 The existing personal footer is retained below the opening screen and hidden during a conversation. No News code or sibling checkout dependency is loaded.

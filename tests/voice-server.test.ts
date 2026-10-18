@@ -83,7 +83,7 @@ test('saved instructions are loaded server-side per conversation and the persona
   let initialPrompt = 'You are the synthetic library assistant. Keep replies short.';
   const { server, calls, sockets } = harness({
     resolveWaveform: async (req, id) => req.headers.get('x-test-owner') === 'owner-a' && id === waveformId
-      ? { ownerUid: 'owner-a', waveform: { name: 'Library', initialPrompt }, isCurrent: () => true } : null,
+      ? { ownerUid: 'owner-a', waveform: { name: 'Library', initialPrompt, voice: 'meridian' }, isCurrent: () => true } : null,
   });
   const first = randomUUID();
   assert.equal((await server.POST(privateRequest('POST', waveformId, { sessionId: first, sdp }))).status, 201);
@@ -91,6 +91,7 @@ test('saved instructions are loaded server-side per conversation and the persona
   assert.match(firstConfig.instructions, /synthetic library assistant/);
   assert.deepEqual(firstConfig.input, []);
   assert.equal(firstConfig.store, false);
+  assert.equal(firstConfig.audio.output.voice, 'meridian');
   initialPrompt = 'You are the synthetic garden assistant.';
   assert.equal(sockets[0].sent.length, 0, 'editing settings sends no instructions into an active conversation');
   sockets[0].event({ type: 'session.started' });

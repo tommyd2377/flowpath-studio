@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { createAccountServer, type FirebaseAccountAdapter } from '../lib/account-server';
+import { createAccountServer, waveformRecord, type FirebaseAccountAdapter } from '../lib/account-server';
 import type { Waveform } from '../lib/account-model';
 
 const origin = 'http://127.0.0.1:3220';
@@ -91,6 +92,7 @@ test('one saved waveform stays private to its verified owner and keeps its stabl
   const saved = (await (await server.waveformPUT(request('waveform', 'PUT', input, ownerA))).json()).waveform as Waveform;
   assert.match(saved.id, /^[0-9a-f-]{36}$/);
   assert.deepEqual({ name: saved.name, initialPrompt: saved.initialPrompt }, input);
+  assert.equal(saved.voice, 'marin');
   const edited = (await (await server.waveformPUT(request('waveform', 'PUT', { ...input, name: 'Updated waveform' }, ownerA))).json()).waveform;
   assert.equal(edited.id, saved.id);
   const ownerB = await signIn('owner-b');
@@ -142,6 +144,9 @@ test('prompt validation rejects oversized bodies, owner fields, invalid content 
   for (const body of [
     { ...input, ownerUid: 'local-owner-b' },
     { ...input, id: 'client-selected-id' },
+    { ...input, voice: 'unavailable-voice' },
+    { ...input, voice: { id: 'custom-voice' } },
+    { ...input, voice: null },
     { ...input, name: ' ' },
     { ...input, name: 'a'.repeat(81) },
     { ...input, initialPrompt: '' },
@@ -156,6 +161,31 @@ test('prompt validation rejects oversized bodies, owner fields, invalid content 
   assert.equal((await server.waveformPUT(request('waveform', 'PUT', input, cookie, { 'content-type': 'text/plain' }))).status, 400);
   assert.equal((await server.waveformPUT(request('waveform', 'PUT', input, cookie, { 'content-length': '999999' }))).status, 400);
   assert.deepEqual(await (await server.waveformGET(request('waveform', 'GET', undefined, cookie))).json(), { waveform: null });
+});
+
+test('a saved voice survives reload and changing it preserves waveform identity and prompt', async t => {
+  const { server, signIn, settings } = await harness(t);
+  const cookie = await signIn();
+  const first = (await (await server.waveformPUT(request('waveform', 'PUT', { ...input, voice: 'meridian' }, cookie))).json()).waveform;
+  assert.equal(first.voice, 'meridian');
+  const changed = (await (await server.waveformPUT(request('waveform', 'PUT', { ...input, voice: 'vesper' }, cookie))).json()).waveform;
+  assert.equal(changed.id, first.id);
+  assert.equal(changed.initialPrompt, first.initialPrompt);
+  const fresh = createAccountServer(settings);
+  const login = await fresh.accountPOST(request('account', 'POST', { localAccount: 'owner-a' }));
+  const newCookie = login.headers.get('set-cookie')!.split(';')[0];
+  assert.equal((await (await fresh.waveformGET(request('waveform', 'GET', undefined, newCookie))).json()).waveform.voice, 'vesper');
+});
+
+test('legacy records without a voice read as Marin without rewriting saved instructions', async t => {
+  const { server, directory, signIn } = await harness(t);
+  const legacy = { id: randomUUID(), ...input, updatedAt: new Date().toISOString() };
+  const filename = `${createHash('sha256').update('local-owner-a').digest('hex')}.json`;
+  await writeFile(join(directory, filename), JSON.stringify(legacy));
+  const cookie = await signIn();
+  const loaded = (await (await server.waveformGET(request('waveform', 'GET', undefined, cookie))).json()).waveform;
+  assert.deepEqual(loaded, { ...legacy, voice: 'marin' });
+  assert.equal(waveformRecord({ ...legacy, voice: 'not-a-supported-voice' }), null);
 });
 
 test('expired local sessions cannot read or overwrite the saved prompt', async t => {
