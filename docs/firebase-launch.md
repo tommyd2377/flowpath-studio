@@ -9,8 +9,10 @@ Prepared October 18, 2026. This is the new waveform product, not the archived St
 - Database: `(default)`, Firestore Standard, `us-east4`.
 - Existing TheVoice project `thevoice-93998` and News are untouched.
 - Twenty-five single-use invitations were published. Their plaintext is in a private, Git-ignored `.local-invites/` batch file; Firebase contains hashes only. Codes expire after 30 days.
-- Blaze was activated by the user. The `flowpath-studio` App Hosting backend is linked to the web app; Google/email sign-in and the `flowpath.studio` authorized domain are configured. The user created the OpenAI secret privately and the new backend received access. The expiry queue and its scoped service identities are configured with three closure attempts.
-- No application rollout, custom DNS cutover or paid voice test has been completed yet.
+- Blaze was activated by the user. The `flowpath-studio` App Hosting backend is linked to the web app; Google/email sign-in and the `flowpath.studio` authorized domain are configured. The expiry queue and its scoped service identities are configured with three closure attempts.
+- The first rollout, `build-2026-10-18-001`, failed during preparation with `fah/misconfigured-secret`. Metadata-only checks found the `OPENAI_API_KEY` secret container and correct backend IAM access, but no secret versions. The user is adding a private version; its value must not be requested, read or printed. No runtime or framework failure has been established.
+- The custom-domain wizard has generated DNS records, but the Squarespace changes have not been saved. At the last inspection, its Add Record dialog was loading `Reauthentication`; user interaction is pending.
+- No successful application rollout, custom DNS cutover, HTTPS verification, real user sign-in or paid voice test has been completed yet.
 
 Local verification passed `npm run check` (95 unit/integration tests, lint, types and production build) and 31 isolated browser checks. Independent review found a provider-ID recovery gap; it was fixed and rechecked before rollout. These tests use synthetic Firebase/voice fixtures. Real invitation hashes were published, database rules were deployed, and infrastructure metadata was verified; real user sign-in and paid voice remain separate verification.
 
@@ -59,7 +61,16 @@ npm run test:browser
 firebase deploy --only apphosting --project flowpath-studio
 ```
 
-7. Add `flowpath.studio` through App Hosting's custom-domain wizard. Copy its exact generated records into Squarespace. Preserve email TXT records and `_domainconnect`; replace only conflicting website records. Keep certificate challenge records. Current Squarespace website defaults are four apex A records (`198.185.159.144`, `198.185.159.145`, `198.49.23.144`, `198.49.23.145`), `www` CNAME to `ext-sq.squarespace.com`, and an apex HTTPS hint record. DNS/TLS can take up to 24 hours. Never invent Firebase address/challenge values.
+7. Add `flowpath.studio` through App Hosting's custom-domain wizard. The generated records below are verified, but **not yet saved in Squarespace**:
+
+| Type | Squarespace host | Value |
+| --- | --- | --- |
+| A | `@` | `35.219.200.199` |
+| TXT | `@` | `fah-claim=023-02-71ffda3c-da4d-46f9-aabd-c44791ee6e84` |
+| CNAME | `_acme-challenge_iovrwfvptd5miz7t` | `2ae0c608-1113-454f-bf10-111a1a5bb19f.8.authorize.certificatemanager.goog` |
+
+The new apex A record replaces Squarespace's four website A records (`198.185.159.144`, `198.185.159.145`, `198.49.23.144`, `198.49.23.145`). Preserve mail/security records and `_domainconnect`; do not remove unrelated records. The existing `www` CNAME to `ext-sq.squarespace.com` and apex HTTPS hint also require review against the wizard before cutover; the records above do not establish a `www` connection. Keep the certificate challenge CNAME for renewal. DNS/TLS can take up to 24 hours after the required changes are saved. Squarespace reauthentication currently prevents completion; no DNS or certificate success is claimed.
+
 8. Verify HTTPS, invitation rejection/redemption, both sign-in paths, settings privacy/persistence, task authentication, and closure. Real sign-in/verification mail and paid voice remain separate from synthetic checks; user credentials and microphone permission require user interaction.
 
 ## More invitations
