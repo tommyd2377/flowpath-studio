@@ -38,6 +38,7 @@ export const accountServer = state.flowpathAccounts ??= createAccountServer({
   firebaseConfig,
   firebaseAutoConfig: autoFirebaseConfig,
   publicOrigin: () => process.env.FLOWPATH_PUBLIC_ORIGIN,
+  trustedProxyHost: () => process.env.FLOWPATH_TRUSTED_PROXY_HOST,
   firebase: configuredFirebase ? createFirebaseAccountAdapter(
     projectId!, process.env.FLOWPATH_FIREBASE_DATABASE_ID ?? '(default)',
   ) : undefined,

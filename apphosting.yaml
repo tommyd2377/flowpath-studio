@@ -17,6 +17,10 @@ env:
   - variable: FLOWPATH_PUBLIC_ORIGIN
     value: https://flowpath.studio
     availability: [RUNTIME]
+  # App Hosting preserves the public host in X-Forwarded-Host on this transport.
+  - variable: FLOWPATH_TRUSTED_PROXY_HOST
+    value: flowpath-studio-317729996674.us-east4.run.app
+    availability: [RUNTIME]
   - variable: FLOWPATH_ACCOUNT_MODE
     value: firebase
     availability: [RUNTIME]

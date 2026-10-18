@@ -15,6 +15,7 @@ export function getProductionVoiceServer(resolveWaveform?: Resolver) {
   if (resolveWaveform) shared.flowpathProductionWaveformResolver = resolveWaveform;
   return shared.flowpathProductionVoiceServer ??= createVoiceServer({
     publicOrigin: configuredPublicOrigin(process.env.FLOWPATH_PUBLIC_ORIGIN),
+    trustedProxyHost: process.env.FLOWPATH_TRUSTED_PROXY_HOST,
     enabled: () => process.env.NODE_ENV === 'production'
       && process.env.FLOWPATH_ACCOUNT_MODE === 'firebase' && process.env.FLOWPATH_FIRESTORE_EDITION === 'standard'
       && Boolean(configuredFirebaseProjectId()) && Boolean(configuredPublicOrigin(process.env.FLOWPATH_PUBLIC_ORIGIN))

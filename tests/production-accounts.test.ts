@@ -6,7 +6,7 @@ import { createAccountServer, type FirebaseAccountAdapter } from '../lib/account
 import type { Waveform } from '../lib/account-model';
 import { configuredFirebaseProjectId, createFirebaseAccountAdapter, getFirebaseAccountServices, supportedAccountClaims } from '../lib/firebase-accounts';
 import { accountSessionId, activeAccountSession, createDurableAccountSessions } from '../lib/production-account-session';
-import { configuredPublicOrigin, isAllowedRequest } from '../lib/request-origin';
+import { configuredProxyHost, configuredPublicOrigin, isAllowedPublicHost, isAllowedRequest } from '../lib/request-origin';
 import { INVITATIONS_COLLECTION, MEMBERS_COLLECTION, InvitationRequiredError, createInvitationAccess, generateInvitationCode, invitationCodeHash } from '../lib/invitations';
 
 const origin = 'https://flowpath.studio';
@@ -104,6 +104,39 @@ test('production requires explicit HTTPS origin and durable Firebase sessions; f
   assert.equal(isAllowedRequest(new Request('http://internal:8080/api/account', {
     headers: { host: 'flowpath.studio', origin },
   }), true, origin), true, 'the trusted incoming Host survives internal URL normalization');
+});
+
+test('production forwarding trusts only one pinned transport and one exact public host', async () => {
+  const proxyHost = 'synthetic-backend-123456.us-east4.run.app';
+  const { options } = firebaseFixture();
+  const server = createAccountServer({ ...options, trustedProxyHost: () => proxyHost });
+  const proxyHeaders = { host: proxyHost, 'x-forwarded-host': 'flowpath.studio' };
+  assert.equal((await server.accountGET(request('account', 'GET', undefined, undefined, proxyHeaders))).status, 200);
+  const admitted = await server.accountPOST(request('account', 'POST', { idToken: 'synthetic.id.token' }, undefined, proxyHeaders));
+  assert.equal(admitted.status, 200);
+  assert.match(admitted.headers.get('set-cookie')!, /Secure/);
+  for (const headers of [
+    { host: proxyHost }, { host: 'another.run.app', 'x-forwarded-host': 'flowpath.studio' },
+    { ...proxyHeaders, 'x-forwarded-host': 'attacker.example' },
+    { ...proxyHeaders, 'x-forwarded-host': 'flowpath.studio, attacker.example' },
+    { ...proxyHeaders, 'x-forwarded-host': 'flowpath.studio, flowpath.studio' },
+    { ...proxyHeaders, 'x-forwarded-host': 'https://flowpath.studio' },
+    { ...proxyHeaders, origin: 'https://attacker.example' }, { ...proxyHeaders, origin: '' },
+    { ...proxyHeaders, 'sec-fetch-site': 'cross-site' },
+    { host: 'flowpath.studio', 'x-forwarded-host': 'attacker.example' },
+    { host: 'flowpath.studio', 'x-forwarded-host': 'flowpath.studio, flowpath.studio' },
+  ]) assert.equal((await server.accountPOST(request('account', 'POST', { idToken: 'synthetic.id.token' }, undefined, headers))).status, 403);
+  assert.equal(isAllowedPublicHost(request('account', 'GET', undefined, undefined, proxyHeaders), origin), false);
+  assert.equal(isAllowedPublicHost(request('account', 'GET', undefined, undefined, proxyHeaders), 'http://flowpath.studio', proxyHost), false);
+  assert.equal(isAllowedPublicHost(request('account', 'GET', undefined, undefined, {
+    'x-forwarded-host': 'flowpath.studio',
+  }), origin), true, 'a direct canonical Host permits only matching forwarded metadata');
+  assert.equal(configuredProxyHost(proxyHost), proxyHost);
+  for (const invalid of [undefined, '', '*.run.app', 'proxy.run.app:443', 'https://proxy.run.app',
+    'proxy.run.app,another.run.app', ' proxy.run.app ', 'Proxy.run.app', 'a..run.app', 'a'.repeat(64) + '.run.app']) {
+    assert.equal(configuredProxyHost(invalid), undefined);
+    assert.equal(isAllowedPublicHost(request('account', 'GET', undefined, undefined, proxyHeaders), origin, invalid), false);
+  }
 });
 
 test('durable Firebase cookies work across app processes and logout revokes them everywhere', async () => {

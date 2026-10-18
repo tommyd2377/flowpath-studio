@@ -31,6 +31,7 @@ type Options = {
   localDirectory?: string;
   development?: () => boolean;
   publicOrigin?: () => string | undefined;
+  trustedProxyHost?: () => string | undefined;
   now?: () => number;
 };
 
@@ -163,7 +164,8 @@ export function createAccountServer(options: Options = {}) {
   const localStore = createLocalWaveformStore(options.localDirectory ?? join(process.cwd(), '.local-waveforms'), now);
   const sessions = new Map<string, { user: AccountUser; expiresAt: number; mode: AccountMode; changing?: boolean }>();
   const publicOrigin = () => !development() ? configuredPublicOrigin(options.publicOrigin?.()) : undefined;
-  const allowed = (request: Request, mutation: boolean) => isAllowedRequest(request, mutation, publicOrigin());
+  const allowed = (request: Request, mutation: boolean) => isAllowedRequest(request, mutation, publicOrigin(),
+    !development() ? options.trustedProxyHost?.() : undefined);
   function mode(): AccountMode {
     const configured = typeof options.mode === 'function' ? options.mode() : options.mode ?? 'unavailable';
     if (!development() && (configured !== 'firebase' || !publicOrigin() || !options.firebase?.sessions)) return 'unavailable';

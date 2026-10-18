@@ -80,6 +80,36 @@ test('public homepage cannot create paid voice and an incomplete policy reads no
   assert.equal(f.calls.length, 0);
 });
 
+test('voice readiness, admission and closure share the explicit proxy host guard', async () => {
+  const f = fixture(), id = randomUUID();
+  const proxyHost = 'synthetic-backend-123456.us-east4.run.app';
+  const server = createVoiceServer({ ...f.options, trustedProxyHost: proxyHost });
+  const forwarded = (method: string, changes: Record<string, string> = {}) => {
+    const req = request(method, id);
+    const headers = new Headers(req.headers);
+    headers.set('host', proxyHost);
+    headers.set('x-forwarded-host', 'voice.example');
+    for (const [name, value] of Object.entries(changes)) headers.set(name, value);
+    return new Request(req, { headers });
+  };
+  const invalidHeaders: Record<string, string>[] = [
+    { host: 'untrusted.run.app' }, { 'x-forwarded-host': '' },
+    { 'x-forwarded-host': 'voice.example, voice.example' }, { 'x-forwarded-host': 'attacker.example' },
+    { 'x-forwarded-host': 'https://voice.example' }, { origin: 'https://attacker.example' },
+    { 'sec-fetch-site': 'cross-site' },
+  ];
+  for (const headers of invalidHeaders) {
+    assert.equal((await server.GET(forwarded('GET', headers))).status, 403);
+    assert.equal((await server.POST(forwarded('POST', headers))).status, 403);
+    assert.equal((await server.DELETE(forwarded('DELETE', headers))).status, 403);
+  }
+  assert.equal(f.calls.length, 0, 'invalid forwarding never reaches the provider');
+  assert.equal((await server.GET(forwarded('GET'))).status, 200);
+  assert.equal((await server.POST(forwarded('POST'))).status, 201);
+  assert.equal((await server.DELETE(forwarded('DELETE'))).status, 200);
+  assert.equal(f.calls.length, 1);
+});
+
 test('production starts only after its durable deadline is scheduled and returns the admission deadline', async () => {
   const f = fixture(), id = randomUUID();
   const server = createVoiceServer({ ...f.options, requestProvider: (async (...args) => {

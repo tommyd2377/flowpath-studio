@@ -28,6 +28,9 @@ test('deadline configuration requires an explicit HTTPS origin, project, queue a
   assert.equal(voiceDeadlineConfig({ ...env, FLOWPATH_VOICE_TASKS_LOCATION: '../us-east4' }), null);
   assert.equal(voiceDeadlineConfig({ ...env, FLOWPATH_VOICE_TASKS_QUEUE: 'x/tasks/y' }), null);
   assert.equal(voiceDeadlineConfig({ ...env, FLOWPATH_VOICE_TASKS_SERVICE_ACCOUNT: 'voice@other-project.iam.gserviceaccount.com' }), null);
+  for (const proxyHost of ['', 'https://proxy.example', 'proxy.example:443', '*.example', 'proxy.example, attacker.example']) {
+    assert.equal(voiceDeadlineConfig({ ...env, FLOWPATH_TRUSTED_PROXY_HOST: proxyHost }), null);
+  }
   assert.ok(voiceDeadlineConfig({ ...env, FLOWPATH_FIREBASE_PROJECT_ID: undefined, FIREBASE_CONFIG: JSON.stringify({ projectId: 'example-voice' }) }));
 });
 
@@ -119,5 +122,41 @@ test('authenticated expiry accepts only a bounded UUID body and returns retryabl
   assert.equal((await deadline.handle(request({ sessionId: id }), async () => false)).status, 503);
   assert.equal((await deadline.handle(request({ sessionId: id }), async () => { throw new Error('Unconfirmed closure'); })).status, 503);
   assert.equal((await deadline.handle(request({ sessionId: id }), expire)).status, 200);
+  assert.equal(expired, 1);
+});
+
+test('expiry accepts the exact configured proxy and canonical forwarded host while retaining OIDC checks', async () => {
+  const proxyHost = 'example-voice-123456789.us-east4.run.app';
+  const proxiedConfig = voiceDeadlineConfig({ ...env, FLOWPATH_TRUSTED_PROXY_HOST: proxyHost })!;
+  assert.equal(proxiedConfig.trustedProxyHost, proxyHost);
+  let verified = 0, expired = 0;
+  const deadline = createVoiceDeadline(proxiedConfig, {
+    createTask: async () => { throw new Error('Expiry must not create tasks'); },
+    async verifyIdentity(value, audience) {
+      verified++;
+      assert.equal(value, token);
+      assert.equal(audience, config.endpoint);
+      return identity;
+    },
+  });
+  const expire = async () => { expired++; return true; };
+  const headers = { host: proxyHost, 'x-forwarded-host': 'waveform.example' };
+  assert.equal((await deadline.handle(request(undefined, { headers, url: 'http://internal:8080/api/voice-expiry' }), expire)).status, 200);
+  assert.equal(verified, 1);
+  assert.equal(expired, 1);
+  const rejected: Record<string, string>[] = [
+    { host: 'another-voice-123456789.us-east4.run.app', 'x-forwarded-host': 'waveform.example' },
+    { host: proxyHost, 'x-forwarded-host': 'other.example' },
+    { host: proxyHost, 'x-forwarded-host': 'waveform.example, attacker.example' },
+    { host: `${proxyHost}, attacker.example`, 'x-forwarded-host': 'waveform.example' },
+    { host: proxyHost, 'x-forwarded-host': 'https://waveform.example' },
+    { host: proxyHost, 'x-forwarded-host': 'waveform.example:443' },
+    { host: proxyHost },
+  ];
+  for (const headers of rejected) assert.equal((await deadline.handle(request(undefined, { headers }), expire)).status, 403);
+  assert.equal(verified, 1);
+  assert.equal(expired, 1);
+  assert.equal((await deadline.handle(request(undefined, { headers: { ...headers, authorization: '' } }), expire)).status, 401);
+  assert.equal(verified, 1);
   assert.equal(expired, 1);
 });

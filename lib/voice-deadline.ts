@@ -1,9 +1,9 @@
 import { GoogleAuth, OAuth2Client } from 'google-auth-library';
 import { configuredFirebaseProjectId } from './firebase-accounts';
-import { configuredPublicOrigin } from './request-origin';
+import { configuredProxyHost, configuredPublicOrigin, isAllowedPublicHost } from './request-origin';
 import { VOICE_SESSION_SECONDS } from './voice-config';
 
-type DeadlineConfig = { endpoint: string; queuePath: string; serviceAccount: string };
+type DeadlineConfig = { endpoint: string; queuePath: string; serviceAccount: string; trustedProxyHost?: string };
 type Identity = { aud?: string; email?: string; email_verified?: boolean };
 type Task = {
   task: {
@@ -31,12 +31,17 @@ export function voiceDeadlineConfig(env: Record<string, string | undefined>): De
   const location = env.FLOWPATH_VOICE_TASKS_LOCATION ?? '';
   const queue = env.FLOWPATH_VOICE_TASKS_QUEUE ?? '';
   const serviceAccount = env.FLOWPATH_VOICE_TASKS_SERVICE_ACCOUNT ?? '';
+  const trustedProxyHost = configuredProxyHost(env.FLOWPATH_TRUSTED_PROXY_HOST);
   if (!origin || !project || !/^[a-z]+-[a-z0-9]+\d$/.test(location)
+    || env.FLOWPATH_TRUSTED_PROXY_HOST !== undefined && !trustedProxyHost
     || !/^[A-Za-z0-9_-]{1,100}$/.test(queue)
     || !/^[a-zA-Z0-9._-]+$/.test(serviceAccount.split('@')[0])
     || serviceAccount.split('@')[1] !== `${project}.iam.gserviceaccount.com`
     || serviceAccount.split('@').length !== 2) return null;
-  return { endpoint: `${origin}/api/voice-expiry`, queuePath: `projects/${project}/locations/${location}/queues/${queue}`, serviceAccount };
+  return {
+    endpoint: `${origin}/api/voice-expiry`, queuePath: `projects/${project}/locations/${location}/queues/${queue}`, serviceAccount,
+    trustedProxyHost,
+  };
 }
 
 async function sessionBody(request: Request): Promise<string> {
@@ -89,10 +94,11 @@ export function createVoiceDeadline(config: DeadlineConfig | null, dependencies:
     async handle(request: Request, expire: (id: string) => Promise<boolean>) {
       if (!config) return json(503);
       if (request.method !== 'POST') return json(405);
-      // Hosting terminates TLS; only the explicit Host is trusted, never forwarded headers.
+      // Forwarded hosts are accepted only from the explicitly configured hosting proxy.
       const url = new URL(request.url);
       const target = new URL(config.endpoint);
-      if (request.headers.get('host') !== target.host || url.pathname !== target.pathname || url.search) return json(403);
+      if (!isAllowedPublicHost(request, target.origin, config.trustedProxyHost)
+        || url.pathname !== target.pathname || url.search) return json(403);
       const authorization = request.headers.get('authorization') ?? '';
       const token = /^Bearer ([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/.exec(authorization)?.[1];
       if (!token || token.length > 8192) return json(401);

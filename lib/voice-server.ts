@@ -19,6 +19,7 @@ type Options = {
   connectMs?: number;
   maxStarts?: number;
   publicOrigin?: string;
+  trustedProxyHost?: string;
   production?: {
     store: ProductionVoiceStore;
     policy: () => VoicePolicy | null;
@@ -308,7 +309,7 @@ export function createVoiceServer(options: Options = {}) {
       catch { return false; }
     },
     async GET(request: Request) {
-      if (!isAllowedRequest(request, false, options.publicOrigin)) return json({ error: 'This host is not enabled for voice.' }, 403);
+      if (!isAllowedRequest(request, false, options.publicOrigin, options.trustedProxyHost)) return json({ error: 'This host is not enabled for voice.' }, 403);
       const access = await scope(request);
       if (access.error) return access.error;
       if (options.production && !productionOwner(access)) return json({ enabled: false, message: 'Sign in and open your waveform to talk.' });
@@ -327,7 +328,7 @@ export function createVoiceServer(options: Options = {}) {
       return key() ? json({ enabled: true, remainingStarts: maxStarts - attemptedStarts }) : json({ enabled: false, message: 'The voice connection is not configured.' });
     },
     async POST(request: Request) {
-      if (!isAllowedRequest(request, true, options.publicOrigin)) return json({ error: 'Only same-origin requests are allowed.' }, 403);
+      if (!isAllowedRequest(request, true, options.publicOrigin, options.trustedProxyHost)) return json({ error: 'Only same-origin requests are allowed.' }, 403);
       const access = await scope(request);
       if (access.error) return access.error;
       const owner = productionOwner(access);
@@ -440,7 +441,7 @@ export function createVoiceServer(options: Options = {}) {
       }
     },
     async DELETE(request: Request) {
-      if (!isAllowedRequest(request, true, options.publicOrigin)) return json({ error: 'Only same-origin requests are allowed.' }, 403);
+      if (!isAllowedRequest(request, true, options.publicOrigin, options.trustedProxyHost)) return json({ error: 'Only same-origin requests are allowed.' }, 403);
       const access = await scope(request);
       if (access.error) return access.error;
       let body: Record<string, unknown>;
