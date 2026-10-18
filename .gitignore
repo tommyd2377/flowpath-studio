@@ -9,6 +9,7 @@ packages/*/dist/
 test-results/
 playwright-report/
 .visitor-recordings/
+.local-waveforms/
 
 # Local tooling, reports and archives
 archives/

@@ -2,7 +2,7 @@
 
 A small local voice interface: the FlowPath logo, one centered waveform, and an invitation to tap. On connection, the logo and invitation fade while the waveform glides up to the logo's center; all three transitions run together over 800 milliseconds. Tap again or press Escape to end and return to the centered opening view.
 
-GPT-Live uses its own knowledge with one saved application instruction prompt. Conversations start fresh. Search, delegated models, account creation, plugins, billing and persistent conversational memory are not part of this milestone.
+GPT-Live uses its own knowledge. Each account can save one private waveform with a name and initial instructions. Conversations start fresh; saved instructions are configuration, not conversation memory. Search, delegated models, public sharing, plugins and billing remain outside this milestone.
 
 ## Local preview
 
@@ -16,6 +16,18 @@ FLOWPATH_LIVE_ENABLED=0 npm run dev
 
 Open http://127.0.0.1:3220. Live voice is paused by default: tapping the waveform explains that state without requesting the microphone or creating a paid session. The waveform rendering remains animated.
 
+## Local account preview
+
+```sh
+FLOWPATH_ACCOUNT_MODE=local FLOWPATH_LIVE_ENABLED=0 npm run dev
+```
+
+Choose **Create your waveform**, then a clearly labeled test owner. Save a waveform name and initial prompt and choose **Open waveform**. Its stable `/w/<id>` address requires that same owner to be signed in. A second test owner cannot read its prompt or open/start/close its private conversation. Account controls disappear while talking; the existing opening/closing motion is retained.
+
+The two identities are synthetic fixtures, not real Google/Firebase accounts. Their opaque HttpOnly sessions expire after five days or a server restart. Synthetic settings persist in the new Git-ignored `.local-waveforms/` directory; sign out and back in as the same test owner to retrieve them. Do not use this fixture mode for private or production data. The application never accesses Studio's private runtime directory for accounts.
+
+Google sign-in and a server-only Firestore adapter are implemented but inactive. No Firebase project, authentication provider, database, security rules or credentials were changed. Account routes remain development-only and loopback-only, including Firebase mode. Connecting a selected Firebase project, confirming its database edition and reviewing its access rules are a separate, explicitly authorized activation step. Existing Firebase rules are legacy files, not a configuration for this milestone. See [architecture](docs/architecture.md).
+
 The initial milestone used offline/mocked verification. Live testing requires explicit approval for the app, localhost host, task and call budget. Only after that approval may development use FLOWPATH_LIVE_ENABLED=1 with already-configured server credentials. Do not create/copy keys or change environment files. Production mode rejects live access. Each local process admits at most three provider starts, including failed starts; this budget does not reset each minute. See the dated verification notes for actual live results.
 
 ## Verification
@@ -25,14 +37,19 @@ npm run check
 npm run test:browser
 ```
 
-Unit tests inject fake providers and sideband sockets. Browser tests use isolated Playwright, fake microphone/playback and intercepted provider responses; outside browser traffic is blocked. They prove lifecycle and visual behavior, not GPT-Live answer quality or physical-device audio.
+Unit tests inject fake providers, Firebase adapters and sideband sockets. Browser tests use isolated Playwright, a fresh temporary account-fixture directory, fake microphone/playback and intercepted provider responses; outside browser traffic is blocked. They prove ownership, persistence, lifecycle and visual behavior, not real Google sign-in, Firestore, GPT-Live answer quality or physical-device audio.
+
+The October 18, 2026 account milestone passed `npm run check` (lint, types, 35 unit/integration tests and production build) and all 19 isolated browser checks. Desktop/mobile settings were visually inspected. Google sign-in, Firestore and paid voice were not live-tested; nothing was deployed.
 
 ## Small source map
 
 - app/page.tsx and components/VoiceExperience.tsx: the opening/closing experience.
 - components/Waveform.tsx: retained audio-driven canvas artwork, reduced-motion and WebKit rendering.
 - lib/use-voice-session.ts and lib/voice-session.ts: WebRTC, playback and browser cleanup.
-- lib/voice-config.ts: the single short prompt and voice configuration.
+- lib/account-model.ts, lib/account-server.ts and lib/account-runtime.ts: owner identity, private settings and local fixture persistence.
+- lib/account-client.ts and lib/firebase-accounts.ts: optional Google sign-in and server-only Firebase adapter, inactive by default.
+- components/AccountSettings.tsx and components/OwnerWaveform.tsx: the small settings page and private waveform gate.
+- lib/voice-config.ts: the platform instructions and per-conversation saved prompt snapshot.
 - lib/voice-server.ts and app/api/session/route.ts: local admission and server supervision.
 
 The existing personal footer is retained below the opening screen and hidden during a conversation. No News code or sibling checkout dependency is loaded.

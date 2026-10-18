@@ -120,11 +120,11 @@ async function emit(page: Page, event: object) {
 }
 
 async function mockSession(page: Page, options: { enabled?: boolean; delayPost?: Promise<void>; durationMs?: number } = {}) {
-  const calls: { method: string; sessionId?: string }[] = [];
-  await page.route('**/api/session', async route => {
+  const calls: { method: string; sessionId?: string; waveformId?: string }[] = [];
+  await page.route('**/api/session*', async route => {
     const method = route.request().method();
     const body = method === 'GET' ? null : route.request().postDataJSON();
-    calls.push({ method, sessionId: body?.sessionId });
+    calls.push({ method, sessionId: body?.sessionId, waveformId: new URL(route.request().url()).searchParams.get('waveformId') ?? undefined });
     if (method === 'GET') await route.fulfill({ json: { enabled: options.enabled !== false, message: 'Voice is disabled for this local preview.' } });
     else if (method === 'DELETE') await route.fulfill({ status: 204 });
     else {
@@ -323,4 +323,43 @@ test('reduced motion keeps the opening transition immediate and the control keyb
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeFocused();
   await expect(page.locator('.voice-hint')).toHaveCSS('opacity', '1');
+});
+
+test('a private waveform keeps its scope during cancellation and late session cleanup', async ({ page }) => {
+  const waveformId = '00000000-0000-4000-8000-000000000001';
+  await page.route('**/api/waveform?id=*', route => route.fulfill({ json: { waveform: { id: waveformId, name: 'Private test voice' } } }));
+  let releasePost!: () => void;
+  const delayPost = new Promise<void>(resolve => { releasePost = resolve; });
+  await fakeMedia(page);
+  const calls = await mockSession(page, { delayPost });
+  await page.goto(`/w/${waveformId}`);
+  await expect(page.locator('.voice-navigation')).toContainText('Private test voice');
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect.poll(() => calls.some(call => call.method === 'POST')).toBe(true);
+  await expect(page.locator('.voice-navigation')).toBeHidden();
+  await page.getByRole('button', { name: 'Cancel connection', exact: true }).click();
+  await expect.poll(async () => (await tracker(page)).stoppedTracks).toBe(1);
+  releasePost();
+  await expect.poll(() => calls.filter(call => call.method === 'DELETE').length).toBe(2);
+  expect(calls.every(call => call.waveformId === waveformId)).toBe(true);
+  await expect(page.locator('.voice-navigation')).toBeVisible();
+});
+
+test('account changes unmount a private conversation and release its microphone', async ({ page }) => {
+  const waveformId = '00000000-0000-4000-8000-000000000002';
+  let authorized = true;
+  await page.route('**/api/waveform?id=*', route => authorized
+    ? route.fulfill({ json: { waveform: { id: waveformId, name: 'Private test voice' } } })
+    : route.fulfill({ status: 401, json: { error: 'Sign in required.' } }));
+  await fakeMedia(page);
+  const calls = await mockSession(page);
+  await page.goto(`/w/${waveformId}`);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  authorized = false;
+  await page.evaluate(() => window.dispatchEvent(new Event('flowpath-account-change')));
+  await expect(page.getByRole('status')).toContainText('Sign in to open your private waveform.');
+  await expect.poll(async () => (await tracker(page)).stoppedTracks).toBe(1);
+  await expect.poll(async () => (await tracker(page)).closedPeers).toBe(1);
+  expect(calls.some(call => call.method === 'DELETE' && call.waveformId === waveformId)).toBe(true);
 });

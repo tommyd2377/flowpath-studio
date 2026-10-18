@@ -57,18 +57,101 @@ function harness(extra: Parameters<typeof createVoiceServer>[0] = {}) {
   return { server, calls, sockets };
 }
 
+function privateRequest(method: string, waveformId: string, body?: object, owner = 'owner-a') {
+  return new Request(`${origin}/api/session?waveformId=${encodeURIComponent(waveformId)}`, {
+    method, headers: { host: '127.0.0.1:3220', origin, 'content-type': 'application/json', 'x-test-owner': owner },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+}
+
+test('private voice admission verifies ownership before reading a key or creating a provider session', async () => {
+  const waveformId = randomUUID();
+  const server = createVoiceServer({
+    enabled: () => true,
+    resolveWaveform: async () => null,
+    apiKey: () => { throw new Error('Unauthorized requests must not read a key'); },
+    requestProvider: () => { throw new Error('Unauthorized requests must not start voice'); },
+  });
+  assert.equal((await server.GET(privateRequest('GET', waveformId))).status, 403);
+  assert.equal((await server.POST(privateRequest('POST', waveformId, { sessionId: randomUUID(), sdp }))).status, 403);
+  assert.equal((await server.DELETE(privateRequest('DELETE', waveformId, { sessionId: randomUUID() }))).status, 403);
+  assert.equal((await server.GET(privateRequest('GET', '../someone-else'))).status, 400);
+});
+
+test('saved instructions are loaded server-side per conversation and the personal greeting follows that identity', async () => {
+  const waveformId = randomUUID();
+  let initialPrompt = 'You are the synthetic library assistant. Keep replies short.';
+  const { server, calls, sockets } = harness({
+    resolveWaveform: async (req, id) => req.headers.get('x-test-owner') === 'owner-a' && id === waveformId
+      ? { ownerUid: 'owner-a', waveform: { name: 'Library', initialPrompt }, isCurrent: () => true } : null,
+  });
+  const first = randomUUID();
+  assert.equal((await server.POST(privateRequest('POST', waveformId, { sessionId: first, sdp }))).status, 201);
+  const firstConfig = JSON.parse(String(calls[0].options.body)).session;
+  assert.match(firstConfig.instructions, /synthetic library assistant/);
+  assert.deepEqual(firstConfig.input, []);
+  assert.equal(firstConfig.store, false);
+  initialPrompt = 'You are the synthetic garden assistant.';
+  assert.equal(sockets[0].sent.length, 0, 'editing settings sends no instructions into an active conversation');
+  sockets[0].event({ type: 'session.started' });
+  assert.match(String(sockets[0].sent[0].content), /saved waveform identity/);
+  assert.equal((await server.DELETE(privateRequest('DELETE', waveformId, { sessionId: first }))).status, 200);
+  const second = randomUUID();
+  assert.equal((await server.POST(privateRequest('POST', waveformId, { sessionId: second, sdp }))).status, 201);
+  assert.match(JSON.parse(String(calls[1].options.body)).session.instructions, /synthetic garden assistant/);
+  assert.doesNotMatch(firstConfig.instructions, /garden assistant/);
+  await server.DELETE(privateRequest('DELETE', waveformId, { sessionId: second }));
+});
+
+test('a private conversation cannot be closed anonymously or by another owner and logout confirms teardown', async () => {
+  const waveformId = randomUUID(), otherId = randomUUID(), sessionId = randomUUID();
+  const { server, calls } = harness({
+    resolveWaveform: async (req, id) => {
+      const owner = req.headers.get('x-test-owner');
+      return (owner === 'owner-a' && id === waveformId) || (owner === 'owner-b' && id === otherId)
+        ? { ownerUid: owner!, waveform: { name: 'Synthetic', initialPrompt: 'Keep it short.' }, isCurrent: () => true } : null;
+    },
+  });
+  await server.POST(privateRequest('POST', waveformId, { sessionId, sdp }));
+  assert.equal((await server.DELETE(request('DELETE', { sessionId }))).status, 403);
+  assert.equal((await server.DELETE(privateRequest('DELETE', waveformId, { sessionId }, 'owner-b'))).status, 403);
+  assert.equal((await server.DELETE(privateRequest('DELETE', otherId, { sessionId }, 'owner-b'))).status, 403);
+  assert.equal(await server.cancelOwner('owner-b'), true);
+  assert.equal((await (await server.GET(request('GET'))).json()).enabled, false, 'another owner cannot end the active session');
+  assert.equal(await server.cancelOwner('owner-a'), true);
+  assert.equal(calls.length, 1, 'confirmed logout cleanup makes no REST fallback request');
+  assert.equal((await (await server.GET(request('GET'))).json()).enabled, true);
+});
+
+test('logout during provider creation cancels late creation and blocks account switching until it closes', async () => {
+  const waveformId = randomUUID(), sessionId = randomUUID();
+  let release!: (response: Response) => void;
+  const waiting = new Promise<Response>(resolve => { release = resolve; });
+  const { server, calls } = harness({
+    resolveWaveform: async () => ({ ownerUid: 'owner-a', waveform: { name: 'Synthetic', initialPrompt: 'Hello.' }, isCurrent: () => true }),
+    requestProvider: (async () => waiting) as typeof fetch,
+  });
+  const pending = server.POST(privateRequest('POST', waveformId, { sessionId, sdp }));
+  await tick();
+  assert.equal(await server.cancelOwner('owner-a'), false);
+  release(Response.json({ session: { id: 'live_late_owner' }, transport: { type: 'webrtc', sdp } }));
+  assert.equal((await pending).status, 409);
+  assert.equal(await server.cancelOwner('owner-a'), true);
+  assert.equal(calls.length, 0, 'injected synthetic provider replaces all external traffic');
+});
+
 test('offline gate never reads a key, requests microphone work, or calls a provider', async () => {
   const server = createVoiceServer({ enabled: () => false,
     apiKey: () => { throw new Error('Key must not be read'); },
     requestProvider: () => { throw new Error('No provider'); },
   });
-  assert.equal((await server.GET(request('GET')).json()).enabled, false);
+  assert.equal((await (await server.GET(request('GET'))).json()).enabled, false);
   assert.equal((await server.POST(request('POST', { sessionId: randomUUID(), sdp }))).status, 503);
 });
 
 test('localhost and origin protection reject remote or cross-origin requests', async () => {
   const { server, calls } = harness();
-  assert.equal(server.GET(new Request('https://flowpathapp.com/api/session', { headers: { host: 'flowpathapp.com' } })).status, 403);
+  assert.equal((await server.GET(new Request('https://flowpathapp.com/api/session', { headers: { host: 'flowpathapp.com' } }))).status, 403);
   const headerSets: Record<string, string>[] = [
     { host: '127.0.0.1:3220', origin: 'http://attacker.example' },
     { host: '127.0.0.1:3220' },
@@ -82,13 +165,13 @@ test('localhost and origin protection reject remote or cross-origin requests', a
 test('Next normalized loopback URLs retain the browser host origin and exact port', async () => {
   const server = createVoiceServer({ enabled: () => false });
   const headers = { host: '127.0.0.1:3220', origin, 'content-type': 'application/json' };
-  const readiness = server.GET(new Request('http://localhost:3220/api/session', { headers }));
+  const readiness = await server.GET(new Request('http://localhost:3220/api/session', { headers }));
   assert.equal(readiness.status, 200);
   assert.equal((await readiness.json()).enabled, false);
   assert.equal((await server.POST(new Request('http://localhost:3220/api/session', {
     method: 'POST', headers, body: JSON.stringify({ sessionId: randomUUID(), sdp }),
   }))).status, 503);
-  assert.equal(server.GET(new Request('http://localhost:3225/api/session', { headers })).status, 403);
+  assert.equal((await server.GET(new Request('http://localhost:3225/api/session', { headers }))).status, 403);
 });
 
 test('create sends one audio-only GPT-Live request with no backend, tools, or history', async () => {
@@ -163,7 +246,7 @@ test('the live test budget counts starts across minutes and includes failed atte
     assert.equal((await server.DELETE(request('DELETE', { sessionId }))).status, 200);
     time += 61_000;
   }
-  assert.equal((await server.GET(request('GET')).json()).enabled, false);
+  assert.equal((await (await server.GET(request('GET'))).json()).enabled, false);
   assert.equal((await server.POST(request('POST', { sessionId: randomUUID(), sdp }))).status, 429);
   assert.equal(calls.length, 2);
 
@@ -189,7 +272,7 @@ test('cancel during creation keeps the late provider ID for confirmed teardown',
   assert.equal((await server.DELETE(request('DELETE', { sessionId }))).status, 202);
   complete(Response.json({ session: { id: 'live_late' }, transport: { type: 'webrtc', sdp } }, { status: 201 }));
   assert.equal((await start).status, 409);
-  assert.equal((await server.GET(request('GET')).json()).enabled, true);
+  assert.equal((await (await server.GET(request('GET'))).json()).enabled, true);
   assert.equal(calls.length, 1);
 });
 
@@ -220,7 +303,7 @@ test('missing final event triggers one fallback and blocks future starts', async
   assert.equal((await server.DELETE(request('DELETE', { sessionId }))).status, 503);
   assert.equal(calls.length, 2);
   assert.match(calls[1].url, /live_synthetic_1\/hangup$/);
-  assert.equal((await server.GET(request('GET')).json()).enabled, false);
+  assert.equal((await (await server.GET(request('GET'))).json()).enabled, false);
   assert.equal((await server.POST(request('POST', { sessionId: randomUUID(), sdp }))).status, 503);
   assert.equal(calls.length, 2);
 });
@@ -228,10 +311,10 @@ test('missing final event triggers one fallback and blocks future starts', async
 test('ambiguous creation and sideband failure both fail closed without retrying', async () => {
   const missing = harness({ requestProvider: (async () => { throw new Error('Synthetic timeout'); }) as typeof fetch });
   assert.equal((await missing.server.POST(request('POST', { sessionId: randomUUID(), sdp }))).status, 502);
-  assert.equal((await missing.server.GET(request('GET')).json()).enabled, false);
+  assert.equal((await (await missing.server.GET(request('GET'))).json()).enabled, false);
   const { server, calls } = harness({ socketFactory: url => new FakeSocket(url.split('/').at(-2)!, false) });
   assert.equal((await server.POST(request('POST', { sessionId: randomUUID(), sdp }))).status, 502);
-  assert.equal((await server.GET(request('GET')).json()).enabled, false);
+  assert.equal((await (await server.GET(request('GET'))).json()).enabled, false);
   assert.equal(calls.length, 2);
 });
 
@@ -240,7 +323,7 @@ test('server absolute cap closes a lost browser without requiring another HTTP r
   await server.POST(request('POST', { sessionId: randomUUID(), sdp }));
   await new Promise(resolve => setTimeout(resolve, 30));
   assert.ok(sockets[0].sent.some(event => event.type === 'session.close'));
-  assert.equal((await server.GET(request('GET')).json()).enabled, true);
+  assert.equal((await (await server.GET(request('GET'))).json()).enabled, true);
 });
 
 test('a failed REST teardown stays blocked and is not automatically retried', async () => {

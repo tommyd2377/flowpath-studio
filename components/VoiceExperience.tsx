@@ -1,13 +1,14 @@
 'use client';
 
 import Image from 'next/image';
+import Link from 'next/link';
 import { useEffect } from 'react';
 import { useVoiceSession } from '@/lib/use-voice-session';
 import Waveform from './Waveform';
 import PersonalFooter from './PersonalFooter';
 
-export default function VoiceExperience() {
-  const voice = useVoiceSession();
+export default function VoiceExperience({ waveformId, name }: { waveformId?: string; name?: string }) {
+  const voice = useVoiceSession(waveformId);
   const { active, stop } = voice;
   const connected = voice.phase === 'listening' || voice.phase === 'speaking';
   const label = voice.needsAudioResume ? 'Resume voice playback' : voice.active
@@ -26,6 +27,10 @@ export default function VoiceExperience() {
   }, [active, stop]);
 
   return <div className="voice-experience" data-active={voice.active} data-connected={connected}>
+    <nav className="voice-navigation" aria-label="Account" hidden={voice.active}>
+      {name && <span>{name}</span>}
+      <Link href="/account">{waveformId ? 'My waveform' : 'Create your waveform'}</Link>
+    </nav>
     <main className="voice-page" data-voice-phase={voice.phase}>
       <header className="wordmark" aria-hidden={connected}>
         <Image src="/brand/flowpath-logo-full.png" alt="FlowPath" width={1536} height={1024} priority />

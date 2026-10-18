@@ -6,6 +6,7 @@ import { monitorAudio, waitForIce } from './voice-session';
 
 type VoiceSession = {
   id: string;
+  endpoint: string;
   controller: AbortController;
   requested: boolean;
   ready: boolean;
@@ -30,9 +31,9 @@ type VoiceSession = {
   released?: boolean;
 };
 
-async function deleteSession(id: string) {
+async function deleteSession(id: string, endpoint: string) {
   try {
-    const response = await fetch('/api/session', {
+    const response = await fetch(endpoint, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: id }),
@@ -63,7 +64,7 @@ function releaseMedia(session: VoiceSession) {
 function dispose(session: VoiceSession, leaving = false): Promise<boolean> {
   if (session.closePromise) {
     if (leaving) {
-      if (session.requested) void deleteSession(session.id);
+      if (session.requested) void deleteSession(session.id, session.endpoint);
       releaseMedia(session);
     }
     return session.closePromise;
@@ -81,7 +82,7 @@ function dispose(session: VoiceSession, leaving = false): Promise<boolean> {
     if (session.ready && session.channel?.readyState === 'open') {
       try { session.channel.send(JSON.stringify({ type: 'session.close' })); } catch { /* Server closes below. */ }
     }
-    session.closePromise = session.requested ? deleteSession(session.id) : Promise.resolve(true);
+    session.closePromise = session.requested ? deleteSession(session.id, session.endpoint) : Promise.resolve(true);
     releaseMedia(session);
     return session.closePromise;
   }
@@ -96,13 +97,13 @@ function dispose(session: VoiceSession, leaving = false): Promise<boolean> {
         catch { clearTimeout(timer); resolve(false); }
       });
     }
-    const serverClosed = session.requested ? await deleteSession(session.id) : true;
+    const serverClosed = session.requested ? await deleteSession(session.id, session.endpoint) : true;
     return finalized || serverClosed;
   })().finally(() => releaseMedia(session));
   return session.closePromise;
 }
 
-export function useVoiceSession() {
+export function useVoiceSession(waveformId?: string) {
   const [phase, setPhase] = useState<VoicePhase>('idle');
   const [active, setActive] = useState(false);
   const [status, setStatus] = useState('');
@@ -167,7 +168,8 @@ export function useVoiceSession() {
     }
 
     const session: VoiceSession = {
-      id: crypto.randomUUID(), controller: new AbortController(), requested: false,
+      id: crypto.randomUUID(), endpoint: waveformId ? `/api/session?waveformId=${encodeURIComponent(waveformId)}` : '/api/session',
+      controller: new AbortController(), requested: false,
       ready: false, started: false, answerApplied: false, finalized: false,
       needsAudioResume: false, lastActivity: Date.now(),
     };
@@ -186,7 +188,7 @@ export function useVoiceSession() {
     };
 
     try {
-      const readiness = await fetch('/api/session', { cache: 'no-store', signal: session.controller.signal });
+      const readiness = await fetch(session.endpoint, { cache: 'no-store', signal: session.controller.signal });
       if (!readiness.ok) throw new Error(await errorMessage(readiness));
       const config: unknown = await readiness.json();
       if (!alive()) return;
@@ -283,13 +285,13 @@ export function useVoiceSession() {
       session.requested = true;
       // A stop cancels the server reservation by ID. Let the POST complete so
       // even a late provider creation can be closed, without losing its answer.
-      const response = await fetch('/api/session', {
+      const response = await fetch(session.endpoint, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sdp, sessionId: session.id }), signal: AbortSignal.timeout(30_000),
       });
       if (!response.ok) throw new Error(await errorMessage(response));
       const result: unknown = await response.json();
-      if (!alive()) { void deleteSession(session.id); return; }
+      if (!alive()) { void deleteSession(session.id, session.endpoint); return; }
       if (!result || typeof result !== 'object' || !('sdp' in result) || typeof result.sdp !== 'string'
         || !('sessionId' in result) || result.sessionId !== session.id || !('expiresAt' in result)
         || typeof result.expiresAt !== 'number' || !Number.isFinite(result.expiresAt)) {
@@ -316,7 +318,7 @@ export function useVoiceSession() {
         : error instanceof Error ? error.message : 'The voice connection is unavailable. Tap the wave to try again.';
       fail(session, notice);
     }
-  }, [fail, stop]);
+  }, [fail, stop, waveformId]);
 
   useEffect(() => {
     mounted.current = true;

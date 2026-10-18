@@ -1,5 +1,5 @@
 import WebSocket from 'ws';
-import { VOICE_SESSION_SECONDS, voiceSessionConfig } from './voice-config';
+import { VOICE_SESSION_SECONDS, voiceSessionConfig, type WaveformPrompt } from './voice-config';
 
 type Socket = Pick<WebSocket, 'readyState' | 'send' | 'terminate'> & {
   on(event: 'open' | 'close' | 'error', listener: () => void): unknown;
@@ -16,6 +16,9 @@ type Options = {
   closeMs?: number;
   connectMs?: number;
   maxStarts?: number;
+  resolveWaveform?: (request: Request, id: string) => Promise<{
+    ownerUid: string; waveform: WaveformPrompt; isCurrent: () => boolean;
+  } | null>;
 };
 type Conversation = {
   id: string;
@@ -26,6 +29,8 @@ type Conversation = {
   timer?: ReturnType<typeof setTimeout>;
   startTimer?: ReturnType<typeof setTimeout>;
   ending?: Promise<boolean>;
+  ownerUid?: string;
+  waveformId?: string;
 };
 const MAX_BODY_BYTES = 65_536;
 const validId = (value: unknown): value is string => typeof value === 'string'
@@ -165,7 +170,9 @@ function attachControl(session: Conversation, options: Options, onFatal: () => v
         clearTimeout(session.startTimer);
         socket.send(JSON.stringify({
           type: 'session.instructions.append', event_id: 'flowpath_greeting', delegation_id: null,
-          content: 'Greet the visitor now in English: briefly introduce yourself as FlowPath, a voice interface, and invite them to talk. Then pause and listen.',
+          content: session.waveformId
+            ? 'Greet the visitor now in English using the saved waveform identity and conversational style. Keep it brief, invite them to talk, then pause and listen. Do not claim unavailable capabilities.'
+            : 'Greet the visitor now in English: briefly introduce yourself as FlowPath, a voice interface, and invite them to talk. Then pause and listen.',
         }));
       } else if (event.type === 'session.delegation.created') {
         const delegation = record(event.delegation);
@@ -201,15 +208,31 @@ export function createVoiceServer(options: Options = {}) {
   const cleanupMessage = 'The previous connection could not be confirmed closed. Check the local server before trying again.';
   const budgetMessage = 'This local test has reached its three-conversation limit.';
 
-  function remember(id: string) {
+  async function scope(request: Request) {
+    const params = new URL(request.url).searchParams;
+    if ([...params.keys()].some(name => name !== 'waveformId') || params.getAll('waveformId').length > 1) {
+      return { error: json({ error: 'Invalid waveform identifier.' }, 400) };
+    }
+    if (!params.has('waveformId')) return { waveformId: undefined, personal: undefined };
+    const id = params.get('waveformId');
+    if (!validId(id)) return { error: json({ error: 'Invalid waveform identifier.' }, 400) };
+    try {
+      const personal = await options.resolveWaveform?.(request, id);
+      if (!personal || !personal.isCurrent()) return { error: json({ error: 'Sign in as this waveform’s owner to continue.' }, 403) };
+      return { waveformId: id, personal };
+    } catch { return { error: json({ error: 'Your waveform could not be loaded. Try again later.' }, 503) }; }
+  }
+
+  const reservationKey = (id: string, ownerUid?: string, waveformId?: string) => JSON.stringify([ownerUid, waveformId, id]);
+  function remember(id: string, ownerUid?: string, waveformId?: string) {
     for (const [known, time] of recent) if (now() - time > 60_000) recent.delete(known);
-    recent.set(id, now());
+    recent.set(reservationKey(id, ownerUid, waveformId), now());
     if (recent.size > 128) recent.delete(recent.keys().next().value!);
   }
   function release(session: Conversation) {
     clearTimeout(session.timer);
     clearTimeout(session.startTimer);
-    remember(session.id);
+    remember(session.id, session.ownerUid, session.waveformId);
     if (active === session) active = undefined;
   }
   async function performClose(session: Conversation) {
@@ -236,8 +259,19 @@ export function createVoiceServer(options: Options = {}) {
   }
 
   return {
-    GET(request: Request) {
+    async cancelOwner(ownerUid: string) {
+      const session = active;
+      if (!session) return !blocked;
+      if (session.ownerUid !== ownerUid) return true;
+      session.canceled = true;
+      // Keep the old account cookie while a late provider creation still needs teardown.
+      if (!session.control) return false;
+      return close(session);
+    },
+    async GET(request: Request) {
       if (!localRequest(request, false)) return json({ error: 'This prototype is available on localhost only.' }, 403);
+      const access = await scope(request);
+      if (access.error) return access.error;
       if (!enabled()) return json({ enabled: false, message: 'Live voice is paused for this local preview.' });
       if (blocked) return json({ enabled: false, message: cleanupMessage });
       if (active) return json({ enabled: false, message: 'A conversation is already open.' });
@@ -246,6 +280,10 @@ export function createVoiceServer(options: Options = {}) {
     },
     async POST(request: Request) {
       if (!localRequest(request, true)) return json({ error: 'Only same-origin local requests are allowed.' }, 403);
+      const access = await scope(request);
+      if (access.error) return access.error;
+      // Snapshot saved instructions once. Edits only affect subsequent conversations.
+      const config = voiceSessionConfig(access.personal?.waveform);
       if (!enabled()) return json({ error: 'Live voice is paused for this local preview.' }, 503);
       if (blocked) return json({ error: cleanupMessage }, 503);
       if (attemptedStarts >= maxStarts) return json({ error: budgetMessage }, 429);
@@ -256,7 +294,10 @@ export function createVoiceServer(options: Options = {}) {
       catch { return json({ error: 'Invalid audio connection request.' }, 400); }
       if (Object.keys(body).some(name => name !== 'sdp' && name !== 'sessionId')
         || !validId(body.sessionId) || !audioSdp(body.sdp)) return json({ error: 'Invalid audio connection request.' }, 400);
-      if (request.signal.aborted || recent.has(body.sessionId)) return json({ error: 'The conversation was canceled or already used.' }, 409);
+      if (request.signal.aborted || recent.has(reservationKey(body.sessionId, access.personal?.ownerUid, access.waveformId))) return json({ error: 'The conversation was canceled or already used.' }, 409);
+      // Auth/store reads and the streamed body can outlive sign-out in another tab.
+      // This synchronous lease check and reservation cannot interleave with logout.
+      if (access.personal && !access.personal.isCurrent()) return json({ error: 'Sign in as this waveform’s owner to continue.' }, 403);
       // Recheck after reading the body so concurrent tabs cannot reserve two calls.
       if (blocked) return json({ error: cleanupMessage }, 503);
       if (active) return json({ error: 'A conversation is already open.' }, 409);
@@ -264,7 +305,10 @@ export function createVoiceServer(options: Options = {}) {
       starts = starts.filter(time => now() - time < 60_000);
       if (starts.length >= 3) return json({ error: 'Please wait a minute before starting another conversation.' }, 429);
       starts.push(now());
-      const session: Conversation = { id: body.sessionId, apiKey, canceled: false };
+      const session: Conversation = {
+        id: body.sessionId, apiKey, canceled: false,
+        ownerUid: access.personal?.ownerUid, waveformId: access.waveformId,
+      };
       active = session;
       const abort = () => { session.canceled = true; if (session.control) void close(session); };
       request.signal.addEventListener('abort', abort, { once: true });
@@ -273,7 +317,7 @@ export function createVoiceServer(options: Options = {}) {
         // Do not cancel this fetch when the browser cancels: its late ID is needed for teardown.
         const response = await requestProvider('https://api.openai.com/v1/live/sessions', {
           method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session: voiceSessionConfig(), transport: { type: 'webrtc', sdp: body.sdp } }),
+          body: JSON.stringify({ session: config, transport: { type: 'webrtc', sdp: body.sdp } }),
           redirect: 'error', signal: AbortSignal.timeout(15_000),
         });
         if (!response.ok) {
@@ -319,11 +363,16 @@ export function createVoiceServer(options: Options = {}) {
     },
     async DELETE(request: Request) {
       if (!localRequest(request, true)) return json({ error: 'Only same-origin local requests are allowed.' }, 403);
+      const access = await scope(request);
+      if (access.error) return access.error;
       let body: Record<string, unknown>;
       try { body = await readBody(request); }
       catch { return json({ error: 'Invalid conversation identifier.' }, 400); }
       if (!validId(body.sessionId) || Object.keys(body).some(name => name !== 'sessionId')) return json({ error: 'Invalid conversation identifier.' }, 400);
-      remember(body.sessionId);
+      if (active?.id === body.sessionId && (active.ownerUid !== access.personal?.ownerUid || active.waveformId !== access.waveformId)) {
+        return json({ error: 'This conversation belongs to another waveform.' }, 403);
+      }
+      remember(body.sessionId, access.personal?.ownerUid, access.waveformId);
       if (!active || active.id !== body.sessionId) return json({ closed: true });
       active.canceled = true;
       // Creation is still running: POST receives its ID and closes it before returning.
