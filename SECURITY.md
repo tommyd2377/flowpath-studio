@@ -1,6 +1,8 @@
 # Voice and account boundaries
 
-Local sessions accept same-origin loopback HTTP requests only and live access is disabled by default. Public Firebase mode requires an explicit HTTPS origin, verified server cookies, active invitation membership, durable admission and a configured independent deadline. Before any paid test, obtain explicit authorization for this application, host, task and budget.
+Local sessions accept same-origin loopback HTTP requests only and live access is disabled by default. Personal Firebase waveforms require an explicit HTTPS origin, verified server cookies, active invitation membership, durable admission and a configured independent deadline. Before any paid test, obtain explicit authorization for this application, host, task and budget.
+
+The explicitly enabled homepage demo uses a separate opaque visitor cookie, not Firebase account authority. Its 180-second reservations and pre-cancellations share global limits; private waveform access still requires the invited owner. Browser cookie resets can change visitor identity, so the shared global limit is the spending bound. Visitor hashes are stored only for usage and lifecycle control; no prompt, transcript or audio is logged.
 
 The local controller admits one session, up to three starts per minute and at most three provider starts across the whole process, including failed starts. Its normal conversation cap is 15 minutes. Restarting does not grant authorization for additional paid tests.
 

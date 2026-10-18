@@ -20,7 +20,7 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
     : 'Start conversation';
   const showStatus = !connected || voice.needsAudioResume || (voice.remainingSeconds !== null && voice.remainingSeconds <= 15);
   const status = connected && !voice.needsAudioResume && voice.remainingSeconds !== null && voice.remainingSeconds <= 15
-    ? `${voice.remainingSeconds} seconds remaining in this local session.` : voice.status;
+    ? `${voice.remainingSeconds} seconds remaining in this conversation.` : voice.status;
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -33,9 +33,12 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
   return <div className="voice-experience" data-active={voice.active} data-connected={connected}
     data-personal={Boolean(waveformId)} data-profile-photo={Boolean(waveformId && profilePhoto)}
     style={waveformId ? appearanceTheme(accentColor) : undefined}>
-    <nav className="voice-navigation" aria-label="Account" hidden={voice.active}>
-      {name && <span>{name}</span>}
-      <Link href="/account">{waveformId ? 'My waveform' : 'Create your waveform'}</Link>
+    <nav className="voice-navigation" aria-label="FlowPath navigation" hidden={Boolean(waveformId) && voice.active}>
+      <a className="news-example-link" href="https://flowpathapp.com">FlowPath News example</a>
+      <div className="voice-account-links">
+        {name && <span>{name}</span>}
+        <Link href="/account">{waveformId ? 'My waveform' : 'Create your waveform'}</Link>
+      </div>
     </nav>
     <main className="voice-page" data-voice-phase={voice.phase}>
       <header className="wordmark" aria-hidden={connected}>

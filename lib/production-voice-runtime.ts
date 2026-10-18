@@ -3,6 +3,7 @@ import { configuredFirebaseProjectId, getFirebaseAccountServices } from './fireb
 import { configuredPublicOrigin } from './request-origin';
 import { createProductionVoiceStore, firestoreVoiceDatabase, productionVoicePolicy } from './production-voice-store';
 import { productionVoiceDeadlineConfigured, scheduleProductionVoiceDeadline } from './voice-deadline';
+import { publicVoiceOwner } from './public-voice-identity';
 
 type Resolver = NonNullable<Parameters<typeof createVoiceServer>[0]>['resolveWaveform'];
 const shared = globalThis as typeof globalThis & {
@@ -21,6 +22,7 @@ export function getProductionVoiceServer(resolveWaveform?: Resolver) {
       && Boolean(configuredFirebaseProjectId()) && Boolean(configuredPublicOrigin(process.env.FLOWPATH_PUBLIC_ORIGIN))
       && productionVoiceDeadlineConfigured() && Boolean(productionVoicePolicy(process.env)),
     resolveWaveform: (request, id) => shared.flowpathProductionWaveformResolver?.(request, id) ?? Promise.resolve(null),
+    resolvePublicVisitor: publicVoiceOwner,
     production: {
       store: createProductionVoiceStore(firestoreVoiceDatabase(() => {
         const projectId = configuredFirebaseProjectId();

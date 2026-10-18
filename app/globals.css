@@ -31,11 +31,12 @@ button { font: inherit; }
 .made-in { display: flex; align-items: center; justify-content: center; gap: .25em; margin: 10px 0 0; }
 .heart { width: 1.15em; height: 1.15em; color: #e25555; fill: currentColor; flex-shrink: 0; transform: translateY(.06em); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-.voice-navigation { position: absolute; z-index: 1; top: 24px; right: 28px; left: 28px; display: flex; align-items: center; justify-content: flex-end; gap: 20px; color: var(--muted, #a59e90); font-size: 12px; }
+.voice-navigation { position: absolute; z-index: 1; top: 24px; right: 28px; left: 28px; display: flex; align-items: center; justify-content: space-between; gap: 20px; color: var(--muted, #a59e90); font-size: 12px; }
 .voice-navigation[hidden] { display: none; }
+.voice-account-links { display: flex; justify-content: flex-end; align-items: center; gap: 20px; min-width: 0; }
 .voice-navigation span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .voice-navigation a, .account-back { color: var(--accent, #c5bba6); text-decoration-color: var(--border, #c5bba655); text-underline-offset: 4px; }
-.voice-navigation a { flex-shrink: 0; }
+.voice-navigation a { flex-shrink: 0; white-space: nowrap; }
 .account-page { width: min(100%, 608px); min-height: 100svh; margin: 0 auto; padding: 40px 24px 80px; line-height: 1.65; color: var(--text, #e7dfcd); background: var(--surface, #101110); box-shadow: 0 0 0 100vmax var(--surface, #101110); clip-path: inset(0 -100vmax); }
 .account-back { font-size: 13px; }
 .account-page h1 { margin: 48px 0 6px; font-size: clamp(27px, 5vw, 34px); line-height: 1.25; font-weight: 500; }
@@ -71,4 +72,5 @@ button { font: inherit; }
 .auth-options button { border: 0; background: none; color: var(--accent, #c5bba6); padding: 3px 0; font: inherit; font-size: 13px; text-decoration: underline; text-underline-offset: 4px; cursor: pointer; }
 @media (max-height: 650px) { .voice-page { --logo-top: max(12px, calc(50svh - 190px)); } .voice-hint { top: calc(50svh + 105px); } .voice-status { top: calc(50svh + 140px); } }
 @media (max-width: 600px) { .voice-page { --logo-width: 145px; } .wave-control { width: calc(100% - 24px); height: 150px; } .voice-hint, .voice-status { font-size: 12px; } }
+@media (max-width: 600px) { .voice-navigation { left: 16px; right: 16px; gap: 12px; font-size: 11px; } .voice-account-links { gap: 12px; } .voice-account-links span { display: none; } }
 @media (prefers-reduced-motion: reduce) { .wordmark, .voice-hint, .wave-control { transition: none; } }

@@ -5,6 +5,8 @@ import test from 'node:test';
 import WebSocket from 'ws';
 import { createVoiceServer } from '../lib/voice-server';
 import { createProductionVoiceStore, type VoiceDatabase, type VoiceOwner, type VoicePolicy, type VoiceTransaction } from '../lib/production-voice-store';
+import { PUBLIC_VOICE_COOKIE, PUBLIC_VOICE_SECONDS, publicVoiceOwner } from '../lib/public-voice-identity';
+import { PUBLIC_GREETING_INSTRUCTIONS } from '../lib/voice-config';
 
 const origin = 'https://voice.example';
 const sdp = 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n';
@@ -25,6 +27,7 @@ function fixture(finalize = true) {
     [`ownerSessions/${owner.accountSessionId}`, { uid: owner.ownerUid, state: 'active', expiresAt: 100_000_000 }],
   ]);
   let pending = Promise.resolve();
+  const reads: string[] = [];
   const database: VoiceDatabase = {
     async transaction<T>(work: (tx: VoiceTransaction) => Promise<T>) {
       const previous = pending;
@@ -33,7 +36,7 @@ function fixture(finalize = true) {
       await previous;
       const next = structuredClone(rows);
       try {
-        const result = await work({ get: async path => next.get(path) ?? null, set: (path, value) => { next.set(path, structuredClone(value) as Record<string, unknown>); } });
+        const result = await work({ get: async path => { reads.push(path); return next.get(path) ?? null; }, set: (path, value) => { next.set(path, structuredClone(value) as Record<string, unknown>); } });
         rows = next;
         return result;
       } finally { release(); }
@@ -41,11 +44,14 @@ function fixture(finalize = true) {
   };
   const store = createProductionVoiceStore(database, () => now);
   const sockets = new Set<SyntheticSocket>();
+  const sent: Record<string, unknown>[] = [];
   class SyntheticSocket extends EventEmitter {
     readyState: 0 | 1 | 2 | 3 = WebSocket.OPEN;
     constructor(readonly id: string) { super(); queueMicrotask(() => this.emit('open')); }
     send(text: string) {
-      if (JSON.parse(text).type === 'session.close' && shouldFinalize) queueMicrotask(() => {
+      const event = JSON.parse(text);
+      sent.push(event);
+      if (event.type === 'session.close' && shouldFinalize) queueMicrotask(() => {
         for (const socket of sockets) if (socket.id === this.id) socket.emit('message', Buffer.from(JSON.stringify({
           type: 'session.closed', session: { id: this.id }, usage: { seconds: 2.5 },
         })));
@@ -54,22 +60,44 @@ function fixture(finalize = true) {
     terminate() { sockets.delete(this); this.readyState = WebSocket.CLOSED; }
   }
   const calls: string[] = [];
+  const payloads: Record<string, unknown>[] = [];
   const scheduled: { id: string; expiresAt: number }[] = [];
   const options = {
     publicOrigin: origin, enabled: () => true, apiKey: () => 'synthetic-server-key', now: () => now,
     resolveWaveform: async () => ({ ...owner, waveform: { name: 'Synthetic', initialPrompt: 'Keep it short.' }, isCurrent: async () => true }),
     production: { store, policy: () => policy, scheduleDeadline: async (id: string, expiresAt: number) => { scheduled.push({ id, expiresAt }); } },
-    requestProvider: (async (url: string | URL | Request) => {
+    requestProvider: (async (url: string | URL | Request, init?: RequestInit) => {
       calls.push(String(url));
+      if (init?.body) payloads.push(JSON.parse(String(init.body)));
       return Response.json({ session: { id: `live_synthetic_${calls.length}` }, transport: { type: 'webrtc', sdp } }, { status: 201 });
     }) as typeof fetch,
     socketFactory: (url: string) => { const socket = new SyntheticSocket(url.split('/').at(-2)!); sockets.add(socket); return socket; },
   };
-  return { options, store, calls, scheduled, database, rows: () => rows, advance: (ms: number) => { now += ms; },
+  return { options, store, calls, scheduled, database, reads, payloads, sent,
+    started: () => { for (const socket of sockets) socket.emit('message', Buffer.from(JSON.stringify({ type: 'session.started' }))); },
+    rows: () => rows, advance: (ms: number) => { now += ms; },
     setFinalization: (value: boolean) => { shouldFinalize = value; } };
 }
 
-test('public homepage cannot create paid voice and an incomplete policy reads no key', async () => {
+const visitorToken = 'a'.repeat(64);
+function visitorRequest(method: string, id?: string, token = visitorToken, personal = false) {
+  const req = request(method, id, personal);
+  const headers = new Headers(req.headers);
+  headers.set('cookie', `${PUBLIC_VOICE_COOKIE}=${token}`);
+  return new Request(req, { headers });
+}
+function visitorFixture() {
+  const f = fixture();
+  let currentPolicy: VoicePolicy = { ...policy, globalDailySeconds: 3_600, publicDemoSeconds: PUBLIC_VOICE_SECONDS };
+  let privateLookups = 0;
+  const options = { ...f.options, resolvePublicVisitor: publicVoiceOwner,
+    resolveWaveform: async () => { privateLookups++; return null; },
+    production: { ...f.options.production, policy: () => currentPolicy } };
+  return { ...f, options, privateLookups: () => privateLookups,
+    disableDemo: () => { currentPolicy = { ...policy, globalDailySeconds: 3_600 }; } };
+}
+
+test('the homepage stays paused without public admission and an incomplete policy reads no key', async () => {
   const f = fixture();
   const server = createVoiceServer({ ...f.options, apiKey: () => { throw new Error('Key must not be read'); }, production: { ...f.options.production, policy: () => null } });
   const home = await (await server.GET(request('GET', undefined, false))).json();
@@ -77,6 +105,91 @@ test('public homepage cannot create paid voice and an incomplete policy reads no
   assert.match(home.message, /Sign in/);
   assert.equal((await server.POST(request('POST', randomUUID(), false))).status, 403);
   assert.equal((await server.POST(request('POST', randomUUID()))).status, 503);
+  assert.equal(f.calls.length, 0);
+});
+
+test('public voice requires its existing visitor cookie before admission and never looks up Firebase identity', async () => {
+  const f = visitorFixture();
+  const server = createVoiceServer({ ...f.options, apiKey: () => { throw new Error('Missing cookies must not read a key'); } });
+  const home = await (await server.GET(request('GET', undefined, false))).json();
+  assert.equal(home.enabled, false);
+  assert.match(home.message, /cookies/i);
+  assert.equal((await server.POST(request('POST', randomUUID(), false))).status, 403);
+  assert.equal((await server.DELETE(request('DELETE', randomUUID(), false))).status, 403);
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.scheduled.length, 0);
+  assert.equal(f.privateLookups(), 0);
+  assert.equal(f.reads.length, 0);
+});
+
+test('a public visitor receives the welcome prompt and a durable three-minute deadline without Firebase auth', async () => {
+  const f = visitorFixture(), id = randomUUID();
+  const server = createVoiceServer(f.options);
+  const ready = await (await server.GET(visitorRequest('GET'))).json();
+  assert.equal(ready.enabled, true);
+  const response = await server.POST(visitorRequest('POST', id));
+  assert.equal(response.status, 201);
+  assert.equal((await response.json()).expiresAt, 280_000);
+  assert.deepEqual(f.scheduled, [{ id, expiresAt: 280_000 }]);
+  assert.equal(f.rows().get(`voiceConversations/${id}`)?.kind, 'visitor');
+  assert.equal(f.rows().get('voiceAdmission/global')?.reservedSeconds, 180);
+  const config = f.payloads[0].session as { instructions: string };
+  assert.match(config.instructions, /FlowPath Studio/);
+  assert.doesNotMatch(config.instructions, /owner's waveform named|Keep it short/);
+  f.started();
+  const greeting = f.sent.find(event => event.event_id === 'flowpath_greeting');
+  assert.equal(greeting?.content, PUBLIC_GREETING_INSTRUCTIONS);
+  assert.equal(f.privateLookups(), 0);
+  assert.equal(f.reads.some(path => path.startsWith('ownerSessions/')), false);
+  f.advance(180_000);
+  assert.equal(await server.expireReservation(id), true);
+  assert.equal(f.rows().get(`voiceConversations/${id}`)?.state, 'closed');
+  assert.equal((await server.DELETE(visitorRequest('DELETE', id))).status, 200);
+  assert.equal((await server.POST(visitorRequest('POST', randomUUID()))).status, 429, 'one visitor receives one three-minute reservation per day');
+  assert.equal(f.calls.length, 1);
+});
+
+test('public visitors cannot use a private waveform or cancel another visitor or member conversation', async () => {
+  const f = visitorFixture(), publicId = randomUUID();
+  const server = createVoiceServer(f.options);
+  assert.equal((await server.GET(visitorRequest('GET', undefined, visitorToken, true))).status, 403);
+  assert.equal((await server.POST(visitorRequest('POST', randomUUID(), visitorToken, true))).status, 403);
+  assert.equal((await server.POST(visitorRequest('POST', publicId))).status, 201);
+  assert.equal((await server.DELETE(visitorRequest('DELETE', publicId, 'b'.repeat(64)))).status, 403);
+  assert.equal(f.rows().get(`voiceConversations/${publicId}`)?.state, 'active');
+  assert.equal((await server.DELETE(visitorRequest('DELETE', publicId))).status, 200);
+  const memberId = randomUUID();
+  const memberServer = createVoiceServer({ ...f.options, resolveWaveform: async () => ({
+    ...owner, waveform: { name: 'Private owner', initialPrompt: 'Private instructions.' }, isCurrent: () => true,
+  }) });
+  assert.equal((await memberServer.POST(request('POST', memberId))).status, 201);
+  assert.equal((await server.DELETE(visitorRequest('DELETE', memberId))).status, 403);
+  assert.equal(f.rows().get(`voiceConversations/${memberId}`)?.state, 'active');
+  assert.equal((await memberServer.DELETE(request('DELETE', memberId))).status, 200);
+  assert.equal(f.calls.length, 2);
+});
+
+test('a visitor can close its conversation after public starts are disabled', async () => {
+  const f = visitorFixture(), id = randomUUID();
+  const server = createVoiceServer(f.options);
+  assert.equal((await server.POST(visitorRequest('POST', id))).status, 201);
+  f.disableDemo();
+  const readiness = await (await server.GET(visitorRequest('GET'))).json();
+  assert.equal(readiness.enabled, false);
+  assert.match(readiness.message, /paused/i);
+  assert.equal((await server.POST(visitorRequest('POST', randomUUID()))).status, 503);
+  assert.equal((await server.DELETE(visitorRequest('DELETE', id))).status, 200);
+  assert.equal(f.rows().get(`voiceConversations/${id}`)?.state, 'closed');
+  assert.equal(f.calls.length, 1);
+});
+
+test('public cancellation before creation preserves the visitor tombstone without a provider start', async () => {
+  const f = visitorFixture(), id = randomUUID();
+  const server = createVoiceServer(f.options);
+  assert.equal((await server.DELETE(visitorRequest('DELETE', id))).status, 200);
+  assert.equal(f.rows().get(`voiceConversations/${id}`)?.kind, 'visitor');
+  assert.equal(f.rows().get('voiceAdmission/global')?.reservedSeconds, 180);
+  assert.equal((await server.POST(visitorRequest('POST', id))).status, 409);
   assert.equal(f.calls.length, 0);
 });
 

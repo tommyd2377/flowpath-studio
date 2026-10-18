@@ -188,7 +188,11 @@ export function useVoiceSession(waveformId?: string) {
     };
 
     try {
-      const readiness = await fetch(session.endpoint, { cache: 'no-store', signal: session.controller.signal });
+      const readReadiness = () => fetch(session.endpoint, { cache: 'no-store', signal: session.controller.signal });
+      // Let the first public Set-Cookie settle before another tab checks readiness.
+      const readiness = !waveformId && navigator.locks?.request
+        ? await navigator.locks.request('flowpath-public-voice-identity', { signal: session.controller.signal }, readReadiness)
+        : await readReadiness();
       if (!readiness.ok) throw new Error(await errorMessage(readiness));
       const config: unknown = await readiness.json();
       if (!alive()) return;
@@ -306,7 +310,7 @@ export function useVoiceSession(waveformId?: string) {
         if (!alive()) return;
         const remaining = Math.max(0, Math.ceil((session.expiresAt! - Date.now()) / 1000));
         setRemainingSeconds(remaining);
-        if (!remaining) stop('The 15-minute conversation has ended.');
+        if (!remaining) stop('The conversation limit has been reached.');
         else if (session.ready && Date.now() - session.lastActivity >= 45_000) stop('Conversation ended after 45 seconds of silence.');
       };
       session.tick = setInterval(tick, 1_000);

@@ -36,6 +36,9 @@ env:
   - variable: FLOWPATH_LIVE_ENABLED
     value: "1"
     availability: [RUNTIME]
+  - variable: FLOWPATH_PUBLIC_DEMO_ENABLED
+    value: "1"
+    availability: [RUNTIME]
   # Application sign-in itself requires a redeemed invitation.
   - variable: FLOWPATH_VOICE_ACCESS
     value: signed-in

@@ -3,12 +3,14 @@ import test from 'node:test';
 import { ACCOUNT_SESSION_COLLECTION } from '../lib/production-account-session';
 import {
   createProductionVoiceStore, productionVoicePolicy, VoiceAdmissionError,
-  type VoiceDatabase, type VoiceOwner, type VoicePolicy, type VoiceTransaction,
+  voiceReservationSeconds, type VoiceDatabase, type VoiceOwner, type VoicePolicy, type VoiceTransaction,
 } from '../lib/production-voice-store';
 import { VOICE_SESSION_SECONDS } from '../lib/voice-config';
+import { PUBLIC_VOICE_SECONDS, PUBLIC_WAVEFORM_ID } from '../lib/public-voice-identity';
 
 /** Separate store instances share serialized transactions, including rollback on errors. */
 class MemoryVoiceDatabase implements VoiceDatabase {
+  readonly reads: string[] = [];
   private rows = new Map<string, Record<string, unknown>>();
   private pending: Promise<void> = Promise.resolve();
 
@@ -26,7 +28,7 @@ class MemoryVoiceDatabase implements VoiceDatabase {
     const next = new Map(structuredClone([...this.rows]));
     try {
       const result = await work({
-        get: async path => structuredClone(next.get(path) ?? null),
+        get: async path => { this.reads.push(path); return structuredClone(next.get(path) ?? null); },
         set: (path, value) => { next.set(path, structuredClone(value) as Record<string, unknown>); },
       });
       this.rows = next;
@@ -39,11 +41,16 @@ const start = Date.UTC(2026, 9, 18, 12);
 const owner = (id: string): VoiceOwner => ({
   ownerUid: `owner-${id}`, waveformId: `waveform-${id}`, accountSessionId: `account-${id}`,
 });
+const visitor = (hex = 'a'): VoiceOwner => {
+  const accountSessionId = hex.repeat(64);
+  return { kind: 'visitor', ownerUid: `visitor:${accountSessionId}`, accountSessionId, waveformId: PUBLIC_WAVEFORM_ID };
+};
 const accountPath = (value: VoiceOwner) => `${ACCOUNT_SESSION_COLLECTION}/${value.accountSessionId}`;
 const policy: VoicePolicy = {
   ownerDailySeconds: 3_600, globalDailySeconds: 9_000, globalConcurrency: 3,
   access: 'signed-in', allowedUids: [],
 };
+const publicPolicy = { ...policy, publicDemoSeconds: 180 };
 const env = {
   FLOWPATH_LIVE_ENABLED: '1', FLOWPATH_VOICE_OWNER_DAILY_SECONDS: '900',
   FLOWPATH_VOICE_GLOBAL_DAILY_SECONDS: '1800', FLOWPATH_VOICE_GLOBAL_CONCURRENCY: '1',
@@ -418,4 +425,197 @@ test('uncertain cleanup can recover a missing known provider ID but cannot repla
   assert.deepEqual(db.snapshot(), before);
   await store.finish('recover-known-provider', { finalized: true, seconds: 2, providerId: 'live_known_synthetic' });
   assert.equal((await db.transaction(tx => tx.get('voiceConversations/recover-known-provider')))?.state, 'closed');
+});
+
+test('the public demo is an explicit 180-second opt-in and does not change member policy', () => {
+  assert.equal(productionVoicePolicy(env)?.publicDemoSeconds, undefined);
+  assert.equal(productionVoicePolicy({ ...env, FLOWPATH_PUBLIC_DEMO_ENABLED: '0' })?.publicDemoSeconds, undefined);
+  assert.equal(productionVoicePolicy({ ...env, FLOWPATH_PUBLIC_DEMO_ENABLED: 'true' })?.publicDemoSeconds, undefined);
+  assert.equal(productionVoicePolicy({ ...env, FLOWPATH_PUBLIC_DEMO_ENABLED: '1' })?.publicDemoSeconds, PUBLIC_VOICE_SECONDS);
+  assert.equal(PUBLIC_VOICE_SECONDS, 180);
+  assert.equal(voiceReservationSeconds(owner('member'), publicPolicy), 900);
+  assert.equal(voiceReservationSeconds(visitor(), publicPolicy), 180);
+});
+
+test('a valid visitor reserves 180 seconds without account-session reads or invitation membership', async () => {
+  const guest = visitor(), db = database();
+  const store = createProductionVoiceStore(db, () => start);
+  const invitationPolicy: VoicePolicy = { ...publicPolicy, access: 'invite-only', allowedUids: ['unrelated-member'] };
+  await store.available(guest, invitationPolicy);
+  const call = await store.reserve(guest, 'public-demo', invitationPolicy);
+  assert.equal(call.kind, 'visitor');
+  assert.equal(call.expiresAt - call.createdAt, 180_000);
+  assert.equal(await store.mayStart(call.id), true);
+  assert.equal(db.reads.some(path => path.startsWith(`${ACCOUNT_SESSION_COLLECTION}/`)), false);
+  assert.equal(db.snapshot().some(([path]) => path.startsWith(`${ACCOUNT_SESSION_COLLECTION}/`)), false);
+  assert.equal((await db.transaction(tx => tx.get('voiceAdmission/global')))?.reservedSeconds, 180);
+});
+
+test('visitor and member duration reservations share the global budget while retaining separate daily limits', async () => {
+  const guest = visitor(), member = owner('member'), db = database(member);
+  const store = createProductionVoiceStore(db, () => start);
+  const demo = await store.reserve(guest, 'visitor-duration', publicPolicy);
+  const personal = await store.reserve(member, 'member-duration', publicPolicy);
+  assert.equal(demo.expiresAt - demo.createdAt, 180_000);
+  assert.equal(personal.expiresAt - personal.createdAt, 900_000);
+  assert.equal((await db.transaction(tx => tx.get('voiceAdmission/global')))?.reservedSeconds, 1_080);
+  await store.finish(demo.id, { finalized: true, seconds: 1 });
+  await assert.rejects(store.reserve(guest, 'second-visitor-demo', publicPolicy), admissionError(429));
+  await store.finish(personal.id, { finalized: true, seconds: 1 });
+  assert.equal((await store.reserve(member, 'second-member-call', publicPolicy)).expiresAt - start, 900_000);
+});
+
+test('visitor allowance is never refunded for early endings or rejected attempts', async () => {
+  const a = visitor('a'), b = visitor('b'), c = visitor('c'), db = database();
+  const store = createProductionVoiceStore(db, () => start);
+  const bounded = { ...publicPolicy, globalDailySeconds: 360 };
+  await store.reserve(a, 'short-public-call', bounded);
+  await store.finish('short-public-call', { finalized: true, seconds: 1 });
+  await assert.rejects(store.reserve(a, 'public-refund-attempt', bounded), admissionError(429));
+  await store.reserve(b, 'rejected-public-call', bounded);
+  await store.finish('rejected-public-call', { finalized: true, rejected: true });
+  await assert.rejects(store.reserve(b, 'rejected-refund-attempt', bounded), admissionError(429));
+  await assert.rejects(store.reserve(c, 'visitor-global-budget', bounded), admissionError(429));
+  assert.equal((await db.transaction(tx => tx.get('voiceAdmission/global')))?.reservedSeconds, 360);
+});
+
+test('visitor and member admission races obey the same global concurrency guard', async () => {
+  const member = owner('member'), guest = visitor(), db = database(member);
+  const first = createProductionVoiceStore(db, () => start), second = createProductionVoiceStore(db, () => start);
+  const bounded = { ...publicPolicy, globalConcurrency: 1 };
+  const attempts = await Promise.allSettled([
+    first.reserve(guest, 'visitor-concurrent', bounded), second.reserve(member, 'member-concurrent', bounded),
+  ]);
+  assert.equal(attempts.filter(value => value.status === 'fulfilled').length, 1);
+  const failure = attempts.find(value => value.status === 'rejected');
+  assert.ok(failure?.status === 'rejected');
+  admissionError(409, /connections are in use/)(failure.reason);
+  const global = await db.transaction(tx => tx.get('voiceAdmission/global'));
+  assert.equal(Object.keys(global?.active as object).length, 1);
+  assert.ok(global?.reservedSeconds === 180 || global?.reservedSeconds === 900);
+});
+
+test('visitors and members cannot overspend the shared global allowance in either order', async () => {
+  for (const visitorFirst of [true, false]) {
+    const member = owner('member'), guest = visitor(), db = database(member);
+    const store = createProductionVoiceStore(db, () => start);
+    const bounded = { ...publicPolicy, globalDailySeconds: 900 };
+    await store.reserve(visitorFirst ? guest : member, 'first-budget-user', bounded);
+    await store.finish('first-budget-user', { finalized: true, seconds: 1 });
+    await assert.rejects(store.reserve(visitorFirst ? member : guest, 'second-budget-user', bounded), admissionError(429));
+  }
+});
+
+test('missing or malformed public policy and visitor capabilities fail closed', async () => {
+  const db = database(), guest = visitor(), store = createProductionVoiceStore(db, () => start);
+  for (const seconds of [undefined, 0, -1, NaN, Infinity, 1.5, 901]) {
+    await assert.rejects(store.reserve(guest, `disabled-demo-${seconds}`, { ...policy, publicDemoSeconds: seconds }), admissionError(503));
+  }
+  const invalid = [
+    { ...guest, ownerUid: 'visitor:somebody-else' },
+    { ...guest, accountSessionId: 'A'.repeat(64), ownerUid: `visitor:${'A'.repeat(64)}` },
+    { ...guest, accountSessionId: 'a'.repeat(63), ownerUid: `visitor:${'a'.repeat(63)}` },
+    { ...guest, waveformId: 'private-waveform' },
+    { ...guest, kind: 'member' },
+  ];
+  for (const value of invalid) await assert.rejects(store.reserve(value as VoiceOwner, 'invalid-public-capability', publicPolicy), admissionError(403));
+  await assert.rejects(store.reserve({ ...guest, kind: undefined }, 'missing-public-kind', publicPolicy), admissionError(403, /Sign in/));
+  assert.equal(db.snapshot().length, 0);
+});
+
+test('public cancellation isolates visitor capabilities and preserves visitor tombstones', async () => {
+  const a = visitor('a'), b = visitor('b'), db = database(), store = createProductionVoiceStore(db, () => start);
+  await store.reserve(a, 'private-to-visitor-a', publicPolicy);
+  const before = db.snapshot();
+  await assert.rejects(store.cancel(b.ownerUid, b.waveformId, 'private-to-visitor-a', b.accountSessionId, b.kind), admissionError(403));
+  await assert.rejects(store.cancel(a.ownerUid, a.waveformId, 'private-to-visitor-a', b.accountSessionId, 'visitor'), admissionError(403));
+  assert.deepEqual(db.snapshot(), before);
+  const canceled = await store.cancel(b.ownerUid, b.waveformId, 'visitor-tombstone', b.accountSessionId, b.kind, publicPolicy);
+  assert.equal(canceled?.kind, 'visitor');
+  assert.equal(canceled?.ownerUid, b.ownerUid);
+  assert.equal(canceled?.state, 'rejected');
+  await assert.rejects(store.reserve(b, 'visitor-tombstone', publicPolicy), admissionError(409, /already been used/));
+  assert.equal((await db.transaction(tx => tx.get('voiceAdmission/global')))?.reservedSeconds, 360);
+  const ownCanceled = await store.cancel(a.ownerUid, a.waveformId, 'private-to-visitor-a', a.accountSessionId, a.kind);
+  assert.equal(ownCanceled?.canceled, true);
+  assert.equal(await store.mayStart('private-to-visitor-a'), false);
+});
+
+test('unknown public calls keep all admission blocked across restarts and midnight', async () => {
+  const guest = visitor(), member = owner('member'), db = database(member);
+  let now = start;
+  const store = createProductionVoiceStore(db, () => now);
+  await store.reserve(guest, 'unknown-public-call', publicPolicy);
+  await store.finish('unknown-public-call', { finalized: false });
+  now += 86_400_000;
+  const restarted = createProductionVoiceStore(db, () => now);
+  await assert.rejects(restarted.available(visitor('b'), publicPolicy), admissionError(503, /confirmed cleanup/));
+  await assert.rejects(restarted.available(member, publicPolicy), admissionError(503, /confirmed cleanup/));
+  await restarted.finish('unknown-public-call', { finalized: true, seconds: 180 });
+  await restarted.available(guest, publicPolicy);
+});
+
+test('a stored visitor cannot start after its deadline or with corrupted capability metadata', async () => {
+  const guest = visitor(), db = database();
+  let now = start;
+  const store = createProductionVoiceStore(db, () => now);
+  const call = await store.reserve(guest, 'visitor-validity', publicPolicy);
+  assert.equal(await store.mayStart(call.id), true);
+  now = call.expiresAt;
+  assert.equal(await store.mayStart(call.id), false);
+  now = start;
+  await db.transaction(async tx => {
+    const value = await tx.get('voiceConversations/visitor-validity');
+    tx.set('voiceConversations/visitor-validity', { ...value, ownerUid: 'visitor:different-cookie' });
+  });
+  await assert.rejects(store.mayStart(call.id), /Invalid durable voice/);
+  assert.equal(db.reads.some(path => path.startsWith(`${ACCOUNT_SESSION_COLLECTION}/`)), false);
+});
+
+test('unknown visitor cancellation consumes one attempt and cannot create unlimited tombstones', async () => {
+  const guest = visitor(), db = database(), store = createProductionVoiceStore(db, () => start);
+  const canceled = await store.cancel(guest.ownerUid, guest.waveformId, 'first-visitor-precancel', guest.accountSessionId, guest.kind, publicPolicy);
+  assert.equal(canceled?.state, 'rejected');
+  const before = db.snapshot();
+  for (let index = 0; index < 30; index++) {
+    await assert.rejects(store.cancel(guest.ownerUid, guest.waveformId, `other-visitor-precancel-${index}`,
+      guest.accountSessionId, guest.kind, publicPolicy), admissionError(429));
+  }
+  assert.deepEqual(db.snapshot(), before, 'rejected cancellation attempts write nothing');
+  const global = await db.transaction(tx => tx.get('voiceAdmission/global'));
+  assert.equal(global?.reservedSeconds, 180);
+  assert.deepEqual(global?.active, {}, 'a tombstone consumes allowance without occupying an active slot');
+  assert.equal(before.filter(([path]) => path.startsWith('voiceConversations/')).length, 1);
+  assert.equal(db.reads.some(path => path.startsWith(`${ACCOUNT_SESSION_COLLECTION}/`)), false);
+  await assert.rejects(store.reserve(guest, 'first-visitor-precancel', publicPolicy), admissionError(409, /already been used/));
+  await assert.rejects(store.reserve(guest, 'new-visitor-creation', publicPolicy), admissionError(429));
+});
+
+test('unknown cancellations from fresh visitors share the same finite global attempt allowance', async () => {
+  const db = database(), store = createProductionVoiceStore(db, () => start);
+  const bounded = { ...publicPolicy, globalDailySeconds: 360 };
+  for (const [index, hex] of ['a', 'b'].entries()) {
+    const guest = visitor(hex);
+    await store.cancel(guest.ownerUid, guest.waveformId, `global-precancel-${index}`, guest.accountSessionId, guest.kind, bounded);
+  }
+  const before = db.snapshot(), third = visitor('c');
+  await assert.rejects(store.cancel(third.ownerUid, third.waveformId, 'global-precancel-over-budget',
+    third.accountSessionId, third.kind, bounded), admissionError(429));
+  assert.deepEqual(db.snapshot(), before);
+  assert.equal(before.filter(([path]) => path.startsWith('voiceConversations/')).length, 2);
+  assert.equal((await db.transaction(tx => tx.get('voiceAdmission/global')))?.reservedSeconds, 360);
+  assert.equal(db.reads.some(path => path.startsWith(`${ACCOUNT_SESSION_COLLECTION}/`)), false);
+});
+
+test('paused public demos create no unknown cancellation tombstones while known calls remain cancellable', async () => {
+  const guest = visitor(), db = database(), store = createProductionVoiceStore(db, () => start);
+  for (const currentPolicy of [undefined, policy, { ...publicPolicy, publicDemoSeconds: 0 }]) {
+    assert.equal(await store.cancel(guest.ownerUid, guest.waveformId, 'paused-public-cancel', guest.accountSessionId,
+      guest.kind, currentPolicy), null);
+  }
+  assert.deepEqual(db.snapshot(), []);
+  await store.reserve(guest, 'known-public-call', publicPolicy);
+  const known = await store.cancel(guest.ownerUid, guest.waveformId, 'known-public-call', guest.accountSessionId, guest.kind);
+  assert.equal(known?.canceled, true);
+  assert.equal(known?.state, 'creating');
 });

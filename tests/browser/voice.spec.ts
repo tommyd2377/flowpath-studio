@@ -172,6 +172,52 @@ test('loading is quiet and the disabled gate never requests a microphone', async
   await expect(page.locator('main')).toHaveAttribute('data-voice-phase', 'idle');
 });
 
+test('two public tabs settle their first visitor cookie before another readiness request', async ({ page }) => {
+  const second = await page.context().newPage();
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  let gets = 0;
+  let secondUsedCookie = false;
+  const routeReadiness = async (target: Page) => {
+    await fakeMedia(target);
+    await target.route('**/api/session*', async route => {
+      expect(route.request().method()).toBe('GET');
+      const first = ++gets === 1;
+      if (first) await pending;
+      else secondUsedCookie = (route.request().headers().cookie ?? '').includes('synthetic_demo_cookie=stable');
+      await route.fulfill({
+        headers: first ? { 'set-cookie': 'synthetic_demo_cookie=stable; Path=/; HttpOnly; SameSite=Strict' } : {},
+        json: { enabled: false, message: 'Synthetic paused demo.' },
+      });
+    });
+  };
+  try {
+    await routeReadiness(page);
+    await routeReadiness(second);
+    await page.goto('/');
+    await second.goto('/');
+    await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+    await expect.poll(() => gets).toBe(1);
+    await second.getByRole('button', { name: 'Start conversation', exact: true }).click();
+    await expect.poll(() => second.evaluate(async () => (await navigator.locks.query()).pending?.some(lock => lock.name === 'flowpath-public-voice-identity'))).toBe(true);
+    expect(gets).toBe(1);
+    await second.getByRole('button', { name: 'Cancel connection', exact: true }).click();
+    await expect.poll(() => second.evaluate(async () => (await navigator.locks.query()).pending?.some(lock => lock.name === 'flowpath-public-voice-identity'))).toBe(false);
+    expect(gets).toBe(1);
+    await second.getByRole('button', { name: 'Start conversation', exact: true }).click();
+    await expect.poll(() => second.evaluate(async () => (await navigator.locks.query()).pending?.some(lock => lock.name === 'flowpath-public-voice-identity'))).toBe(true);
+    release();
+    await expect.poll(() => gets).toBe(2);
+    await expect(second.getByText('Synthetic paused demo.', { exact: true })).toBeVisible();
+    expect(secondUsedCookie).toBe(true);
+    expect((await tracker(page)).microphoneCalls).toBe(0);
+    expect((await tracker(second)).microphoneCalls).toBe(0);
+  } finally {
+    release();
+    await second.close();
+  }
+});
+
 test('mocked speech animates the waveform and ending releases every resource', async ({ page }) => {
   await fakeMedia(page);
   const calls = await mockSession(page);
@@ -190,6 +236,21 @@ test('mocked speech animates the waveform and ending releases every resource', a
   expect(media.sentEvents.map(value => JSON.parse(value).type)).toEqual(['session.close']);
   expect(calls.map(call => call.method)).toEqual(['GET', 'POST', 'DELETE']);
   expect(calls[1].sessionId).toBe(calls[2].sessionId);
+});
+
+test('the public account link stays available while talking and navigation closes the conversation', async ({ page }) => {
+  await fakeMedia(page);
+  const calls = await mockSession(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'FlowPath News example', exact: true })).toBeVisible();
+  await page.getByRole('link', { name: 'Create your waveform', exact: true }).click();
+  await expect(page).toHaveURL(/\/account$/);
+  await expect(page.getByRole('heading', { name: 'My waveform', exact: true })).toBeVisible();
+  await expect.poll(async () => (await tracker(page)).stoppedTracks).toBe(1);
+  await expect.poll(async () => (await tracker(page)).closedPeers).toBe(1);
+  await expect.poll(() => calls.some(call => call.method === 'DELETE')).toBe(true);
 });
 
 test('denied microphone access reports the problem without creating a session', async ({ page }) => {
@@ -267,7 +328,7 @@ test('the server deadline also ends a conversation with continuing speech', asyn
   await emit(page, { type: 'media.output.active' });
   await page.clock.fastForward(6_000);
   await expect.poll(async () => (await tracker(page)).stoppedTracks).toBe(1);
-  await expect(page.getByText('The 15-minute conversation has ended.', { exact: true })).toBeVisible();
+  await expect(page.getByText('The conversation limit has been reached.', { exact: true })).toBeVisible();
 });
 
 test('the real local readiness route is paused and creates no microphone session', async ({ page }) => {
@@ -289,6 +350,19 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     const logo = (await page.locator('.wordmark img').boundingBox())!;
     expect(Math.abs(initial.y + initial.height / 2 - viewport.height / 2)).toBeLessThan(1);
     await expect(page.locator('.wordmark')).toHaveCSS('opacity', '1');
+    const navigation = page.getByRole('navigation', { name: 'FlowPath navigation', exact: true });
+    const newsLink = navigation.getByRole('link', { name: 'FlowPath News example', exact: true });
+    const accountLink = navigation.getByRole('link', { name: 'Create your waveform', exact: true });
+    await expect(newsLink).toHaveAttribute('href', 'https://flowpathapp.com');
+    await expect(newsLink).not.toHaveAttribute('target', '_blank');
+    await expect(accountLink).toHaveAttribute('href', '/account');
+    const newsBounds = (await newsLink.boundingBox())!;
+    const accountBounds = (await accountLink.boundingBox())!;
+    expect(newsBounds.x + newsBounds.width).toBeLessThan(accountBounds.x);
+    expect(Math.abs(newsBounds.y - accountBounds.y)).toBeLessThan(1);
+    const newsStyle = await newsLink.evaluate(element => ({ color: getComputedStyle(element).color, fontSize: getComputedStyle(element).fontSize }));
+    await expect(accountLink).toHaveCSS('color', newsStyle.color);
+    await expect(accountLink).toHaveCSS('font-size', newsStyle.fontSize);
     await page.screenshot({ path: `test-results/waveform-${viewport.width}-idle.png` });
     await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
     await expect(page.locator('main')).toHaveAttribute('data-voice-phase', 'listening');
@@ -298,6 +372,8 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     }
     await expect(page.locator('.wordmark')).toHaveCSS('opacity', '0');
     await expect(page.locator('.voice-hint')).toHaveCSS('opacity', '0');
+    await expect(newsLink).toBeVisible();
+    await expect(accountLink).toBeVisible();
     await page.screenshot({ path: `test-results/waveform-${viewport.width}-connected.png` });
     const connected = (await wave.boundingBox())!;
     expect(Math.abs(connected.y + connected.height / 2 - (logo.y + logo.height / 2))).toBeLessThan(1);
@@ -313,6 +389,8 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     await page.getByRole('button', { name: 'End conversation', exact: true }).click();
     await expect(page.locator('.wordmark')).toHaveCSS('opacity', '1');
     await expect(page.locator('.voice-hint')).toHaveCSS('opacity', '1');
+    await expect(newsLink).toBeVisible();
+    await expect(accountLink).toBeVisible();
     const returned = (await wave.boundingBox())!;
     expect(Math.abs(returned.y - initial.y)).toBeLessThan(1);
   });
@@ -390,6 +468,14 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     await expect(photo).toHaveAttribute('src', profilePhoto);
     const accent = await page.locator('.voice-experience').evaluate(element => getComputedStyle(element).getPropertyValue('--accent-rgb').replace(/\s/g, ''));
     expect(accent).toBe('64,105,225');
+    const newsLink = page.getByRole('link', { name: 'FlowPath News example', exact: true });
+    const accountLink = page.getByRole('link', { name: 'My waveform', exact: true });
+    await expect(newsLink).toHaveAttribute('href', 'https://flowpathapp.com');
+    const newsColor = await newsLink.evaluate(element => getComputedStyle(element).color);
+    await expect(accountLink).toHaveCSS('color', newsColor);
+    const newsBounds = (await newsLink.boundingBox())!;
+    const accountBounds = (await accountLink.boundingBox())!;
+    expect(newsBounds.x + newsBounds.width).toBeLessThan(accountBounds.x);
     const wave = page.locator('.wave-control');
     const initial = (await wave.boundingBox())!;
     const identity = (await photo.boundingBox())!;
@@ -397,6 +483,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     await page.screenshot({ path: `test-results/private-profile-${viewport.width}-idle.png` });
     await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
     await expect(page.locator('main')).toHaveAttribute('data-voice-phase', 'listening');
+    await expect(page.locator('.voice-navigation')).toBeHidden();
     for (const selector of ['.wordmark', '.voice-hint', '.wave-control']) {
       await expect(page.locator(selector)).toHaveCSS('transition-duration', '0.8s');
       await expect(page.locator(selector)).toHaveCSS('transition-timing-function', 'ease-in-out');
