@@ -40,8 +40,11 @@ export default function Waveform({
     const palette = document.createElement("canvas");
     const paletteContext = palette.getContext("2d");
     if (!paletteContext) return;
-    const colors = accentColor && accentColor.toLowerCase() !== WAVEFORM_DEFAULT_COLOR
-      ? appearancePalette(accentColor).accent : null;
+    const color = (accentColor ?? WAVEFORM_DEFAULT_COLOR).toLowerCase();
+    const theme = appearancePalette(color);
+    // Keep saved amber artwork; the default uses the logo's exact blue.
+    const colors = color === '#ddbf92' ? null
+      : color === WAVEFORM_DEFAULT_COLOR ? theme.chosen : theme.accent;
     const base = colors?.join(", ");
     const highlight = colors?.map(channel => Math.round(channel * 0.35 + 255 * 0.65)).join(", ");
 

@@ -129,7 +129,7 @@ export default function AccountSettings() {
     event.preventDefault();
     if (preparingPhoto) return;
     const color = normalizedColor(accentColor);
-    if (!color) { setError('Enter a six-digit hex color, such as #ddbf92.'); return; }
+    if (!color) { setError(`Enter a six-digit hex color, such as ${WAVEFORM_DEFAULT_COLOR}.`); return; }
     const requestedRevision = accountRevision.current;
     setBusy(true); setError(''); setMessage('');
     try {
@@ -176,7 +176,7 @@ export default function AccountSettings() {
         <input id="waveform-name" value={name} onChange={event => setName(event.target.value)} maxLength={WAVEFORM_NAME_LIMIT} required disabled={busy} autoComplete="off" placeholder="Tom’s assistant" />
         <div className="appearance-colors">
           <div><label htmlFor="waveform-color">Waveform color</label><input id="waveform-color" type="color" value={previewColor} onChange={event => changeColor(event.target.value)} disabled={busy} aria-describedby="color-help" /></div>
-          <div><label htmlFor="waveform-color-hex">Color hex code</label><input id="waveform-color-hex" value={accentColor} onChange={event => changeColor(event.target.value)} pattern="#?[0-9a-fA-F]{6}" maxLength={7} required disabled={busy} autoComplete="off" spellCheck={false} title="Enter a six-digit hex color, such as #ddbf92." aria-describedby="color-help" /></div>
+          <div><label htmlFor="waveform-color-hex">Color hex code</label><input id="waveform-color-hex" value={accentColor} onChange={event => changeColor(event.target.value)} pattern="#?[0-9a-fA-F]{6}" maxLength={7} required disabled={busy} autoComplete="off" spellCheck={false} title={`Enter a six-digit hex color, such as ${WAVEFORM_DEFAULT_COLOR}.`} aria-describedby="color-help" /></div>
         </div>
         <p id="color-help" className="field-help">Choose any color or enter its hex code. It colors your waveform and its page.</p>
         <label htmlFor="profile-photo">Profile photo</label>

@@ -700,9 +700,9 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     await expect(page.getByRole('img', { name: 'FlowPath', exact: true })).toHaveAttribute('src', /flowpath-logo-full/);
     await expect(page.locator('.profile-photo')).toHaveCount(0);
     await expect(page.locator('.voice-experience')).toHaveCSS('background-color', 'rgb(16, 17, 16)');
-    await expect(page.locator('.voice-hint')).toHaveCSS('color', 'rgb(197, 187, 166)');
+    await expect(page.locator('.voice-hint')).toHaveCSS('color', 'rgb(175, 187, 230)');
     const defaultAccent = await page.locator('.voice-experience').evaluate(element => getComputedStyle(element).getPropertyValue('--accent-rgb').replace(/\s/g, ''));
-    expect(defaultAccent).toBe('');
+    expect(defaultAccent).toBe('58,102,255');
   });
 }
 

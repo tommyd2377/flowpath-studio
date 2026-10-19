@@ -20,7 +20,7 @@ export function accentRGB(color: string): RGB {
 /** Keep the chosen hue while lifting very dark colors enough to remain visible. */
 export function appearancePalette(color: string) {
   const chosen = accentRGB(color);
-  const surface: RGB = color.toLowerCase() === WAVEFORM_DEFAULT_COLOR ? [16, 17, 16]
+  const surface: RGB = [WAVEFORM_DEFAULT_COLOR, '#ddbf92'].includes(color.toLowerCase()) ? [16, 17, 16]
     : mix([16, 17, 16], chosen, 0.06);
   let accent = chosen;
   for (let step = 1; contrast(accent, surface) < 4.5 && step <= 20; step++) {
