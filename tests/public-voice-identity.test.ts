@@ -8,6 +8,8 @@ const request = (headers: Record<string, string> = {}, path = '/api/session', me
   method, headers: { host: 'voice.example', ...headers },
 });
 const options = { enabled: true, publicOrigin: origin };
+const pageA = '11111111-1111-4111-8111-111111111111';
+const pageB = '22222222-2222-4222-8222-222222222222';
 
 test('public visitor identity hashes a single cookie and grants no account or private waveform identity', () => {
   const visitor = publicVoiceOwner(request({ cookie }));
@@ -24,6 +26,37 @@ test('public visitor identity hashes a single cookie and grants no account or pr
   for (const changed of [{ kind: undefined }, { ownerUid: 'member' }, { waveformId: 'private-waveform' }, { accountSessionId: 'invalid' }]) {
     assert.equal(isPublicVoiceOwner({ ...visitor, ...changed }), false);
   }
+});
+
+test('a public page keeps its identity through readiness, creation and cleanup while a refresh gets a new one', () => {
+  const legacy = publicVoiceOwner(request({ cookie }));
+  const page = publicVoiceOwner(request({ cookie, 'X-FlowPath-Demo': pageA }));
+  assert.ok(isPublicVoiceOwner(page));
+  for (const method of ['GET', 'POST', 'DELETE']) {
+    assert.deepEqual(publicVoiceOwner(request({ cookie, 'X-FlowPath-Demo': pageA }, '/api/session', method)), page);
+  }
+  assert.notDeepEqual(publicVoiceOwner(request({ cookie, 'X-FlowPath-Demo': pageB })), page);
+  assert.notDeepEqual(page, legacy);
+  assert.deepEqual(publicVoiceOwner(request({ cookie })), legacy, 'clients without the page header retain their original cleanup identity');
+  assert.notDeepEqual(publicVoiceOwner(request({ cookie: `${PUBLIC_VOICE_COOKIE}=${'b'.repeat(64)}`, 'X-FlowPath-Demo': pageA })), page);
+});
+
+test('invalid or combined duplicate page headers fail closed without minting or rotating a cookie', async () => {
+  for (const value of ['', 'not-a-uuid', pageA.replace('-4111-', '-1111-'), `${pageA}, ${pageB}`, `${pageA}, ${pageA}`]) {
+    for (const currentCookie of ['', cookie]) {
+      const req = request({ cookie: currentCookie, 'X-FlowPath-Demo': value });
+      assert.equal(publicVoiceOwner(req), null);
+      const response = await withPublicVoiceVisitor(req, async prepared => {
+        assert.equal(publicVoiceOwner(prepared), null);
+        assert.equal(prepared.headers.get('cookie'), currentCookie);
+        return Response.json({ enabled: false });
+      }, options);
+      assert.equal(response.headers.get('set-cookie'), null);
+    }
+  }
+  const duplicate = request({ cookie, 'X-FlowPath-Demo': pageA });
+  duplicate.headers.append('x-flowpath-demo', pageB);
+  assert.equal(publicVoiceOwner(duplicate), null);
 });
 
 test('public readiness mints a private cookie once and never exposes its value in JSON', async () => {
@@ -43,6 +76,25 @@ test('public readiness mints a private cookie once and never exposes its value i
     return Response.json({ enabled: true });
   }, options);
   assert.equal(next.headers.get('set-cookie'), null);
+});
+
+test('a fresh page changes its allowance identity without changing the shared visitor cookie', async () => {
+  let first: PublicVoiceOwner | null = null;
+  const minted = await withPublicVoiceVisitor(request({ 'X-FlowPath-Demo': pageA }), async prepared => {
+    first = publicVoiceOwner(prepared);
+    return Response.json({ enabled: true });
+  }, options);
+  assert.ok(isPublicVoiceOwner(first));
+  const sharedCookie = minted.headers.get('set-cookie')!.split(';')[0];
+  for (const id of [pageA, pageB]) {
+    const response = await withPublicVoiceVisitor(request({ cookie: sharedCookie, 'X-FlowPath-Demo': id }), async prepared => {
+      assert.equal(prepared.headers.get('cookie'), sharedCookie);
+      if (id === pageA) assert.deepEqual(publicVoiceOwner(prepared), first);
+      else assert.notDeepEqual(publicVoiceOwner(prepared), first);
+      return Response.json({ enabled: true });
+    }, options);
+    assert.equal(response.headers.get('set-cookie'), null);
+  }
 });
 
 test('cookie issuance is limited to enabled, same-origin, public readiness through the configured proxy', async () => {

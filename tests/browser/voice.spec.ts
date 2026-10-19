@@ -130,11 +130,12 @@ async function syntheticProfilePhoto(page: Page) {
 }
 
 async function mockSession(page: Page, options: { enabled?: boolean; delayPost?: Promise<void>; durationMs?: number } = {}) {
-  const calls: { method: string; sessionId?: string; waveformId?: string }[] = [];
+  const calls: { method: string; sessionId?: string; waveformId?: string; demoId?: string }[] = [];
   await page.route('**/api/session*', async route => {
     const method = route.request().method();
     const body = method === 'GET' ? null : route.request().postDataJSON();
-    calls.push({ method, sessionId: body?.sessionId, waveformId: new URL(route.request().url()).searchParams.get('waveformId') ?? undefined });
+    calls.push({ method, sessionId: body?.sessionId, waveformId: new URL(route.request().url()).searchParams.get('waveformId') ?? undefined,
+      demoId: route.request().headers()['x-flowpath-demo'] });
     if (method === 'GET') await route.fulfill({ json: { enabled: options.enabled !== false, message: 'Voice is disabled for this local preview.' } });
     else if (method === 'DELETE') await route.fulfill({ status: 204 });
     else {
@@ -272,6 +273,7 @@ test('startup status follows setup and first audible speech, then resets for the
     await expect(status).toHaveText('Getting ready…');
     await page.getByRole('button', { name: 'End conversation', exact: true }).click();
     await expect.poll(async () => (await tracker(page)).closedPeers).toBe(2);
+    expect(new Set(calls.map(call => call.demoId)).size).toBe(1);
   } finally { release(); }
 });
 
@@ -328,6 +330,7 @@ test('cancelling a pending server creation cleans the reservation and ignores it
   await expect.poll(() => calls.filter(call => call.method === 'DELETE').length).toBe(2);
   await expect(page.locator('main')).toHaveAttribute('data-voice-phase', 'idle');
   expect(calls.filter(call => call.method !== 'GET').every(call => call.sessionId === calls[1].sessionId)).toBe(true);
+  expect(calls.every(call => call.demoId === calls[0].demoId)).toBe(true);
 });
 
 test('a new waveform gesture resumes blocked playback and Escape can end it', async ({ page }) => {
@@ -372,6 +375,34 @@ test('the server deadline also ends a conversation with continuing speech', asyn
   await expect(page.getByText('The conversation limit has been reached.', { exact: true })).toBeVisible();
 });
 
+test('a public page keeps its demo scope through the three-minute limit and refresh starts a fresh scope', async ({ page }) => {
+  await fakeMedia(page);
+  const calls = await mockSession(page, { durationMs: 180_000 });
+  await page.clock.install();
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await emit(page, { type: 'media.output.active' });
+  await page.clock.fastForward(180_001);
+  await expect(page.getByText('The conversation limit has been reached.', { exact: true })).toBeVisible();
+  await expect.poll(() => calls.filter(call => call.method === 'DELETE').length).toBe(1);
+  const firstPageId = calls[0].demoId;
+  expect(firstPageId).toMatch(/^[0-9a-f-]{36}$/);
+  expect(calls.every(call => call.demoId === firstPageId)).toBe(true);
+  const previousCalls = calls.length;
+  // Align the reloaded browser with the host clock that issues fixture deadlines.
+  await page.clock.setSystemTime(new Date());
+  await page.reload();
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  const nextPageId = calls[previousCalls].demoId;
+  expect(nextPageId).toMatch(/^[0-9a-f-]{36}$/);
+  expect(nextPageId).not.toBe(firstPageId);
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  await expect.poll(() => calls.filter(call => call.method === 'DELETE').length).toBe(2);
+  expect(calls.slice(previousCalls).every(call => call.demoId === nextPageId)).toBe(true);
+});
+
 test('the real local readiness route is paused and creates no microphone session', async ({ page }) => {
   await fakeMedia(page);
   await page.goto('/');
@@ -389,6 +420,12 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     const wave = page.locator('.wave-control');
     const initial = (await wave.boundingBox())!;
     const logo = (await page.locator('.wordmark img').boundingBox())!;
+    const studio = page.locator('.wordmark-studio');
+    await expect(studio).toHaveText('Studio');
+    const studioBounds = (await studio.boundingBox())!;
+    expect(Math.abs(studioBounds.x + studioBounds.width / 2 - (logo.x + logo.width / 2))).toBeLessThan(1);
+    expect(studioBounds.y).toBeGreaterThan(logo.y + logo.height * .79);
+    expect(studioBounds.y + studioBounds.height).toBeLessThanOrEqual(logo.y + logo.height);
     expect(Math.abs(initial.y + initial.height / 2 - viewport.height / 2)).toBeLessThan(1);
     await expect(page.locator('.wordmark')).toHaveCSS('opacity', '1');
     const navigation = page.getByRole('navigation', { name: 'FlowPath navigation', exact: true });
@@ -463,6 +500,7 @@ test('a private waveform keeps its scope during cancellation and late session cl
   const calls = await mockSession(page, { delayPost });
   await page.goto(`/w/${waveformId}`);
   await expect(page.locator('.voice-navigation')).toContainText('Private test voice');
+  await expect(page.locator('.wordmark-studio')).toHaveCount(0);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect.poll(() => calls.some(call => call.method === 'POST')).toBe(true);
   await expect(page.locator('.voice-navigation')).toBeHidden();
@@ -471,6 +509,7 @@ test('a private waveform keeps its scope during cancellation and late session cl
   releasePost();
   await expect.poll(() => calls.filter(call => call.method === 'DELETE').length).toBe(2);
   expect(calls.every(call => call.waveformId === waveformId)).toBe(true);
+  expect(calls.every(call => call.demoId === undefined)).toBe(true);
   await expect(page.locator('.voice-navigation')).toBeVisible();
 });
 

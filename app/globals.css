@@ -9,6 +9,7 @@ button { font: inherit; }
 [data-profile-photo="true"] .voice-page { --identity-height: 96px; }
 .wordmark { position: absolute; top: var(--logo-top); left: 0; width: 100%; display: flex; justify-content: center; pointer-events: none; }
 .wordmark img { width: var(--logo-width); height: auto; }
+.wordmark-studio { position: absolute; top: calc(var(--logo-width) * .54); left: 50%; transform: translateX(-50%); font-size: calc(var(--logo-width) * .075); line-height: 1.2; font-weight: 600; letter-spacing: .08em; color: #347dff; background: linear-gradient(90deg, #12bde9, #3278ff 55%, #7546ff); background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
 .wordmark img.profile-photo { width: 96px; height: 96px; object-fit: cover; border-radius: 50%; border: 1px solid var(--accent, #ddbf92); }
 .wave-control { position: absolute; top: 50svh; left: 50%; transform: translate(-50%, -50%); width: min(calc(100% - 48px), 1250px); height: clamp(140px, 22svh, 240px); padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; touch-action: manipulation; }
 .wave-control canvas { display: block; width: 100%; height: 100%; }

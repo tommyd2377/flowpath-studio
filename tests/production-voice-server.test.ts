@@ -80,15 +80,16 @@ function fixture(finalize = true) {
 }
 
 const visitorToken = 'a'.repeat(64);
-function visitorRequest(method: string, id?: string, token = visitorToken, personal = false) {
+function visitorRequest(method: string, id?: string, token = visitorToken, personal = false, page?: string) {
   const req = request(method, id, personal);
   const headers = new Headers(req.headers);
   headers.set('cookie', `${PUBLIC_VOICE_COOKIE}=${token}`);
+  if (page !== undefined) headers.set('X-FlowPath-Demo', page);
   return new Request(req, { headers });
 }
-function visitorFixture() {
+function visitorFixture(overrides: Partial<VoicePolicy> = {}) {
   const f = fixture();
-  let currentPolicy: VoicePolicy = { ...policy, globalDailySeconds: 3_600, publicDemoSeconds: PUBLIC_VOICE_SECONDS };
+  let currentPolicy: VoicePolicy = { ...policy, globalDailySeconds: 3_600, publicDemoSeconds: PUBLIC_VOICE_SECONDS, ...overrides };
   let privateLookups = 0;
   const options = { ...f.options, resolvePublicVisitor: publicVoiceOwner,
     resolveWaveform: async () => { privateLookups++; return null; },
@@ -147,6 +148,63 @@ test('a public visitor receives the welcome prompt and a durable three-minute de
   assert.equal((await server.DELETE(visitorRequest('DELETE', id))).status, 200);
   assert.equal((await server.POST(visitorRequest('POST', randomUUID()))).status, 429, 'one visitor receives one three-minute reservation per day');
   assert.equal(f.calls.length, 1);
+});
+
+test('refreshing the public page grants another three minutes while page and global limits stay enforced', async () => {
+  const f = visitorFixture({ globalDailySeconds: 360, globalConcurrency: 1 });
+  const server = createVoiceServer(f.options);
+  const firstPage = randomUUID(), nextPage = randomUUID(), firstCall = randomUUID(), nextCall = randomUUID();
+  const onPage = (page: string, method: string, id?: string) => visitorRequest(method, id, visitorToken, false, page);
+  assert.equal((await server.POST(onPage(firstPage, 'POST', firstCall))).status, 201);
+  assert.equal(f.scheduled[0].expiresAt - 100_000, 180_000);
+  assert.equal((await server.POST(onPage(nextPage, 'POST', randomUUID()))).status, 409, 'refreshing cannot bypass shared concurrency');
+  assert.equal((await server.DELETE(onPage(nextPage, 'DELETE', firstCall))).status, 403, 'a refreshed page cannot close a different page identity');
+  assert.equal((await server.DELETE(onPage(firstPage, 'DELETE', firstCall))).status, 200);
+  const usedPage = await (await server.GET(onPage(firstPage, 'GET'))).json();
+  assert.equal(usedPage.enabled, false);
+  assert.match(usedPage.message, /This page’s three-minute demo has ended\. Refresh the page to start another\./);
+  assert.equal((await server.POST(onPage(firstPage, 'POST', randomUUID()))).status, 429, 'the same page cannot start another allowance');
+  const nextInstance = createVoiceServer(f.options);
+  assert.equal((await (await nextInstance.GET(onPage(nextPage, 'GET'))).json()).enabled, true);
+  assert.equal((await nextInstance.POST(onPage(nextPage, 'POST', nextCall))).status, 201);
+  assert.equal((await nextInstance.DELETE(onPage(nextPage, 'DELETE', nextCall))).status, 200);
+  for (const page of [firstPage, randomUUID()]) {
+    const exhaustedGlobal = await (await nextInstance.GET(onPage(page, 'GET'))).json();
+    assert.equal(exhaustedGlobal.enabled, false);
+    assert.equal(exhaustedGlobal.message, 'The daily voice allowance has been reached.');
+  }
+  const before = structuredClone(f.rows());
+  assert.equal((await server.POST(onPage(randomUUID(), 'POST', randomUUID()))).status, 429, 'fresh pages still consume the original finite global budget');
+  assert.equal(f.rows().get('voiceAdmission/global')?.reservedSeconds, 360);
+  assert.deepEqual(f.rows(), before);
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.reads.some(path => path.startsWith('ownerSessions/')), false);
+});
+
+test('legacy no-header public calls retain cleanup authority without granting it to a new page', async () => {
+  const f = visitorFixture(), legacyId = randomUUID(), page = randomUUID(), pageId = randomUUID();
+  const server = createVoiceServer(f.options);
+  assert.equal((await server.POST(visitorRequest('POST', legacyId))).status, 201);
+  assert.equal((await server.DELETE(visitorRequest('DELETE', legacyId, visitorToken, false, page))).status, 403);
+  assert.equal((await server.DELETE(visitorRequest('DELETE', legacyId))).status, 200);
+  assert.equal((await server.POST(visitorRequest('POST', pageId, visitorToken, false, page))).status, 201);
+  assert.equal((await server.DELETE(visitorRequest('DELETE', pageId))).status, 403);
+  assert.equal((await server.DELETE(visitorRequest('DELETE', pageId, visitorToken, false, page))).status, 200);
+  assert.equal(f.calls.length, 2);
+});
+
+test('invalid public page headers cannot admit, cancel or read a provider key', async () => {
+  const f = visitorFixture();
+  const server = createVoiceServer({ ...f.options, apiKey: () => { throw new Error('Invalid page must not read a key'); } });
+  for (const page of ['', 'not-a-uuid', `${randomUUID()}, ${randomUUID()}`]) {
+    const ready = await (await server.GET(visitorRequest('GET', undefined, visitorToken, false, page))).json();
+    assert.equal(ready.enabled, false);
+    assert.equal((await server.POST(visitorRequest('POST', randomUUID(), visitorToken, false, page))).status, 403);
+    assert.equal((await server.DELETE(visitorRequest('DELETE', randomUUID(), visitorToken, false, page))).status, 403);
+  }
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.scheduled.length, 0);
+  assert.equal(f.reads.length, 0);
 });
 
 test('public visitors cannot use a private waveform or cancel another visitor or member conversation', async () => {

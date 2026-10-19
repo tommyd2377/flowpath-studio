@@ -94,9 +94,13 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
     if (Object.values(active(global)).includes('uncertain')) throw new VoiceAdmissionError('A previous voice connection needs confirmed cleanup.', 503);
     if (own.active) throw new VoiceAdmissionError('Your previous conversation must close before starting another.');
     if (Object.keys(active(global)).length >= policy.globalConcurrency) throw new VoiceAdmissionError('All available voice connections are in use.');
-    if (reserved(own, now()) + seconds > (visitor ? seconds : policy.ownerDailySeconds)
-      || reserved(global, now()) + seconds > policy.globalDailySeconds) {
+    if (reserved(global, now()) + seconds > policy.globalDailySeconds) {
       throw new VoiceAdmissionError('The daily voice allowance has been reached.', 429);
+    }
+    if (reserved(own, now()) + seconds > (visitor ? seconds : policy.ownerDailySeconds)) {
+      throw new VoiceAdmissionError(visitor
+        ? 'This page’s three-minute demo has ended. Refresh the page to start another.'
+        : 'The daily voice allowance has been reached.', 429);
     }
   }
   async function admission(tx: VoiceTransaction, owner: VoiceOwner, policy: VoicePolicy) {

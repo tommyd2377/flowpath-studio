@@ -9,15 +9,24 @@ export type PublicVoiceOwner = {
 };
 const validToken = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 const cookieName = (value: string) => value.slice(0, value.includes('=') ? value.indexOf('=') : value.length).trim();
+function publicDemoId(request: Request): string | null | undefined {
+  const value = request.headers.get('X-FlowPath-Demo');
+  if (value === null) return undefined;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+    ? value.toLowerCase() : null;
+}
 
-/** A browser identifier for public usage limits; it grants no account access. */
+/** A page-scoped browser identifier for public limits; it grants no account access. */
 export function publicVoiceOwner(request: Request): PublicVoiceOwner | null {
+  const demoId = publicDemoId(request);
+  if (demoId === null) return null;
   const cookies = (request.headers.get('cookie') ?? '').split(';').map(value => value.trim());
   const matching = cookies.filter(value => cookieName(value) === PUBLIC_VOICE_COOKIE);
   if (matching.length !== 1) return null;
   const token = matching[0].slice(matching[0].indexOf('=') + 1);
   if (!validToken(token)) return null;
-  const accountSessionId = createHash('sha256').update(token).digest('hex');
+  // Missing page IDs retain the old identity so already-open clients can close safely.
+  const accountSessionId = createHash('sha256').update(demoId ? `${token}:${demoId}` : token).digest('hex');
   return { kind: 'visitor', ownerUid: `visitor:${accountSessionId}`, waveformId: PUBLIC_WAVEFORM_ID, accountSessionId };
 }
 
@@ -34,7 +43,8 @@ export async function withPublicVoiceVisitor(request: Request, handler: (request
 }): Promise<Response> {
   const url = new URL(request.url);
   if (!options.enabled || !options.publicOrigin || request.method !== 'GET' || url.pathname !== '/api/session' || url.search
-    || !isAllowedRequest(request, false, options.publicOrigin, options.trustedProxyHost) || publicVoiceOwner(request)) {
+    || !isAllowedRequest(request, false, options.publicOrigin, options.trustedProxyHost)
+    || publicDemoId(request) === null || publicVoiceOwner(request)) {
     return handler(request);
   }
   const token = randomBytes(32).toString('hex');

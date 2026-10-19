@@ -7,6 +7,7 @@ import { monitorAudio, waitForIce } from './voice-session';
 type VoiceSession = {
   id: string;
   endpoint: string;
+  headers: Record<string, string>;
   controller: AbortController;
   requested: boolean;
   ready: boolean;
@@ -32,11 +33,11 @@ type VoiceSession = {
   released?: boolean;
 };
 
-async function deleteSession(id: string, endpoint: string) {
+async function deleteSession(id: string, endpoint: string, requestHeaders: Record<string, string>) {
   try {
     const response = await fetch(endpoint, {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...requestHeaders, 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: id }),
       keepalive: true,
       signal: AbortSignal.timeout(20_000),
@@ -65,7 +66,7 @@ function releaseMedia(session: VoiceSession) {
 function dispose(session: VoiceSession, leaving = false): Promise<boolean> {
   if (session.closePromise) {
     if (leaving) {
-      if (session.requested) void deleteSession(session.id, session.endpoint);
+      if (session.requested) void deleteSession(session.id, session.endpoint, session.headers);
       releaseMedia(session);
     }
     return session.closePromise;
@@ -83,7 +84,7 @@ function dispose(session: VoiceSession, leaving = false): Promise<boolean> {
     if (session.ready && session.channel?.readyState === 'open') {
       try { session.channel.send(JSON.stringify({ type: 'session.close' })); } catch { /* Server closes below. */ }
     }
-    session.closePromise = session.requested ? deleteSession(session.id, session.endpoint) : Promise.resolve(true);
+    session.closePromise = session.requested ? deleteSession(session.id, session.endpoint, session.headers) : Promise.resolve(true);
     releaseMedia(session);
     return session.closePromise;
   }
@@ -98,7 +99,7 @@ function dispose(session: VoiceSession, leaving = false): Promise<boolean> {
         catch { clearTimeout(timer); resolve(false); }
       });
     }
-    const serverClosed = session.requested ? await deleteSession(session.id, session.endpoint) : true;
+    const serverClosed = session.requested ? await deleteSession(session.id, session.endpoint, session.headers) : true;
     return finalized || serverClosed;
   })().finally(() => releaseMedia(session));
   return session.closePromise;
@@ -117,6 +118,7 @@ export function useVoiceSession(waveformId?: string) {
   const closingSession = useRef<VoiceSession | null>(null);
   const mounted = useRef(true);
   const revision = useRef(0);
+  const publicDemoId = useRef<string | null>(null);
 
   const stop = useCallback((notice = '') => {
     const session = current.current;
@@ -168,8 +170,10 @@ export function useVoiceSession(waveformId?: string) {
       return;
     }
 
+    if (!waveformId) publicDemoId.current ??= crypto.randomUUID();
     const session: VoiceSession = {
       id: crypto.randomUUID(), endpoint: waveformId ? `/api/session?waveformId=${encodeURIComponent(waveformId)}` : '/api/session',
+      headers: waveformId ? {} : { 'X-FlowPath-Demo': publicDemoId.current! },
       controller: new AbortController(), requested: false,
       ready: false, started: false, answerApplied: false, finalized: false,
       needsAudioResume: false, lastActivity: Date.now(),
@@ -190,7 +194,7 @@ export function useVoiceSession(waveformId?: string) {
     };
 
     try {
-      const readReadiness = () => fetch(session.endpoint, { cache: 'no-store', signal: session.controller.signal });
+      const readReadiness = () => fetch(session.endpoint, { headers: session.headers, cache: 'no-store', signal: session.controller.signal });
       // Let the first public Set-Cookie settle before another tab checks readiness.
       const readiness = !waveformId && navigator.locks?.request
         ? await navigator.locks.request('flowpath-public-voice-identity', { signal: session.controller.signal }, readReadiness)
@@ -296,12 +300,12 @@ export function useVoiceSession(waveformId?: string) {
       // A stop cancels the server reservation by ID. Let the POST complete so
       // even a late provider creation can be closed, without losing its answer.
       const response = await fetch(session.endpoint, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { ...session.headers, 'Content-Type': 'application/json' },
         body: JSON.stringify({ sdp, sessionId: session.id }), signal: AbortSignal.timeout(30_000),
       });
       if (!response.ok) throw new Error(await errorMessage(response));
       const result: unknown = await response.json();
-      if (!alive()) { void deleteSession(session.id, session.endpoint); return; }
+      if (!alive()) { void deleteSession(session.id, session.endpoint, session.headers); return; }
       if (!result || typeof result !== 'object' || !('sdp' in result) || typeof result.sdp !== 'string'
         || !('sessionId' in result) || result.sessionId !== session.id || !('expiresAt' in result)
         || typeof result.expiresAt !== 'number' || !Number.isFinite(result.expiresAt)) {

@@ -47,6 +47,7 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
           // eslint-disable-next-line @next/next/no-img-element
           ? <img className="profile-photo" src={profilePhoto} alt={`${name ?? 'Waveform'} profile photo`} width={96} height={96} />
           : <Image src="/brand/flowpath-logo-full.png" alt="FlowPath" width={1536} height={1024} priority />}
+        {!waveformId && <span className="wordmark-studio">Studio</span>}
       </header>
       <button className="wave-control" type="button" aria-label={label} aria-pressed={voice.active}
         aria-describedby={showStatus && status ? 'voice-status' : !connected ? 'voice-hint' : undefined}
