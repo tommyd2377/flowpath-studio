@@ -9,7 +9,7 @@ button { font: inherit; }
 [data-profile-photo="true"] .voice-page { --identity-height: 96px; }
 .wordmark { position: absolute; top: var(--logo-top); left: 0; width: 100%; display: flex; justify-content: center; pointer-events: none; }
 .wordmark img { width: var(--logo-width); height: auto; }
-.wordmark-studio { position: absolute; top: calc(var(--logo-width) * .54); left: 50%; transform: translateX(-50%); font-size: calc(var(--logo-width) * .075); line-height: 1.2; font-weight: 600; letter-spacing: .08em; color: #347dff; background: linear-gradient(90deg, #12bde9, #3278ff 55%, #7546ff); background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.wordmark-studio { position: absolute; top: calc(var(--logo-width) * .54 + 5px); left: 50%; transform: translateX(-50%); font-size: calc(var(--logo-width) * .075); line-height: 1.2; font-weight: 600; letter-spacing: .08em; color: #347dff; background: linear-gradient(90deg, #12bde9, #3278ff 55%, #7546ff); background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
 .wordmark img.profile-photo { width: 96px; height: 96px; object-fit: cover; border-radius: 50%; border: 1px solid var(--accent, #ddbf92); }
 .wave-control { position: absolute; top: 50svh; left: 50%; transform: translate(-50%, -50%); width: min(calc(100% - 48px), 1250px); height: clamp(140px, 22svh, 240px); padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; touch-action: manipulation; }
 .wave-control canvas { display: block; width: 100%; height: 100%; }
@@ -38,6 +38,16 @@ button { font: inherit; }
 .voice-navigation span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .voice-navigation a, .account-back { color: var(--accent, #c5bba6); text-decoration-color: var(--border, #c5bba655); text-underline-offset: 4px; }
 .voice-navigation a { flex-shrink: 0; white-space: nowrap; }
+.voice-diagnostics { position: fixed; z-index: 2; bottom: 16px; right: 16px; width: min(540px, calc(100% - 32px)); max-height: 44svh; overflow-y: auto; padding: 16px; border: 1px solid var(--border, #5f594e); border-radius: 8px; background: var(--surface, #101110); font-size: 12px; line-height: 1.6; box-shadow: 0 4px 24px #0006; }
+.voice-diagnostics summary { cursor: pointer; color: var(--accent, #c5bba6); }
+.voice-diagnostics p { margin: 10px 0; color: var(--muted, #c5bba6); }
+.diagnostics-consent { display: flex; align-items: center; gap: 8px; }
+.diagnostics-consent input { accent-color: var(--accent, #ddbf92); }
+.diagnostics-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.diagnostics-actions button { padding: 6px 10px; font-size: 12px; }
+.voice-diagnostics button:disabled { opacity: .5; cursor: default; }
+.voice-diagnostics :focus-visible { outline: 2px solid var(--accent, #c5b69a); outline-offset: 3px; }
+.voice-diagnostics textarea { display: block; width: 100%; min-height: 180px; margin-top: 8px; padding: 8px; resize: vertical; border: 1px solid var(--border, #5f594e); border-radius: 4px; background: transparent; color: inherit; font-size: 12px; line-height: 1.5; }
 .account-page { width: min(100%, 608px); min-height: 100svh; margin: 0 auto; padding: 40px 24px 80px; line-height: 1.65; color: var(--text, #e7dfcd); background: var(--surface, #101110); box-shadow: 0 0 0 100vmax var(--surface, #101110); clip-path: inset(0 -100vmax); }
 .account-back { font-size: 13px; }
 .account-page h1 { margin: 48px 0 6px; font-size: clamp(27px, 5vw, 34px); line-height: 1.25; font-weight: 500; }

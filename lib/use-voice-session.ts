@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { VoicePhase } from '@/components/Waveform';
 import { monitorAudio, waitForIce } from './voice-session';
+import { createVoiceDiagnostics, type VoiceDiagnosticFinishReason } from './voice-diagnostics';
 
 type VoiceSession = {
   id: string;
@@ -31,6 +32,7 @@ type VoiceSession = {
   closePromise?: Promise<boolean>;
   acknowledgeClose?: () => void;
   released?: boolean;
+  diagnostic?: ReturnType<typeof createVoiceDiagnostics>;
 };
 
 async function deleteSession(id: string, endpoint: string, requestHeaders: Record<string, string>) {
@@ -113,6 +115,10 @@ export function useVoiceSession(waveformId?: string) {
   const [inputAnalyser, setInputAnalyser] = useState<AnalyserNode | null>(null);
   const [outputAnalyser, setOutputAnalyser] = useState<AnalyserNode | null>(null);
   const [needsAudioResume, setNeedsAudioResume] = useState(false);
+  const [hasDiagnostic, setHasDiagnostic] = useState(false);
+  const [diagnosticRecording, setDiagnosticRecording] = useState(false);
+  const [diagnosticVersion, setDiagnosticVersion] = useState(0);
+  const diagnostic = useRef<ReturnType<typeof createVoiceDiagnostics> | null>(null);
   const current = useRef<VoiceSession | null>(null);
   const closing = useRef<Promise<boolean> | null>(null);
   const closingSession = useRef<VoiceSession | null>(null);
@@ -120,11 +126,12 @@ export function useVoiceSession(waveformId?: string) {
   const revision = useRef(0);
   const publicDemoId = useRef<string | null>(null);
 
-  const stop = useCallback((notice = '') => {
+  const stop = useCallback((notice = '', reason: VoiceDiagnosticFinishReason = 'user_stop') => {
     const session = current.current;
     if (!session) return;
     current.current = null;
     const stoppedRevision = ++revision.current;
+    session.diagnostic?.lifecycle('stopping');
     const promise = dispose(session);
     closing.current = promise;
     closingSession.current = session;
@@ -138,8 +145,11 @@ export function useVoiceSession(waveformId?: string) {
       setOutputAnalyser(null);
     }
     void promise.then(closed => {
+      session.diagnostic?.lifecycle('ended');
+      session.diagnostic?.finish(reason);
       if (closing.current === promise) { closing.current = null; closingSession.current = null; }
       if (!mounted.current || revision.current !== stoppedRevision) return;
+      setDiagnosticRecording(false);
       if (closed) setStatus(notice);
       else {
         setPhase('error');
@@ -150,11 +160,12 @@ export function useVoiceSession(waveformId?: string) {
 
   const fail = useCallback((session: VoiceSession, notice: string) => {
     if (current.current !== session) return;
-    stop(notice);
+    session.diagnostic?.lifecycle('error');
+    stop(notice, 'connection_error');
     if (mounted.current) { setPhase('error'); setStatus(notice); }
   }, [stop]);
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (recordDiagnostics = false) => {
     if (closing.current) return;
     const existing = current.current;
     if (existing) {
@@ -170,6 +181,12 @@ export function useVoiceSession(waveformId?: string) {
       return;
     }
 
+    // Consent is for this conversation only; a new attempt replaces any previous local report.
+    diagnostic.current?.clear();
+    diagnostic.current = recordDiagnostics ? createVoiceDiagnostics({ surface: waveformId ? 'personal' : 'public' }) : null;
+    setHasDiagnostic(Boolean(diagnostic.current));
+    setDiagnosticRecording(Boolean(diagnostic.current));
+    setDiagnosticVersion(value => value + 1);
     if (!waveformId) publicDemoId.current ??= crypto.randomUUID();
     const session: VoiceSession = {
       id: crypto.randomUUID(), endpoint: waveformId ? `/api/session?waveformId=${encodeURIComponent(waveformId)}` : '/api/session',
@@ -177,7 +194,9 @@ export function useVoiceSession(waveformId?: string) {
       controller: new AbortController(), requested: false,
       ready: false, started: false, answerApplied: false, finalized: false,
       needsAudioResume: false, lastActivity: Date.now(),
+      diagnostic: diagnostic.current ?? undefined,
     };
+    session.diagnostic?.lifecycle('connecting');
     current.current = session;
     revision.current++;
     setActive(true);
@@ -187,6 +206,7 @@ export function useVoiceSession(waveformId?: string) {
     const becomeReady = () => {
       if (!alive() || session.ready || !session.started || !session.answerApplied) return;
       session.ready = true;
+      session.diagnostic?.lifecycle('connected');
       session.lastActivity = Date.now();
       clearTimeout(session.setupTimer);
       setPhase('listening');
@@ -205,7 +225,7 @@ export function useVoiceSession(waveformId?: string) {
       if (!config || typeof config !== 'object' || !('enabled' in config) || config.enabled !== true) {
         const message = config && typeof config === 'object' && 'message' in config && typeof config.message === 'string'
           ? config.message : 'Voice is disabled for this local preview.';
-        stop(message);
+        stop(message, 'connection_error');
         return;
       }
       if (!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection || !window.AudioContext) {
@@ -264,11 +284,12 @@ export function useVoiceSession(waveformId?: string) {
         if (typeof data !== 'string' || data.length > 65_536) return;
         let event: unknown;
         try { event = JSON.parse(data); } catch { return; }
+        session.diagnostic?.providerEvent(event);
         if (!event || typeof event !== 'object' || !('type' in event)) return;
         if (event.type === 'session.closed') {
           session.finalized = true;
           session.acknowledgeClose?.();
-          if (alive()) stop('Conversation ended.');
+          if (alive()) stop('Conversation ended.', 'session_closed');
         } else if (alive() && event.type === 'session.started') {
           session.started = true;
           becomeReady();
@@ -280,8 +301,14 @@ export function useVoiceSession(waveformId?: string) {
         if (alive() && !session.finalized) fail(session, 'The conversation disconnected. Tap the wave to reconnect.');
       };
       stream.getAudioTracks().forEach(track => peer.addTrack(track, stream));
+      let observedInput = false, observedOutput = false;
       session.stopMonitor = monitorAudio(input, () => session.output, (inputActive, outputActive) => {
         if (!alive() || !session.ready) return;
+        const audibleOutput = outputActive && !session.needsAudioResume;
+        if (inputActive !== observedInput) session.diagnostic?.lifecycle(inputActive ? 'input_started' : 'input_quiet');
+        if (audibleOutput !== observedOutput) session.diagnostic?.lifecycle(audibleOutput ? 'playback_started' : 'playback_quiet');
+        observedInput = inputActive;
+        observedOutput = audibleOutput;
         if (inputActive || outputActive) session.lastActivity = Date.now();
         if (outputActive && !session.needsAudioResume && !session.heardOutput) {
           session.heardOutput = true;
@@ -301,7 +328,7 @@ export function useVoiceSession(waveformId?: string) {
       // even a late provider creation can be closed, without losing its answer.
       const response = await fetch(session.endpoint, {
         method: 'POST', headers: { ...session.headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sdp, sessionId: session.id }), signal: AbortSignal.timeout(30_000),
+        body: JSON.stringify({ sdp, sessionId: session.id, ...(recordDiagnostics ? { diagnostics: true } : {}) }), signal: AbortSignal.timeout(30_000),
       });
       if (!response.ok) throw new Error(await errorMessage(response));
       const result: unknown = await response.json();
@@ -320,8 +347,8 @@ export function useVoiceSession(waveformId?: string) {
         if (!alive()) return;
         const remaining = Math.max(0, Math.ceil((session.expiresAt! - Date.now()) / 1000));
         setRemainingSeconds(remaining);
-        if (!remaining) stop('The conversation limit has been reached.');
-        else if (session.ready && Date.now() - session.lastActivity >= 45_000) stop('Conversation ended after 45 seconds of silence.');
+        if (!remaining) stop('The conversation limit has been reached.', 'limit');
+        else if (session.ready && Date.now() - session.lastActivity >= 45_000) stop('Conversation ended after 45 seconds of silence.', 'idle');
       };
       session.tick = setInterval(tick, 1_000);
       tick();
@@ -340,7 +367,12 @@ export function useVoiceSession(waveformId?: string) {
       const session = current.current ?? closingSession.current;
       current.current = null;
       revision.current++;
-      if (session) void dispose(session, true);
+      if (session) {
+        session.diagnostic?.finish('page_left');
+        void dispose(session, true);
+      }
+      diagnostic.current?.clear();
+      diagnostic.current = null;
       if (mounted.current) {
         setActive(false);
         setNeedsAudioResume(false);
@@ -349,6 +381,8 @@ export function useVoiceSession(waveformId?: string) {
         setRemainingSeconds(null);
         setInputAnalyser(null);
         setOutputAnalyser(null);
+        setHasDiagnostic(false);
+        setDiagnosticRecording(false);
       }
     };
     window.addEventListener('pagehide', leave);
@@ -359,5 +393,20 @@ export function useVoiceSession(waveformId?: string) {
     };
   }, []);
 
-  return { phase, active, status, remainingSeconds, inputAnalyser, outputAnalyser, needsAudioResume, start, stop };
+  const getDiagnostic = useCallback(() => diagnostic.current?.snapshot() ?? null, []);
+  const markDiagnostic = useCallback(() => diagnostic.current?.mark() ?? false, []);
+  const stopDiagnostic = useCallback(() => {
+    diagnostic.current?.finish('capture_stopped');
+    setDiagnosticRecording(false);
+  }, []);
+  const clearDiagnostic = useCallback(() => {
+    diagnostic.current?.clear();
+    diagnostic.current = null;
+    setHasDiagnostic(false);
+    setDiagnosticRecording(false);
+    setDiagnosticVersion(value => value + 1);
+  }, []);
+
+  return { phase, active, status, remainingSeconds, inputAnalyser, outputAnalyser, needsAudioResume, start, stop,
+    hasDiagnostic, diagnosticRecording, diagnosticVersion, getDiagnostic, markDiagnostic, stopDiagnostic, clearDiagnostic };
 }

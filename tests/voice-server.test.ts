@@ -64,6 +64,20 @@ function privateRequest(method: string, waveformId: string, body?: object, owner
   });
 }
 
+test('only a valid diagnostic boolean enables browser transcript events without changing session authority', async () => {
+  const { server, calls } = harness();
+  for (const diagnostics of ['true', null, {}, 1]) {
+    assert.equal((await server.POST(request('POST', { sessionId: randomUUID(), sdp, diagnostics }))).status, 400);
+  }
+  assert.equal(calls.length, 0);
+  for (const diagnostics of [false, true]) {
+    const sessionId = randomUUID();
+    assert.equal((await server.POST(request('POST', { sessionId, sdp, diagnostics }))).status, 201);
+    assert.deepEqual(JSON.parse(String(calls.at(-1)!.options.body)).session, voiceSessionConfig(undefined, diagnostics));
+    assert.equal((await server.DELETE(request('DELETE', { sessionId }))).status, 200);
+  }
+});
+
 test('private voice admission verifies ownership before reading a key or creating a provider session', async () => {
   const waveformId = randomUUID();
   const server = createVoiceServer({

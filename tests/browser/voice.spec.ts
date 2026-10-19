@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 
 type MediaTracker = {
   microphoneCalls: number;
@@ -75,7 +76,7 @@ async function fakeMedia(page: Page, options: { microphone?: 'denied' | 'pending
         close: () => { this.channel.readyState = 'closed'; this.channel.onclose?.(); },
         send: (value: string) => {
           tracker.sentEvents.push(value);
-          if (JSON.parse(value).type === 'session.close') queueMicrotask(() => this.frame({ type: 'session.closed' }));
+          if (JSON.parse(value).type === 'session.close') queueMicrotask(() => this.frame({ type: 'session.closed', reason: 'close_requested', usage: { seconds: 4 } }));
         },
       };
       constructor() {
@@ -130,12 +131,12 @@ async function syntheticProfilePhoto(page: Page) {
 }
 
 async function mockSession(page: Page, options: { enabled?: boolean; delayPost?: Promise<void>; durationMs?: number } = {}) {
-  const calls: { method: string; sessionId?: string; waveformId?: string; demoId?: string }[] = [];
+  const calls: { method: string; sessionId?: string; waveformId?: string; demoId?: string; diagnostics?: boolean }[] = [];
   await page.route('**/api/session*', async route => {
     const method = route.request().method();
     const body = method === 'GET' ? null : route.request().postDataJSON();
     calls.push({ method, sessionId: body?.sessionId, waveformId: new URL(route.request().url()).searchParams.get('waveformId') ?? undefined,
-      demoId: route.request().headers()['x-flowpath-demo'] });
+      demoId: route.request().headers()['x-flowpath-demo'], diagnostics: body?.diagnostics });
     if (method === 'GET') await route.fulfill({ json: { enabled: options.enabled !== false, message: 'Voice is disabled for this local preview.' } });
     else if (method === 'DELETE') await route.fulfill({ status: 204 });
     else {
@@ -159,6 +160,102 @@ test.beforeEach(async ({ page }) => {
 
 test.afterEach(async ({ page }) => {
   expect(browserErrors.get(page)).toEqual([]);
+});
+
+test('diagnostics stay off for ordinary sessions and opening the panel is not consent', async ({ page }) => {
+  await fakeMedia(page);
+  const calls = await mockSession(page);
+  await page.goto('/');
+  await expect(page.getByText('Conversation diagnostics', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  expect(calls.find(call => call.method === 'POST')?.diagnostics).toBeUndefined();
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  await expect(page.locator('#voice-status')).toHaveText('');
+  await page.goto('/?diagnostics=1');
+  await expect(page.getByRole('checkbox', { name: 'Record my next conversation locally' })).not.toBeChecked();
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  expect(calls.filter(call => call.method === 'POST').every(call => call.diagnostics === undefined)).toBe(true);
+  await expect(page.getByRole('button', { name: 'Save log', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+});
+
+test('one opted-in conversation can be marked, reviewed and saved with safe observable metadata', async ({ page }) => {
+  await fakeMedia(page);
+  const calls = await mockSession(page);
+  await page.goto('/?diagnostics=1');
+  await page.getByRole('checkbox', { name: 'Record my next conversation locally' }).check();
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  expect(calls.find(call => call.method === 'POST')?.diagnostics).toBe(true);
+  await expect(page.getByRole('checkbox')).not.toBeChecked();
+  await expect(page.getByRole('checkbox')).toBeDisabled();
+  await emit(page, { type: 'session.input_transcript.delta', delta: 'Can we discuss history?', start_ms: 100, end_ms: 400, event_id: 'private-event', audio: 'private-audio' });
+  await emit(page, { type: 'session.delegation.created', offset_ms: 300, delegation: { id: 'private-delegation', type: 'delegation', target: 'client' } });
+  await emit(page, { type: 'session.output_transcript.delta', delta: 'That capability is unavailable.', start_ms: 300, end_ms: 500, session: { instructions: 'private-prompt' } });
+  await emit(page, { type: 'session.usage.updated', usage: { seconds: 2 } });
+  await emit(page, { type: 'session.usage.updated', usage: { seconds: 3 } });
+  await emit(page, { type: 'media.output.active' });
+  await expect(page.locator('main')).toHaveAttribute('data-voice-phase', 'speaking');
+  await page.getByRole('button', { name: 'Mark problem', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'Captured exchange' })).toHaveValue(/PROBLEM MARKED/);
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  await expect(page.locator('#voice-status')).toHaveText('');
+  await expect(page.getByRole('button', { name: 'Mark problem', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Review log', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'Captured exchange' })).toHaveValue(/You \(transcribed\): Can we discuss history\?/);
+  await expect(page.getByRole('textbox', { name: 'Captured exchange' })).toHaveValue(/Observed handoff request to client/);
+  await expect(page.getByRole('textbox', { name: 'Captured exchange' })).toHaveValue(/Provider closure confirmed/);
+  const downloadEvent = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Save log', exact: true }).click();
+  const download = await downloadEvent;
+  const saved = await readFile((await download.path())!, 'utf8');
+  const report = JSON.parse(saved);
+  expect(report.recording).toBe(false);
+  expect(report.events.filter((event: { type: string }) => event.type === 'usage').map((event: { seconds: number }) => event.seconds)).toEqual([2, 3]);
+  expect(report.events.some((event: { name?: string }) => event.name === 'playback_started')).toBe(true);
+  expect(saved).not.toMatch(/private-|sessionId|sdp|instructions|cookie/);
+  expect(calls.map(call => call.method)).toEqual(['GET', 'POST', 'DELETE']);
+  const media = await tracker(page);
+  expect(media.stoppedTracks).toBe(1);
+  expect(media.closedPeers).toBe(1);
+  expect(media.closedContexts).toBe(1);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  expect(calls.filter(call => call.method === 'POST').at(-1)?.diagnostics).toBeUndefined();
+  await expect(page.getByRole('textbox', { name: 'Captured exchange' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Save log', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  await expect(page.locator('#voice-status')).toHaveText('');
+  await page.reload();
+  await expect(page.getByRole('checkbox')).not.toBeChecked();
+  await expect(page.getByRole('button', { name: 'Save log', exact: true })).toBeDisabled();
+  await expect(page.getByRole('textbox', { name: 'Captured exchange' })).toHaveCount(0);
+});
+
+test('stopping or clearing diagnostics leaves the voice running and blocks later transcript capture', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await fakeMedia(page);
+  const calls = await mockSession(page);
+  await page.goto('/?diagnostics=1');
+  await page.getByRole('checkbox').check();
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await emit(page, { type: 'session.input_transcript.delta', delta: 'Retain this fragment.', start_ms: 0, end_ms: 100 });
+  await page.getByRole('button', { name: 'Stop recording', exact: true }).click();
+  await emit(page, { type: 'session.input_transcript.delta', delta: 'Do not retain this.', start_ms: 100, end_ms: 200 });
+  await page.getByRole('button', { name: 'Review log', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'Captured exchange' })).toHaveValue(/Retain this fragment/);
+  await expect(page.getByRole('textbox', { name: 'Captured exchange' })).not.toHaveValue(/Do not retain/);
+  await page.getByRole('button', { name: 'Clear log', exact: true }).click();
+  await emit(page, { type: 'session.output_transcript.delta', delta: 'Late fragment.', start_ms: 200, end_ms: 300 });
+  await expect(page.getByRole('button', { name: 'Save log', exact: true })).toBeDisabled();
+  await expect(page.getByRole('textbox', { name: 'Captured exchange' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  expect(calls.map(call => call.method)).toEqual(['GET', 'POST']);
+  expect((await tracker(page)).stoppedTracks).toBe(0);
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
 });
 
 test('loading is quiet and the disabled gate never requests a microphone', async ({ page }) => {
@@ -498,11 +595,13 @@ test('a private waveform keeps its scope during cancellation and late session cl
   const delayPost = new Promise<void>(resolve => { releasePost = resolve; });
   await fakeMedia(page);
   const calls = await mockSession(page, { delayPost });
-  await page.goto(`/w/${waveformId}`);
+  await page.goto(`/w/${waveformId}?diagnostics=1`);
   await expect(page.locator('.voice-navigation')).toContainText('Private test voice');
   await expect(page.locator('.wordmark-studio')).toHaveCount(0);
+  await page.getByRole('checkbox', { name: 'Record my next conversation locally' }).check();
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect.poll(() => calls.some(call => call.method === 'POST')).toBe(true);
+  expect(calls.find(call => call.method === 'POST')?.diagnostics).toBe(true);
   await expect(page.locator('.voice-navigation')).toBeHidden();
   await page.getByRole('button', { name: 'Cancel connection', exact: true }).click();
   await expect.poll(async () => (await tracker(page)).stoppedTracks).toBe(1);
@@ -511,6 +610,12 @@ test('a private waveform keeps its scope during cancellation and late session cl
   expect(calls.every(call => call.waveformId === waveformId)).toBe(true);
   expect(calls.every(call => call.demoId === undefined)).toBe(true);
   await expect(page.locator('.voice-navigation')).toBeVisible();
+  const downloadEvent = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Save log', exact: true }).click();
+  const saved = JSON.parse(await readFile((await (await downloadEvent).path())!, 'utf8'));
+  expect(saved.surface).toBe('personal');
+  expect(saved.recording).toBe(false);
+  expect(JSON.stringify(saved)).not.toContain(waveformId);
 });
 
 test('account changes unmount a private conversation and release its microphone', async ({ page }) => {

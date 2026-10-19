@@ -50,6 +50,18 @@ Before any provider creation, a deterministic Cloud Task is scheduled for that r
 
 News is an independent application. Later a News module will own its data, actions, settings and panel, while this host retains voice, accounts, usage and opening/closing views. No plugin framework or sibling source dependency is introduced now.
 
+## Opt-in conversation diagnostics
+
+Adding `?diagnostics=1` exposes a browser-only panel on the public or personal waveform. The URL alone never starts recording. A one-conversation checkbox makes the existing session POST include `diagnostics:true`; the server accepts only a boolean and widens that session's browser event allowlist to transcript deltas, delegation, usage and commentary acknowledgments. Normal sessions keep their original event allowlist. No prompt, model, tools, storage setting, greeting, admission, deadline or cleanup behavior changes.
+
+`lib/voice-diagnostics.ts` copies only allowlisted fields into a bounded in-memory report: exact transcript deltas with approximate provider timing, relative event arrival times, delegation target/offset, cumulative usage and fixed lifecycle names. It excludes raw event objects, session snapshots, prompts, provider/owner identifiers, credentials, raw audio and free-form error messages. Conversation text itself can contain private information. No server persistence, console logging, browser storage, automatic upload, extra model or paid retry is introduced. A user can mark a problem, review a snapshot, explicitly save JSON, stop capture independently of voice or erase it. Erasure blocks late events even if the running session still holds the recorder. Navigation and refresh clear the report; the next conversation replaces it and requires fresh consent.
+
+Input/output transcripts can overlap and arrive out of order. They are transcriptions, not authoritative audio or complete turn records. Delegation events expose a target but no intent label or internal reasoning. `session.commentary.appended` for a recognized unavailable-capability command means context was accepted; it never proves speech or playback, and browser delivery of sideband acknowledgments remains unverified. Usage updates are cumulative, not additive. A validated `session.closed` marks provider finalization; transport closure or a successful cleanup request alone does not. The actual output analyser continues to drive the waveform's speaking state.
+
+The recorder is a pure module without account/React dependencies, intended as a small reusable format rather than a cross-application logging service. News is untouched. The report holds at most 2,000 events and 120,000 transcript characters; oversized fragments are dropped and truncation is visible. Synthetic verification covers consent, overlap, privacy allowlists, markers, export, late events and normal teardown. Real GPT-Live event delivery and conversational diagnosis still require an authorized live test.
+
+Diagnostic event schemas: [transcript deltas, delegation, usage and session closure](https://developers.openai.com/api/reference/resources/live/sideband-websocket), [WebRTC media and events](https://developers.openai.com/api/docs/guides/voice-webrtc#handle-media-and-events). The application never requests hidden reasoning or runs an intent classifier.
+
 ## Official references
 
 - https://developers.openai.com/api/docs/guides/voice-webrtc?api=live

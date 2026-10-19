@@ -36,6 +36,16 @@ Public mode explicitly requires the configured HTTPS origin and transactional vo
 
 Live testing requires explicit approval for the app, host, task and call budget. Only after that approval may development use FLOWPATH_LIVE_ENABLED=1 with already-configured server credentials. Do not create/copy keys or change private environment files. Normal conversations end at 15 minutes, and the browser closes after 45 seconds of silence. Each local process admits at most three provider starts, including failures. Public mode additionally requires durable allowances and an independent authenticated closure task; incomplete configuration stays paused. See the dated verification notes for actual live results.
 
+## Optional conversation diagnostics
+
+Open `http://127.0.0.1:3220/?diagnostics=1` (or add `?diagnostics=1` to your private waveform URL). The ordinary waveform stays unchanged. In the diagnostics panel, explicitly select **Record my next conversation locally**, then start the waveform. Capture is off by default and consent applies to one conversation. This switch does not enable live voice or bypass any usage, ownership or cancellation limits.
+
+The panel captures GPT-Live's input/output transcript fragments, relative timing, observed handoff requests, cumulative usage and browser media-state changes. Choose **Mark problem** when a reply feels wrong, **Review log** for a readable snapshot, and **Save log** to download JSON on your device. Review the text before sharing it. **Stop recording** leaves the voice running; **Clear log** discards the report and prevents late capture. Reports live only in this tab's memory. Refreshing or leaving discards them, and starting a new conversation replaces the old report. There is no automatic upload, browser storage, server transcript log, raw audio recording or additional model call.
+
+Transcriptions can be imperfect; input and output can overlap and arrive unevenly. A handoff event identifies its target, not the user's intent or the model's private reasoning. An unavailable-capability context acknowledgment, when delivered to the browser, confirms accepted context rather than speech. Only a valid provider closure event marks finalization confirmed. The exported report preserves fragment timing and delivery order without inventing completed turns. Capture is bounded to 2,000 events and 120,000 transcript characters, with an explicit truncation flag.
+
+The small recorder in `lib/voice-diagnostics.ts` is independent of React, accounts and the server, so the same report format can be used by future voice hosts. News remains independent. This implementation is locally verified with synthetic events; live provider event delivery still needs a separately authorized listening test.
+
 ## Verification
 
 ```sh
@@ -58,6 +68,7 @@ Production launch preparation passed `npm run check` with 95 unit/integration te
 - app/page.tsx and components/VoiceExperience.tsx: the opening/closing experience.
 - components/Waveform.tsx: retained audio-driven canvas artwork, reduced-motion and WebKit rendering.
 - lib/use-voice-session.ts and lib/voice-session.ts: WebRTC, playback and browser cleanup.
+- lib/voice-diagnostics.ts and components/VoiceDiagnostics.tsx: explicit, browser-memory conversation diagnostics and local export.
 - lib/account-model.ts, lib/account-server.ts and lib/account-runtime.ts: owner identity, private settings and local fixture persistence.
 - lib/account-client.ts and lib/firebase-accounts.ts: optional Google sign-in and server-only Firebase adapter, inactive by default.
 - components/AccountSettings.tsx and components/OwnerWaveform.tsx: the small settings page and private waveform gate.

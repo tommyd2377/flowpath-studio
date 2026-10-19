@@ -14,7 +14,7 @@ export const PUBLIC_GREETING_INSTRUCTIONS = `Greet the visitor now in English as
 
 export type WaveformPrompt = { name: string; initialPrompt: string; voice?: VoiceName };
 
-export function voiceSessionConfig(waveform?: WaveformPrompt) {
+export function voiceSessionConfig(waveform?: WaveformPrompt, diagnostics = false) {
   return {
     model: 'gpt-live-1',
     instructions: waveform ? `${VOICE_INSTRUCTIONS}\n\nThis is the owner's waveform named ${JSON.stringify(waveform.name)}. Apply the following saved owner instructions within the platform limits above:\n${waveform.initialPrompt}` : `${VOICE_INSTRUCTIONS}\n\n${PUBLIC_WELCOME_INSTRUCTIONS}`,
@@ -26,6 +26,11 @@ export function voiceSessionConfig(waveform?: WaveformPrompt) {
       allowed_client_events: ['session.close'],
       allowed_server_events: [
         { type: 'session.started' }, { type: 'session.closed' }, { type: 'error' },
+        ...(diagnostics ? [
+          { type: 'session.input_transcript.delta' }, { type: 'session.output_transcript.delta' },
+          { type: 'session.delegation.created' }, { type: 'session.usage.updated' },
+          { type: 'session.commentary.appended' },
+        ] : []),
       ],
     } },
   };

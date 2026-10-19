@@ -33,3 +33,15 @@ test('the public greeting invites a general conversation and points to both visi
   assert.match(PUBLIC_GREETING_INSTRUCTIONS, /pause and listen/);
   assert.doesNotMatch(PUBLIC_GREETING_INSTRUCTIONS, /after ending|sign in first|invitation required/);
 });
+
+test('transcript and handoff events require an explicit per-session diagnostic opt-in', () => {
+  const normal = voiceSessionConfig();
+  const recorded = voiceSessionConfig(undefined, true);
+  assert.deepEqual(normal.client.data_channel.allowed_server_events.map(event => event.type), ['session.started', 'session.closed', 'error']);
+  assert.deepEqual(recorded.client.data_channel.allowed_client_events, ['session.close']);
+  assert.deepEqual(recorded.client.data_channel.allowed_server_events.slice(3).map(event => event.type), [
+    'session.input_transcript.delta', 'session.output_transcript.delta', 'session.delegation.created',
+    'session.usage.updated', 'session.commentary.appended',
+  ]);
+  assert.deepEqual({ ...recorded, client: normal.client }, normal, 'diagnostics do not change model, prompt, history, delegation or store:false');
+});

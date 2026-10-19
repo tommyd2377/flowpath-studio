@@ -342,8 +342,6 @@ export function createVoiceServer(options: Options = {}) {
       if (access.error) return access.error;
       const owner = productionOwner(access);
       if (options.production && !owner) return json({ error: accessMessage(access) }, 403);
-      // Snapshot saved instructions once. Edits only affect subsequent conversations.
-      const config = voiceSessionConfig(access.personal?.waveform);
       if (!enabled()) return json({ error: pausedMessage }, 503);
       if (blocked) return json({ error: cleanupMessage }, 503);
       const policy = options.production?.policy();
@@ -355,8 +353,12 @@ export function createVoiceServer(options: Options = {}) {
       let body: Record<string, unknown>;
       try { body = await readBody(request); }
       catch { return json({ error: 'Invalid audio connection request.' }, 400); }
-      if (Object.keys(body).some(name => name !== 'sdp' && name !== 'sessionId')
+      if (Object.keys(body).some(name => name !== 'sdp' && name !== 'sessionId' && name !== 'diagnostics')
+        || (body.diagnostics !== undefined && typeof body.diagnostics !== 'boolean')
         || !validId(body.sessionId) || !audioSdp(body.sdp)) return json({ error: 'Invalid audio connection request.' }, 400);
+      // The explicit browser opt-in only widens its event subscription. Nothing is retained here.
+      // Snapshot saved instructions once. Edits only affect subsequent conversations.
+      const config = voiceSessionConfig(access.personal?.waveform, body.diagnostics === true);
       if (request.signal.aborted || recent.has(reservationKey(body.sessionId, owner?.ownerUid ?? access.personal?.ownerUid, access.waveformId))) return json({ error: 'The conversation was canceled or already used.' }, 409);
       // Auth/store reads and the streamed body can outlive sign-out in another tab.
       // Public admission also rechecks the durable lease inside its reservation transaction.
