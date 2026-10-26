@@ -31,7 +31,7 @@ The top-right Create your waveform link leads to the account flow. The top-left 
 
 export const PUBLIC_GREETING_INSTRUCTIONS = `Greet the visitor now in English as FlowPath's voice assistant. Give a brief, friendly welcome to FlowPath Studio and explain that FlowPath is a place to talk with an AI voice and make your own personal waveform. Invite them to ask any general question or explore a topic, and tell them they can interrupt you and talk naturally at any time. Mention that they can create their own voice through Create your waveform at the top right or visit the FlowPath News example at the top left. Then pause and listen.`;
 
-export type WaveformPrompt = { name: string; initialPrompt: string; voice?: VoiceName };
+export type WaveformPrompt = { name: string; initialPrompt: string; voice?: VoiceName; textPanel?: import('./text-panel').TextPanelConfiguration | null };
 
 export function voiceSessionConfig(waveform?: WaveformPrompt, diagnostics = false) {
   return {

@@ -1,4 +1,5 @@
 import type { VoiceName } from './voice-options';
+import type { TextPanelConfiguration } from './text-panel';
 
 export type AccountMode = 'local' | 'firebase' | 'unavailable';
 
@@ -13,6 +14,7 @@ export type WaveformInput = {
   accentColor: string;
   profilePhoto: string | null;
   adminTesting?: boolean;
+  textPanel?: TextPanelConfiguration | null;
 };
 
 export type Waveform = WaveformInput & { id: string; updatedAt: string };

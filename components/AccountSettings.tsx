@@ -9,8 +9,12 @@ import { prepareProfilePhoto } from '@/lib/prepare-profile-photo';
 import { DEFAULT_VOICE, VOICE_OPTIONS, isVoiceName, type VoiceName } from '@/lib/voice-options';
 import PaidSettings from './PaidSettings';
 import { returnDestination } from '@/lib/paid-model';
+import { useCreationReview } from '@/lib/use-creation-review';
+import CreationSafetyStatus from './CreationSafetyStatus';
+import CreationReviewQueue from './CreationReviewQueue';
+import { clientAnalytics, observeVisit } from '@/lib/analytics-runtime';
 
-type Account = { mode: AccountMode; user: AccountUser | null; openRegistration?: boolean };
+type Account = { mode: AccountMode; user: AccountUser | null; openRegistration?: boolean; creationSafetyEnabled?: boolean; safetyAdminFixture?: boolean };
 
 function normalizedColor(value: string): string | null {
   const match = /^#?([0-9a-f]{6})$/i.exec(value.trim());
@@ -29,6 +33,7 @@ export default function AccountSettings() {
   const [name, setName] = useState('');
   const [voice, setVoice] = useState<VoiceName>(DEFAULT_VOICE);
   const [initialPrompt, setInitialPrompt] = useState('');
+  const [text, setText] = useState('');
   const [adminTesting, setAdminTesting] = useState(false);
   const promptTooLong = initialPrompt.length > WAVEFORM_PROMPT_LIMIT;
   const [accentColor, setAccentColor] = useState(WAVEFORM_DEFAULT_COLOR);
@@ -47,6 +52,16 @@ export default function AccountSettings() {
   const [returnTo, setReturnTo] = useState('/account');
   const accountRevision = useRef(0);
   const photoRevision = useRef<symbol | null>(null);
+  const textPanel = text ? { type: 'text' as const, version: 1 as const, text } : null;
+  const safety = useCreationReview({ enabled: !!account?.creationSafetyEnabled && !!account.user,
+    candidate: { name, initialPrompt, textPanel }, ownerKey: account?.user?.uid ?? '' });
+  useEffect(() => { observeVisit('account'); clientAnalytics.record({ eventName: 'creation_step', properties: { step: 'opened', outcome: 'success' } }); }, []);
+  useEffect(() => {
+    if (safety.status) clientAnalytics.record({ eventName: 'creation_step', properties: {
+      step: safety.status === 'allowed' ? 'review_approved' : safety.status === 'blocked' || safety.status === 'manual-review' ? 'review_rejected' : 'review_pending',
+      outcome: safety.status === 'blocked' || safety.status === 'manual-review' || safety.status === 'unavailable' ? 'blocked' : 'success',
+    } });
+  }, [safety.status]);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,6 +70,7 @@ export default function AccountSettings() {
       const requestedRevision = ++revision;
       const current = () => !cancelled && requestedRevision === revision;
       if (changed) {
+        setText('');
         setAdminTesting(false);
         accountRevision.current++;
         photoRevision.current = null;
@@ -72,6 +88,7 @@ export default function AccountSettings() {
         setName(saved?.waveform?.name ?? '');
         setVoice(saved?.waveform?.voice ?? DEFAULT_VOICE);
         setInitialPrompt(saved?.waveform?.initialPrompt ?? '');
+        setText(saved?.waveform?.textPanel?.text ?? '');
         setAdminTesting(result.user?.role === 'admin' && saved?.waveform?.adminTesting === true);
         setAccentColor(saved?.waveform?.accentColor ?? WAVEFORM_DEFAULT_COLOR);
         setPreviewColor(saved?.waveform?.accentColor ?? WAVEFORM_DEFAULT_COLOR);
@@ -136,6 +153,7 @@ export default function AccountSettings() {
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (preparingPhoto) return;
+    if (!safety.canSave || text.length > 4_000) { setError('This version must pass its safety review before saving.'); return; }
     if (promptTooLong) { setError('Your full prompt is still in the editor. Shorten it to 8,000 characters before saving.'); return; }
     const color = normalizedColor(accentColor);
     if (!color) { setError(`Enter a six-digit hex color, such as ${WAVEFORM_DEFAULT_COLOR}.`); return; }
@@ -143,7 +161,7 @@ export default function AccountSettings() {
     setBusy(true); setError(''); setMessage('');
     try {
       const saved = await readResponse<{ waveform: Waveform }>(await fetch('/api/waveform', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, voice, initialPrompt, accentColor: color, profilePhoto,
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, voice, initialPrompt, accentColor: color, profilePhoto, textPanel,
           ...(account?.user?.role === 'admin' ? { adminTesting } : {}) }),
       }));
       if (requestedRevision !== accountRevision.current) return;
@@ -151,6 +169,7 @@ export default function AccountSettings() {
       setAdminTesting(account?.user?.role === 'admin' && saved.waveform.adminTesting === true);
       setAccentColor(saved.waveform.accentColor); setPreviewColor(saved.waveform.accentColor); setProfilePhoto(saved.waveform.profilePhoto);
       setMessage('Saved. Your settings will apply to your next conversation.');
+      clientAnalytics.record({ eventName: 'creation_step', properties: { step: 'saved', outcome: 'success' } });
     } catch (error) { if (requestedRevision === accountRevision.current) setError(error instanceof Error ? error.message : 'Your waveform could not be saved. Please try again.'); }
     finally { if (requestedRevision === accountRevision.current) setBusy(false); }
   }
@@ -185,7 +204,7 @@ export default function AccountSettings() {
       {returnTo !== '/account' && <Link className="primary-button" href={returnTo}>Continue to waveform</Link>}
       <form onSubmit={event => void save(event)}>
         <label htmlFor="waveform-name">Waveform name</label>
-        <input id="waveform-name" value={name} onChange={event => setName(event.target.value)} maxLength={WAVEFORM_NAME_LIMIT} required disabled={busy} autoComplete="off" placeholder="Tom’s assistant" />
+        <input id="waveform-name" value={name} onChange={event => { setName(event.target.value); clientAnalytics.record({ eventName: 'creation_step', properties: { step: 'editing', outcome: 'success' } }); }} maxLength={WAVEFORM_NAME_LIMIT} required disabled={busy} autoComplete="off" placeholder="Tom’s assistant" />
         <div className="appearance-colors">
           <div><label htmlFor="waveform-color">Waveform color</label><input id="waveform-color" type="color" value={previewColor} onChange={event => changeColor(event.target.value)} disabled={busy} aria-describedby="color-help" /></div>
           <div><label htmlFor="waveform-color-hex">Color hex code</label><input id="waveform-color-hex" value={accentColor} onChange={event => changeColor(event.target.value)} pattern="#?[0-9a-fA-F]{6}" maxLength={7} required disabled={busy} autoComplete="off" spellCheck={false} title={`Enter a six-digit hex color, such as ${WAVEFORM_DEFAULT_COLOR}.`} aria-describedby="color-help" /></div>
@@ -211,19 +230,26 @@ export default function AccountSettings() {
         {promptTooLong && <p id="prompt-limit-error" className="account-error" role="alert">Your full text is preserved. Shorten it by {(initialPrompt.length - WAVEFORM_PROMPT_LIMIT).toLocaleString('en-US')} characters before saving.</p>}
         {waveform?.initialPrompt.length === 4_000 && <p className="field-help">This saved prompt reaches the previous 4,000-character limit. If your original was longer, paste it again to restore the missing ending.</p>}
         <p id="prompt-help" className="field-help">Give it an identity and a style, up to {WAVEFORM_PROMPT_LIMIT.toLocaleString('en-US')} characters. Longer drafts stay intact so you can edit them. Conversations start fresh; these instructions don’t add tools or conversation memory.</p>
+        <label htmlFor="waveform-text">Text below the waveform (optional)</label>
+        <textarea id="waveform-text" value={text} onChange={event => setText(event.target.value)} rows={4} disabled={busy || !account.creationSafetyEnabled} aria-describedby="text-help" aria-invalid={text.length > 4_000} />
+        <p id="text-help" className="field-help">Plain text only, up to 4,000 characters. Visitors can show or hide this text. {text.length.toLocaleString('en-US')} / 4,000 characters.</p>
+        <CreationSafetyStatus status={safety.status} />
+        {account.safetyAdminFixture && <p className="local-account-note">Safety decisions in this local preview are synthetic.</p>}
         {account.user.role === 'admin' && <div>
           <label className="admin-testing-toggle" htmlFor="admin-testing"><input id="admin-testing" type="checkbox" role="switch" checked={adminTesting} disabled={busy} onChange={event => setAdminTesting(event.target.checked)} aria-describedby="admin-testing-help" /> Admin testing</label>
           <p id="admin-testing-help" className="field-help">Skip your prepaid, personal time and silence limits. Conversations end at 15 minutes. Each start uses a 15-minute block from the shared daily testing budget, even if you end early. Shared capacity limits still apply. Turn off to experience regular-user limits. Save to apply on your next conversation.</p>
         </div>}
-        <div className="account-actions"><button className="primary-button" type="submit" disabled={busy || preparingPhoto || promptTooLong}>{busy ? 'Saving…' : 'Save waveform'}</button>{waveform && <Link className="secondary-button" href={`/w/${encodeURIComponent(waveform.id)}`}>Open waveform</Link>}</div>
+        <div className="account-actions"><button className="primary-button" type="submit" disabled={busy || preparingPhoto || promptTooLong || text.length > 4_000 || !safety.canSave}>{busy ? 'Saving…' : 'Save waveform'}</button>{waveform && <Link className="secondary-button" href={`/w/${encodeURIComponent(waveform.id)}`}>Open waveform</Link>}</div>
       </form>
       {waveform && <p className="field-help">Your owner settings and personal waveform address stay private. Publishing is an explicit choice below when available.</p>}
       {waveform && <PaidSettings key={waveform.id} waveformId={waveform.id} />}
+      <CreationReviewQueue verifiedAdmin={account.user.role === 'admin' && account.creationSafetyEnabled === true} />
     </> : account ? <section className="account-sign-in" aria-label="Sign in">
       <p>Create an account to save one waveform and its starting instructions. It stays private to you.</p>
       {account.mode === 'local' ? <>
         <p className="local-account-note">Local preview: use a test account. This does not create a Google or Firebase account.</p>
         <div className="account-actions"><button className="primary-button" type="button" onClick={() => void signIn('owner-a')} disabled={busy}>Use test owner A</button><button className="secondary-button" type="button" onClick={() => void signIn('owner-b')} disabled={busy}>Use test owner B</button></div>
+        {account.safetyAdminFixture && <button className="secondary-button" type="button" onClick={() => void signIn('owner-admin')} disabled={busy}>Use test safety admin</button>}
       </> : account.mode === 'firebase' ? <>
         {!account.openRegistration && <><label htmlFor="invitation-code">Invitation code</label>
         <input id="invitation-code" value={inviteCode} onChange={event => setInviteCode(event.target.value)} disabled={busy} maxLength={64} autoComplete="off" spellCheck={false} aria-describedby="invitation-help" />

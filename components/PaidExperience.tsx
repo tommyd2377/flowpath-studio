@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { loadBilling, paidRead, startCheckout, type BillingView } from '@/lib/paid-client';
 import { packLabel, type PublicWaveform } from '@/lib/paid-model';
 import VoiceExperience from './VoiceExperience';
+import { clientAnalytics } from '@/lib/analytics-runtime';
 
 type PublicView = { waveform: PublicWaveform; mode: string; sponsoredSeconds: number; own: boolean; reason: string; adminTesting?: boolean; adminVoiceReady?: boolean };
 export default function PaidExperience({ id, personal = false }: { id: string; personal?: boolean }) {
@@ -14,6 +15,9 @@ export default function PaidExperience({ id, personal = false }: { id: string; p
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
   const requestId = useRef<string | null>(null);
+  useEffect(() => {
+    if (view && billing && (view.own || view.sponsoredSeconds < 1)) clientAnalytics.record({ eventName: 'paywall_shown', properties: { mode: view.mode } });
+  }, [view, billing]);
   const destination = `/${personal ? 'w' : 'p'}/${id}`;
   useEffect(() => {
     const changed = () => { setPayer(undefined); setView(null); setBilling(null); setMessage(''); setRevision(r => r + 1); };
@@ -41,7 +45,7 @@ export default function PaidExperience({ id, personal = false }: { id: string; p
     return () => { current = false; };
   }, [id, revision]);
   if ((payer || view?.adminTesting && view.adminVoiceReady) && view) return <VoiceExperience waveformId={id} name={view.waveform.name} accentColor={view.waveform.accentColor}
-    profilePhoto={view.waveform.profilePhoto} paidPayer={payer} onSettled={() => { setPayer(undefined); setView(null); setBilling(null); setRevision(r => r + 1); }} />;
+    profilePhoto={view.waveform.profilePhoto} textPanel={view.waveform.textPanel} analyticsSurface={personal ? 'private' : 'public'} paidPayer={payer} onSettled={() => { setPayer(undefined); setView(null); setBilling(null); setRevision(r => r + 1); }} />;
   const canSponsor = !!view && !view.own && view.sponsoredSeconds > 0;
   return <main className="account-page paid-experience">
     <Link className="account-back" href="/">← Back to FlowPath</Link>
@@ -54,13 +58,13 @@ export default function PaidExperience({ id, personal = false }: { id: string; p
       {canSponsor ? <>
         <p>The creator pays. {view.mode === 'intro' ? `${view.sponsoredSeconds} sponsored seconds available in the next conversation. Your introductory allowance is cumulative.`
           : 'No configured per-visitor allowance. Creator funds, their finite sponsorship budget and safety limits apply.'}</p>
-        <button className="primary-button" type="button" disabled={!billing.voiceReady} onClick={() => setPayer('creator')}>Continue with creator-funded time</button>
+        <button className="primary-button" type="button" disabled={!billing.voiceReady} onClick={() => { clientAnalytics.record({ eventName: 'payer_selected', properties: { payer: 'creator' } }); setPayer('creator'); }}>Continue with creator-funded time</button>
       </> : <p>{view.own ? 'Your personal usage uses your prepaid balance.' : view.reason || 'An account and available paid minutes are needed to continue.'}</p>}
       {!canSponsor && (!billing.signedIn ? <>
         <Link className="primary-button" href={`/account?returnTo=${encodeURIComponent(destination)}`}>Sign up or log in to continue</Link>
       </> : (billing.wallet?.available ?? 0) > 0 ? <>
         <p>{billing.wallet?.available} paid seconds available. The next conversation will use your balance only if you choose to continue.</p>
-        <button className="primary-button" type="button" disabled={!billing.voiceReady} onClick={() => setPayer('self')}>Continue using my own balance</button>
+        <button className="primary-button" type="button" disabled={!billing.voiceReady} onClick={() => { clientAnalytics.record({ eventName: 'payer_selected', properties: { payer: 'self' } }); setPayer('self'); }}>Continue using my own balance</button>
       </> : <>
         <p>{packLabel(billing.pack)}. No subscription or automatic top-ups.</p>
         <button className="primary-button" type="button" disabled={busy || !billing.checkoutReady || !billing.voiceReady} onClick={() => {

@@ -9,7 +9,7 @@ import type { Waveform } from '@/lib/account-model';
 export default function OwnerWaveform({ id }: { id: string }) {
   const [paid, setPaid] = useState(false);
   useEffect(() => { let current = true; void fetch('/api/billing', { cache: 'no-store' }).then(r => r.json()).then(b => { if (current) setPaid(b.enabled === true); }).catch(() => undefined); return () => { current = false; }; }, []);
-  const [waveform, setWaveform] = useState<Pick<Waveform, 'id' | 'name' | 'accentColor' | 'profilePhoto'> | null>(null);
+  const [waveform, setWaveform] = useState<Pick<Waveform, 'id' | 'name' | 'accentColor' | 'profilePhoto' | 'textPanel'> | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'signed-out' | 'private' | 'error'>('loading');
 
   useEffect(() => {
@@ -28,7 +28,7 @@ export default function OwnerWaveform({ id }: { id: string }) {
         if (!current()) return;
         if (result.waveform?.id !== id || typeof result.waveform.name !== 'string') { setState('private'); return; }
         setWaveform({ id: result.waveform.id, name: result.waveform.name,
-          accentColor: result.waveform.accentColor, profilePhoto: result.waveform.profilePhoto });
+          accentColor: result.waveform.accentColor, profilePhoto: result.waveform.profilePhoto, textPanel: result.waveform.textPanel });
         setState('ready');
       }).catch(() => { if (current()) setState('error'); });
     };
@@ -42,7 +42,7 @@ export default function OwnerWaveform({ id }: { id: string }) {
 
   if (state === 'ready' && waveform && paid) return <PaidExperience id={id} personal />;
   if (state === 'ready' && waveform) return <VoiceExperience key={waveform.id} waveformId={waveform.id} name={waveform.name}
-    accentColor={waveform.accentColor} profilePhoto={waveform.profilePhoto} />;
+    accentColor={waveform.accentColor} profilePhoto={waveform.profilePhoto} textPanel={waveform.textPanel} />;
   return <main className="account-page">
     <Link className="account-back" href="/">← Back to FlowPath</Link>
     <h1>Your waveform</h1>

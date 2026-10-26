@@ -9,9 +9,12 @@ import PersonalFooter from './PersonalFooter';
 import { appearanceTheme } from '@/lib/appearance-theme';
 import { WAVEFORM_DEFAULT_COLOR } from '@/lib/account-model';
 import VoiceDiagnostics, { useDiagnosticsMode } from './VoiceDiagnostics';
+import TextPanel from './TextPanel';
+import type { TextPanelConfiguration } from '@/lib/text-panel';
+import { clientAnalytics, observeVisit } from '@/lib/analytics-runtime';
 
-export default function VoiceExperience({ waveformId, name, accentColor = WAVEFORM_DEFAULT_COLOR, profilePhoto = null, paidPayer, onSettled }: {
-  waveformId?: string; name?: string; accentColor?: string; profilePhoto?: string | null; paidPayer?: 'creator' | 'self'; onSettled?: () => void;
+export default function VoiceExperience({ waveformId, name, accentColor = WAVEFORM_DEFAULT_COLOR, profilePhoto = null, paidPayer, onSettled, textPanel = null, analyticsSurface }: {
+  waveformId?: string; name?: string; accentColor?: string; profilePhoto?: string | null; paidPayer?: 'creator' | 'self'; onSettled?: () => void; textPanel?: TextPanelConfiguration | null; analyticsSurface?: 'private' | 'public';
 }) {
   const voice = useVoiceSession(waveformId, paidPayer);
   const handledSettlement = useRef(0);
@@ -20,6 +23,19 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
   const [recordNext, setRecordNext] = useState(false);
   const { active, stop } = voice;
   const connected = voice.phase === 'listening' || voice.phase === 'speaking';
+  const surface = analyticsSurface ?? (waveformId ? 'private' : 'home');
+  const wasConnected = useRef(false);
+  useEffect(() => { observeVisit(surface); }, [surface]);
+  useEffect(() => {
+    if (connected && !wasConnected.current) {
+      clientAnalytics.record({ eventName: 'voice_connected', properties: { surface } });
+      if (surface === 'home') clientAnalytics.record({ eventName: 'demo_started', properties: {} });
+    } else if (!voice.active && wasConnected.current) {
+      clientAnalytics.record({ eventName: 'voice_ended', properties: { surface, reason: 'unknown' } });
+      if (surface === 'home') clientAnalytics.record({ eventName: 'demo_ended', properties: { reason: 'unknown' } });
+    }
+    if (connected || !voice.active) wasConnected.current = connected;
+  }, [connected, voice.active, surface]);
   const hasPortrait = Boolean(waveformId && profilePhoto);
   const label = voice.needsAudioResume ? 'Resume voice playback' : voice.active
     ? voice.phase === 'connecting' ? 'Cancel connection' : 'End conversation'
@@ -40,10 +56,10 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
     data-personal={Boolean(waveformId)} data-profile-photo={hasPortrait}
     style={waveformId ? appearanceTheme(accentColor) : undefined}>
     <nav className="voice-navigation" aria-label="FlowPath navigation" hidden={Boolean(waveformId) && voice.active}>
-      <a className="news-example-link" href="https://flowpathapp.com">FlowPath News example</a>
+      <a className="news-example-link" href="https://flowpathapp.com" onClick={() => clientAnalytics.record({ eventName: 'navigation_selected', properties: { destination: 'news' } })}>FlowPath News example</a>
       <div className="voice-account-links">
         {name && <span>{name}</span>}
-        <Link href="/account">{waveformId ? 'My waveform' : 'Create your waveform'}</Link>
+        <Link href="/account" onClick={() => clientAnalytics.record({ eventName: 'navigation_selected', properties: { destination: 'account' } })}>{waveformId ? 'My waveform' : 'Create your waveform'}</Link>
       </div>
     </nav>
     <main className="voice-page" data-voice-phase={voice.phase}>
@@ -59,7 +75,7 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
         aria-describedby={showStatus && status ? 'voice-status' : !connected ? 'voice-hint' : undefined}
         onClick={() => {
           if (voice.needsAudioResume) void voice.start();
-          else if (!voice.active) { void voice.start(diagnosticsMode && recordNext); setRecordNext(false); }
+          else if (!voice.active) { clientAnalytics.record({ eventName: 'voice_start_requested', properties: { surface } }); void voice.start(diagnosticsMode && recordNext); setRecordNext(false); }
           else void voice.stop();
         }}>
         <Waveform phase={voice.phase} inputAnalyser={voice.inputAnalyser} outputAnalyser={voice.outputAnalyser} accentColor={waveformId ? accentColor : undefined} />
@@ -68,6 +84,7 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
       <p className="voice-status" id="voice-status" role="status" aria-live="polite" aria-atomic="true">{showStatus ? status : ''}</p>
       {paidPayer && <p className="paid-session-meter" aria-live="polite">{paidPayer === 'creator' ? 'Creator pays' : 'You pay from your prepaid balance'}{voice.remainingSeconds !== null ? ` · ${voice.remainingSeconds} seconds remaining${voice.remainingSeconds <= 30 ? ' — ending soon' : ''}` : ''}</p>}
       <span className="sr-only">{connected ? 'Conversation connected. Tap the waveform or press Escape to end.' : ''}</span>
+      {textPanel && <div className="voice-text-panel"><TextPanel configuration={textPanel} scopeKey={waveformId ?? 'home'} /></div>}
     </main>
     {diagnosticsMode && <VoiceDiagnostics key={voice.diagnosticVersion} active={voice.active} recordNext={recordNext} onRecordNext={setRecordNext}
       recording={voice.diagnosticRecording} hasReport={voice.hasDiagnostic} version={voice.diagnosticVersion}

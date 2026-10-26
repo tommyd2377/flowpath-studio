@@ -26,6 +26,7 @@ export function useCreationReview({ enabled, candidate, ownerKey }: {
       setState(previous => previous.scope === scope && previous.enabled && previous.ownerKey === ownerKey ? { ...previous, result: next } : previous);
     };
     if (completed.current?.scope !== scope || !enabled) completed.current = null;
+    if (completed.current && completed.current.result.key !== key) completed.current = null;
     if (!enabled || !ownerKey || !key) return () => { current = false; controller.abort(); };
     const cached = completed.current?.result;
     if (cached?.ownerKey === ownerKey && cached.key === key) {

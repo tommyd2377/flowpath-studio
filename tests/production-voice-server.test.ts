@@ -171,7 +171,7 @@ test('a public visitor receives the welcome prompt and a durable three-minute de
   assert.equal(f.calls.length, 1);
 });
 
-test('refreshing the public page grants another three minutes while page and global limits stay enforced', async () => {
+test('refreshing preserves the three-minute visitor allowance while separate visitors share global limits', async () => {
   const f = visitorFixture({ globalDailySeconds: 360, globalConcurrency: 1 });
   const server = createVoiceServer(f.options);
   const firstPage = randomUUID(), nextPage = randomUUID(), firstCall = randomUUID(), nextCall = randomUUID();
@@ -183,12 +183,15 @@ test('refreshing the public page grants another three minutes while page and glo
   assert.equal((await server.DELETE(onPage(firstPage, 'DELETE', firstCall))).status, 200);
   const usedPage = await (await server.GET(onPage(firstPage, 'GET'))).json();
   assert.equal(usedPage.enabled, false);
-  assert.match(usedPage.message, /This page’s three-minute demo has ended\. Refresh the page to start another\./);
+  assert.match(usedPage.message, /three-minute demo allowance has ended/);
   assert.equal((await server.POST(onPage(firstPage, 'POST', randomUUID()))).status, 429, 'the same page cannot start another allowance');
   const nextInstance = createVoiceServer(f.options);
-  assert.equal((await (await nextInstance.GET(onPage(nextPage, 'GET'))).json()).enabled, true);
-  assert.equal((await nextInstance.POST(onPage(nextPage, 'POST', nextCall))).status, 201);
-  assert.equal((await nextInstance.DELETE(onPage(nextPage, 'DELETE', nextCall))).status, 200);
+  assert.equal((await (await nextInstance.GET(onPage(nextPage, 'GET'))).json()).enabled, false);
+  assert.equal((await nextInstance.POST(onPage(nextPage, 'POST', nextCall))).status, 429);
+  assert.equal(f.rows().get('voiceAdmission/global')?.reservedSeconds, 180);
+  const secondVisitor = (method: string) => visitorRequest(method, nextCall, 'b'.repeat(64), false, nextPage);
+  assert.equal((await nextInstance.POST(secondVisitor('POST'))).status, 201);
+  assert.equal((await nextInstance.DELETE(secondVisitor('DELETE'))).status, 200);
   for (const page of [firstPage, randomUUID()]) {
     const exhaustedGlobal = await (await nextInstance.GET(onPage(page, 'GET'))).json();
     assert.equal(exhaustedGlobal.enabled, false);
@@ -208,9 +211,11 @@ test('legacy no-header public calls retain cleanup authority without granting it
   assert.equal((await server.POST(visitorRequest('POST', legacyId))).status, 201);
   assert.equal((await server.DELETE(visitorRequest('DELETE', legacyId, visitorToken, false, page))).status, 403);
   assert.equal((await server.DELETE(visitorRequest('DELETE', legacyId))).status, 200);
-  assert.equal((await server.POST(visitorRequest('POST', pageId, visitorToken, false, page))).status, 201);
-  assert.equal((await server.DELETE(visitorRequest('DELETE', pageId))).status, 403);
-  assert.equal((await server.DELETE(visitorRequest('DELETE', pageId, visitorToken, false, page))).status, 200);
+  assert.equal((await server.POST(visitorRequest('POST', pageId, visitorToken, false, page))).status, 429, 'legacy cookie cannot refresh its allowance');
+  const secondToken = 'b'.repeat(64);
+  assert.equal((await server.POST(visitorRequest('POST', pageId, secondToken, false, page))).status, 201);
+  assert.equal((await server.DELETE(visitorRequest('DELETE', pageId, secondToken))).status, 403);
+  assert.equal((await server.DELETE(visitorRequest('DELETE', pageId, secondToken, false, page))).status, 200);
   assert.equal(f.calls.length, 2);
 });
 

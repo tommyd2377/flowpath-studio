@@ -24,7 +24,7 @@ Every event has `schemaVersion: 1`, a fresh telemetry `eventId` UUID, integer ep
 
 `surface` is `home | account | private | public`. `reason` is `user | silence | limit | navigation | failure | unknown`. Use fixed reason labels; never forward an exception message or provider reason verbatim. Do not treat a clock estimate as confirmed usage or cost. The bounds are telemetry validation limits, not a price or entitlement choice.
 
-The tab-visit label supports observation of return navigation during the current page session. The host must keep that state in memory only and reset it when the host/identity is replaced. It does not measure cross-session retention or unique people. Do not derive the event UUID from an account, visitor cookie, admission, provider session or ledger operation. Version 1 intentionally carries no waveform or user ID.
+The tab-visit label supports observation of return navigation during the current page session. The candidate keeps only generic surface labels in tab/module memory; these labels do not identify or join people across account changes. A future persistent delivery adapter must define its identity/consent reset explicitly. It does not measure cross-session retention or unique people. Do not derive the event UUID from an account, visitor cookie, admission, provider session or ledger operation. Version 1 intentionally carries no waveform or user ID.
 
 No prompts, transcripts, audio, names, emails, cookies/tokens, owner IDs, private/public waveform IDs, provider IDs, raw payloads, URLs or free-form errors are accepted. Explicit local conversation diagnostics remain separate and must never be passed to this boundary.
 

@@ -1,14 +1,13 @@
-import { join } from 'node:path';
 import { accountServer } from './account-runtime';
-import { configuredFirebaseProjectId, getFirebaseAccountServices } from './firebase-accounts';
-import { firestoreVoiceDatabase } from './production-voice-store';
 import { createPaidStore, type PaidStore } from './paid-store';
-import { createFixturePaidDatabase } from './paid-database';
 import { createPaidApi } from './paid-api';
 import { DEFAULT_PACK } from './paid-model';
 import { createStripeTest } from './stripe-test';
 import { configuredPublicOrigin } from './request-origin';
-import { localAppOrigin, localFirebaseDatabase } from './local-app-runtime';
+import { localAppOrigin } from './local-app-runtime';
+import { applicationDatabase } from './application-database';
+import { creationReviewStore, creationSafetyEnabled } from './creation-runtime';
+import { CreationSafetyError } from './creation-safety';
 import { productionVoicePolicy } from './production-voice-store';
 import { localStripeSandboxOrigin } from './paid-local-sandbox';
 
@@ -20,13 +19,12 @@ export const paidVoiceReady = () => paidFixtures;
 const shared = globalThis as typeof globalThis & { flowpathPaidStore?: PaidStore };
 export function getPaidStore() {
   if (!paidEnabled) throw new Error('Paid test preview is disabled');
-  return shared.flowpathPaidStore ??= createPaidStore(localAppOrigin() ? localFirebaseDatabase() : paidFixtures || localStripeOrigin
-    ? createFixturePaidDatabase(process.env.FLOWPATH_ACCOUNT_FIXTURE_DIRECTORY ?? join(process.cwd(), '.local-waveforms'))
-    : firestoreVoiceDatabase(() => {
-      const project = configuredFirebaseProjectId();
-      if (!project || process.env.FLOWPATH_FIRESTORE_EDITION !== 'standard') throw new Error('Test ledger is not configured');
-      return getFirebaseAccountServices(project, process.env.FLOWPATH_FIREBASE_DATABASE_ID ?? '(default)').db;
-    }));
+  return shared.flowpathPaidStore ??= createPaidStore(applicationDatabase(), Date.now, {
+    assertWaveformAllowed: async (tx, uid, waveform) => {
+      if (creationSafetyEnabled()) await creationReviewStore().requireAllowed(tx, uid, waveform);
+      else if (waveform.textPanel) throw new CreationSafetyError('Text display is paused until safety review is available.', 503);
+    },
+  });
 }
 export function getPaidApi() {
   const store = getPaidStore();

@@ -14,9 +14,9 @@ export function localAppOrigin(env: Record<string, string | undefined> = process
 }
 
 /** Accounts/waveforms are real; local voice holds and test ledgers cannot occupy production slots. */
+export const localAppPath = (value: string) => /^(?:ownerSessions|ownerWaveforms)\//.test(value) ? value : `localStudio_${value}`;
 export function localAppDatabase(base: VoiceDatabase): VoiceDatabase {
-  const path = (value: string) => value.startsWith('ownerSessions/') ? value : `localStudio_${value}`;
-  return { transaction: work => base.transaction(tx => work({ get: value => tx.get(path(value)), set: (value, row) => tx.set(path(value), row) })) };
+  return { transaction: work => base.transaction(tx => work({ get: value => tx.get(localAppPath(value)), set: (value, row) => tx.set(localAppPath(value), row) })) };
 }
 export function localFirebaseDatabase() {
   if (!localAppOrigin()) throw new Error('Full local app is not configured');

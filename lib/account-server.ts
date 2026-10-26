@@ -6,6 +6,8 @@ import { normalizeProfilePhoto, validProfilePhoto } from './profile-photo';
 import { configuredPublicOrigin, isAllowedRequest } from './request-origin';
 import { AccountSessionInactiveError, accountSessionId, type DurableAccountSessions } from './production-account-session';
 import { InvitationRequiredError } from './invitations';
+import { validateTextPanelConfiguration } from './text-panel';
+import { CreationSafetyError } from './creation-safety';
 import {
   WAVEFORM_DEFAULT_COLOR, WAVEFORM_NAME_LIMIT, WAVEFORM_PROMPT_LIMIT,
   type AccountMode, type AccountUser, type FirebasePublicConfig, type Waveform, type WaveformInput,
@@ -31,6 +33,10 @@ type Options = {
   beforeAccountChange?: (owner: AccountUser) => Promise<boolean>;
   afterSignIn?: (request: Request, owner: AccountUser) => Promise<void>;
   afterWaveformSaved?: (request: Request, waveform: Waveform) => Promise<void>;
+  validateWaveform?: (request: Request, input: WaveformInput) => Promise<void>;
+  checkWaveform?: (request: Request, waveform: Waveform) => Promise<void>;
+  creationSafetyEnabled?: () => boolean;
+  safetyAdminFixture?: boolean;
   localDirectory?: string;
   development?: () => boolean;
   publicOrigin?: () => string | undefined;
@@ -48,7 +54,7 @@ const json = (body: object, status = 200, headers?: HeadersInit) => Response.jso
 const object = (value: unknown): Record<string, unknown> | null => value && typeof value === 'object'
   && !Array.isArray(value) ? value as Record<string, unknown> : null;
 
-async function readBody(request: Request, maxBytes = 20_000) {
+export async function readBody(request: Request, maxBytes = 20_000) {
   if (request.headers.get('content-type')?.split(';')[0] !== 'application/json' || !request.body) throw new Error('Invalid body');
   const length = request.headers.get('content-length');
   if (length && (!/^\d+$/.test(length) || Number(length) > maxBytes)) throw new Error('Invalid body');
@@ -80,7 +86,7 @@ async function readBody(request: Request, maxBytes = 20_000) {
 }
 
 function waveformInput(value: Record<string, unknown>): WaveformInput | null {
-  if (Object.keys(value).some(key => !['name', 'initialPrompt', 'voice', 'accentColor', 'profilePhoto', 'adminTesting'].includes(key))
+  if (Object.keys(value).some(key => !['name', 'initialPrompt', 'voice', 'accentColor', 'profilePhoto', 'adminTesting', 'textPanel'].includes(key))
     || typeof value.name !== 'string' || typeof value.initialPrompt !== 'string'
     || value.adminTesting !== undefined && typeof value.adminTesting !== 'boolean') return null;
   const voice = value.voice === undefined ? DEFAULT_VOICE : value.voice;
@@ -91,10 +97,13 @@ function waveformInput(value: Record<string, unknown>): WaveformInput | null {
     || profilePhoto !== null && !validProfilePhoto(profilePhoto)) return null;
   const name = value.name.trim();
   const initialPrompt = value.initialPrompt.trim();
+  const textPanel = validateTextPanelConfiguration(value.textPanel);
+  if (!textPanel.ok) return null;
   if (!name || name.length > WAVEFORM_NAME_LIMIT || /[\u0000-\u001f\u007f]/.test(name)
     || !initialPrompt || initialPrompt.length > WAVEFORM_PROMPT_LIMIT
     || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(initialPrompt)) return null;
   return { name, initialPrompt, voice, accentColor: accentColor.toLowerCase(), profilePhoto,
+    ...(value.textPanel !== undefined ? { textPanel: textPanel.value } : {}),
     ...(value.adminTesting !== undefined ? { adminTesting: value.adminTesting as boolean } : {}) };
 }
 
@@ -106,6 +115,7 @@ export function waveformRecord(value: unknown): Waveform | null {
     name: row.name, initialPrompt: row.initialPrompt, voice: row.voice,
     accentColor: row.accentColor, profilePhoto: row.profilePhoto,
     adminTesting: row.adminTesting,
+    textPanel: row.textPanel,
   });
   return input ? { id: row.id, ...input, updatedAt: row.updatedAt } : null;
 }
@@ -215,12 +225,18 @@ export function createAccountServer(options: Options = {}) {
     return identity && await identity.isCurrent() ? identity.owner : null;
   }
   function store() { return mode() === 'firebase' ? options.firebase! : localStore; }
-  async function resolveVoiceWaveform(request: Request, id?: string) {
+  async function resolveVoiceWaveform(request: Request, id?: string, purpose: 'admission' | 'cleanup' = 'admission') {
     const identity = await resolveIdentity(request);
     if (!identity) return null;
     const waveform = await (identity.mode === 'firebase' ? options.firebase! : localStore).readWaveform(identity.owner.uid);
+    if (waveform && options.checkWaveform && request.method !== 'DELETE' && purpose !== 'cleanup') {
+      try { await options.checkWaveform(request, waveform); } catch { return null; }
+    }
     return waveform && await identity.isCurrent() && (id === undefined || waveform.id === id)
-      ? { ownerUid: identity.owner.uid, waveform, accountSessionId: identity.accountSessionId, isCurrent: identity.isCurrent } : null;
+      ? { ownerUid: identity.owner.uid, waveform, accountSessionId: identity.accountSessionId,
+        isCurrent: options.checkWaveform && request.method !== 'DELETE' && purpose !== 'cleanup'
+          ? async () => { if (!await identity.isCurrent()) return false; try { await options.checkWaveform!(request, waveform); return true; } catch { return false; } }
+          : identity.isCurrent } : null;
   }
   async function resolveWaveform(request: Request, id?: string): Promise<Waveform | null> {
     return (await resolveVoiceWaveform(request, id))?.waveform ?? null;
@@ -275,6 +291,8 @@ export function createAccountServer(options: Options = {}) {
       const firebaseConfig = currentMode === 'firebase' ? options.firebaseConfig?.() : undefined;
       const autoFirebaseConfig = currentMode === 'firebase' && options.firebaseAutoConfig?.();
       return json({ mode: currentMode, user: await resolveOwner(request),
+        ...(options.creationSafetyEnabled?.() ? { creationSafetyEnabled: true } : {}),
+        ...(currentMode === 'local' && options.safetyAdminFixture ? { safetyAdminFixture: true } : {}),
         ...(options.openRegistration?.() ? { openRegistration: true } : {}),
         ...(firebaseConfig ? { firebaseConfig } : {}), ...(autoFirebaseConfig ? { autoFirebaseConfig: true } : {}) });
     },
@@ -285,9 +303,10 @@ export function createAccountServer(options: Options = {}) {
       try { body = await readBody(request); } catch { return json({ error: 'Invalid sign-in request.' }, 400); }
       let user: AccountUser, cookie: string;
       if (mode() === 'local') {
+        const safetyAdmin = body.localAccount === 'owner-admin' && options.safetyAdminFixture === true;
         if (Object.keys(body).length !== 1 || typeof body.localAccount !== 'string'
-          || !Object.hasOwn(localAccounts, body.localAccount)) return json({ error: 'Choose a local test account.' }, 400);
-        user = localAccounts[body.localAccount];
+          || !safetyAdmin && !Object.hasOwn(localAccounts, body.localAccount)) return json({ error: 'Choose a local test account.' }, 400);
+        user = safetyAdmin ? { uid: 'local-safety-admin', displayName: 'Test safety admin', role: 'admin' } : localAccounts[body.localAccount];
         cookie = randomBytes(32).toString('base64url');
       } else {
         if (Object.keys(body).some(key => key !== 'idToken' && key !== 'inviteCode')
@@ -358,13 +377,14 @@ export function createAccountServer(options: Options = {}) {
           }
         }
         if (!await identity.isCurrent()) return unauthorized();
+        await options.validateWaveform?.(request, input);
         const waveform = identity.mode === 'firebase'
           ? await options.firebase!.saveWaveform(identity.owner.uid, input, identity.accountSessionId)
           : await localStore.saveWaveform(identity.owner.uid, input);
         await options.afterWaveformSaved?.(request, waveform);
         return json({ waveform });
       }
-      catch (error) { return error instanceof AccountSessionInactiveError ? unauthorized()
+      catch (error) { return error instanceof CreationSafetyError ? json({ error: error.message }, error.status) : error instanceof AccountSessionInactiveError ? unauthorized()
         : json({ error: 'Your waveform could not be saved. Please try again.' }, 503); }
     },
   };

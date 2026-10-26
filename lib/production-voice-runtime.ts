@@ -7,6 +7,9 @@ import { activePaidAdminCall, previousPaidAdminCall } from './paid-voice-store';
 import { localAppOrigin, localFirebaseDatabase } from './local-app-runtime';
 import { scheduleLocalVoiceDeadline } from './local-voice-deadline';
 import { publicVoiceOwner } from './public-voice-identity';
+import { creationReviewStore, creationSafetyEnabled } from './creation-runtime';
+import { creationContentDigest, CreationSafetyError } from './creation-safety';
+import { waveformRecord } from './account-server';
 
 type AdminResolver = NonNullable<Parameters<typeof createVoiceServer>[0]>['resolveAdmin'];
 type Resolver = NonNullable<Parameters<typeof createVoiceServer>[0]>['resolveWaveform'];
@@ -36,7 +39,12 @@ export function getProductionVoiceServer(resolveWaveform?: Resolver, resolveAdmi
         const projectId = configuredFirebaseProjectId();
         if (!projectId) throw new Error('Firebase project is not configured');
         return getFirebaseAccountServices(projectId, process.env.FLOWPATH_FIREBASE_DATABASE_ID ?? '(default)').db;
-      }), Date.now, previousPaidAdminCall, activePaidAdminCall),
+      }), Date.now, previousPaidAdminCall, activePaidAdminCall, async (tx, owner) => {
+        if (!creationSafetyEnabled()) return;
+        const waveform = waveformRecord(await tx.get(`ownerWaveforms/${owner.ownerUid}`));
+        if (!waveform || waveform.id !== owner.waveformId || creationContentDigest(waveform) !== owner.contentDigest) throw new CreationSafetyError('Waveform content changed. Start again after its review.');
+        await creationReviewStore().requireAllowed(tx, owner.ownerUid, waveform);
+      }),
       policy: () => productionVoicePolicy(process.env),
       scheduleDeadline: local ? scheduleLocalVoiceDeadline : scheduleProductionVoiceDeadline,
     },

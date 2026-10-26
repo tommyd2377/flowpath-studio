@@ -1,6 +1,6 @@
 export type PaymentMode = 'creator' | 'intro' | 'visitor';
 export type PaymentSettings = { mode: PaymentMode; allowanceSeconds: number; budgetSeconds: number };
-export type PublicWaveform = { id: string; name: string; accentColor: string; profilePhoto: string | null };
+export type PublicWaveform = { id: string; name: string; accentColor: string; profilePhoto: string | null; textPanel?: import('./text-panel').TextPanelConfiguration | null };
 export type MinutePack = { id: string; seconds: number; amount: number; currency: 'usd'; priceId: string };
 
 export const DEFAULT_PACK: MinutePack = { id: 'minutes-15', seconds: 900, amount: 500, currency: 'usd', priceId: '' };

@@ -1,6 +1,6 @@
 # Creation safety core
 
-This lane implements a server-owned exact-content review state machine and a bounded admin queue. It does not activate enforcement, select a review model/provider, invoke paid APIs, or change existing account, publication or voice runtime behavior. Integration owns those endpoints and transaction hooks. The supplied evidence is synthetic, with no deployed or live moderation verification.
+This lane implements a server-owned exact-content review state machine and a bounded admin queue. The candidate wires it into the editor, direct save API, publication/public projection and voice admission behind explicit safety selection. It does not activate production enforcement, select a review model/provider or invoke paid APIs. See [candidate status](parallel-work/implementation.md). The supplied evidence is synthetic, with no deployed or live moderation verification.
 
 ## Content and policy binding
 

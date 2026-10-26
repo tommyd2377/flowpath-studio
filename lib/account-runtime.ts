@@ -3,8 +3,11 @@ import type { AccountMode, FirebasePublicConfig } from './account-model';
 import { configuredFirebaseProjectId, createFirebaseAccountAdapter } from './firebase-accounts';
 import type { createVoiceServer } from './voice-server';
 import { configuredPublicOrigin } from './request-origin';
-import { localAppOrigin } from './local-app-runtime';
+import { localAppOrigin, localAppPath } from './local-app-runtime';
 import { cancelProductionOwnerVoice } from './production-voice-runtime';
+import { creationActor, creationReviewStore, creationSafetyEnabled, creationSafetyFixtures } from './creation-runtime';
+import { applicationDatabase } from './application-database';
+import { CreationSafetyError } from './creation-safety';
 
 function firebaseConfig(): FirebasePublicConfig | undefined {
   if (process.env.FLOWPATH_ACCOUNT_MODE !== 'firebase' || process.env.FLOWPATH_FIRESTORE_EDITION !== 'standard'
@@ -32,6 +35,24 @@ const state = globalThis as typeof globalThis & {
 };
 export const accountServer = state.flowpathAccounts ??= createAccountServer({
   mode,
+  creationSafetyEnabled,
+  safetyAdminFixture: creationSafetyFixtures,
+  validateWaveform: async (request, waveform) => {
+    if (!creationSafetyEnabled()) {
+      if (waveform.textPanel) throw new CreationSafetyError('Text display is paused until safety review is available.', 503);
+      return;
+    }
+    const identity = await accountServer.resolveIdentity(request);
+    if (!identity) throw new Error('Sign in again');
+    const store = creationReviewStore(identity);
+    await applicationDatabase().transaction(async tx => { await store.requireAllowed(tx, creationActor(identity).uid, waveform); });
+  },
+  checkWaveform: async (request, waveform) => {
+    if (!creationSafetyEnabled()) return;
+    const identity = await accountServer.resolveIdentity(request);
+    if (!identity) throw new Error('Sign in again');
+    await applicationDatabase().transaction(async tx => { await creationReviewStore(identity).requireAllowed(tx, identity.owner.uid, waveform); });
+  },
   localDirectory: mode === 'local' ? process.env.FLOWPATH_ACCOUNT_FIXTURE_DIRECTORY : undefined,
   beforeAccountChange: async owner => {
     const paid = await import('./paid-runtime');
@@ -60,5 +81,10 @@ export const accountServer = state.flowpathAccounts ??= createAccountServer({
   trustedProxyHost: () => process.env.FLOWPATH_TRUSTED_PROXY_HOST,
   firebase: configuredFirebase ? createFirebaseAccountAdapter(
     projectId!, process.env.FLOWPATH_FIREBASE_DATABASE_ID ?? '(default)', undefined, process.env.FLOWPATH_PAID_TEST_ENABLED === '1',
+    async (tx, uid, input) => {
+      if (creationSafetyEnabled()) await creationReviewStore().requireAllowed(localAppOrigin() ? {
+        get: path => tx.get(localAppPath(path)), set: (path, value) => tx.set(localAppPath(path), value),
+      } : tx, uid, input);
+    },
   ) : undefined,
 });

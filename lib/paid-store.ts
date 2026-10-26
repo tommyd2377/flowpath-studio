@@ -148,6 +148,12 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now, options
       });
     },
     async publication(id: string) { return database.transaction(tx => read<Publication>(tx, wavePath(id))); },
+    async approvedPublication(id: string) {
+      return database.transaction(async tx => { const row = await read<Publication>(tx, wavePath(id));
+        if (row) await options.assertWaveformAllowed?.(tx, row.ownerUid, row.waveform);
+        return row;
+      });
+    },
     async publish(actor: PaidActor, waveform: Waveform, input: PaymentSettings, published: boolean, adminUnfunded = false) {
       const settings = paymentSettings(input, adminUnfunded || !published);
       if (!actor.uid) fail('Sign in to publish.', 401);

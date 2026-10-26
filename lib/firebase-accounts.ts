@@ -6,6 +6,8 @@ import { ACCOUNT_COOKIE_SECONDS, waveformRecord, type FirebaseAccountAdapter } f
 import type { AccountUser, Waveform } from './account-model';
 import { ACCOUNT_SESSION_COLLECTION, AccountSessionInactiveError, activeAccountSession, createDurableAccountSessions } from './production-account-session';
 import { InvitationRequiredError, createInvitationAccess } from './invitations';
+import type { VoiceTransaction } from './production-voice-store';
+import type { WaveformInput } from './account-model';
 
 export function configuredFirebaseProjectId(environment: Record<string, string | undefined> = process.env): string | undefined {
   let projectId: unknown = environment.FLOWPATH_FIREBASE_PROJECT_ID;
@@ -36,7 +38,8 @@ export function accountRole(claims: { email?: unknown; email_verified?: unknown;
 
 /** Dormant until explicit Firebase configuration; never initialized by fixtures. */
 export function createFirebaseAccountAdapter(projectId: string, databaseId: string,
-  services = () => getFirebaseAccountServices(projectId, databaseId), openRegistration = false): FirebaseAccountAdapter {
+  services = () => getFirebaseAccountServices(projectId, databaseId), openRegistration = false,
+  validateWaveform?: (tx: VoiceTransaction, uid: string, input: WaveformInput) => Promise<void>): FirebaseAccountAdapter {
   const durableSessions = () => createDurableAccountSessions(services().db);
   const invitations = () => createInvitationAccess(services().db, Date.now, openRegistration);
   const user = (claims: { uid: string; name?: unknown; email?: unknown; email_verified?: unknown; firebase?: { sign_in_provider?: string } }): AccountUser => ({
@@ -99,6 +102,8 @@ export function createFirebaseAccountAdapter(projectId: string, databaseId: stri
           id: existing?.id ?? randomUUID(),
           ...input, updatedAt: new Date().toISOString(),
         };
+        await validateWaveform?.({ get: async path => { const row = await transaction.get(db.doc(path)); return row.exists ? row.data()! : null; },
+          set: (path, value) => { transaction.set(db.doc(path), value); } }, uid, input);
         transaction.set(reference, waveform);
         return waveform;
       });

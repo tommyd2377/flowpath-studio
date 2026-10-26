@@ -3,15 +3,18 @@ import type { Firestore } from 'firebase-admin/firestore';
 import { ACCOUNT_SESSION_COLLECTION, activeAccountSession } from './production-account-session';
 import { VOICE_SESSION_SECONDS } from './voice-config';
 import { isPublicVoiceOwner, PUBLIC_VOICE_SECONDS } from './public-voice-identity';
+import { demoBudgets, type DemoBudgets } from './demo-budget';
 
 export type VoicePolicy = {
   ownerDailySeconds: number; globalDailySeconds: number; globalConcurrency: number;
   access: 'signed-in' | 'invite-only'; allowedUids: string[];
   publicDemoSeconds?: number;
+  demoBudgets?: DemoBudgets;
 };
 export type AdminVoice = { uid: string; accountSessionId: string; override: boolean; previousSessionId?: string; deadline?: number };
 export type VoiceOwner = { ownerUid: string; waveformId: string; accountSessionId: string; kind?: 'visitor'; admin?: AdminVoice;
-  paid?: { actor: { visitorId: string; uid?: string; accountSessionId?: string }; choice: 'creator' | 'self' } };
+  demoVisitorId?: string; contentDigest?: string;
+  paid?: { actor: { visitorId: string; uid?: string; accountSessionId?: string }; choice: 'creator' | 'self'; expectedContentDigest?: string } };
 export type StoredVoice = VoiceOwner & {
   id: string; state: 'creating' | 'active' | 'uncertain' | 'closed' | 'rejected';
   createdAt: number; expiresAt: number; canceled: boolean; providerId?: string; seconds?: number;
@@ -35,6 +38,13 @@ const count = (value: unknown) => typeof value === 'number' && Number.isSafeInte
 const day = (now: number) => new Date(now).toISOString().slice(0, 10);
 const reserved = (row: Record<string, unknown>, now: number) => row.day === day(now) ? count(row.reservedSeconds) : 0;
 const active = (row: Record<string, unknown>) => object(row.active);
+function validateDemoGuard(row: Record<string, unknown> | null, capacity: boolean) {
+  if (!row) return;
+  if (typeof row.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(row.day)
+    || !Number.isSafeInteger(row.reservedSeconds) || Number(row.reservedSeconds) < 0
+    || capacity && (!row.active || typeof row.active !== 'object' || Array.isArray(row.active)
+      || Object.values(row.active).some(state => !['creating', 'active', 'uncertain'].includes(String(state))))) throw new VoiceAdmissionError('Demo allowance is unavailable.', 503);
+}
 function stored(row: Record<string, unknown> | null): StoredVoice | null {
   if (!row) return null;
   if (['id', 'ownerUid', 'waveformId', 'accountSessionId'].some(key => typeof row[key] !== 'string' || !row[key])
@@ -76,8 +86,10 @@ export function productionVoicePolicy(env: Record<string, string | undefined>): 
     || !Number.isSafeInteger(globalDailySeconds) || ownerDailySeconds < VOICE_SESSION_SECONDS
     || globalDailySeconds < VOICE_SESSION_SECONDS || globalConcurrency < 1 || globalConcurrency > 20
     || !['signed-in', 'invite-only'].includes(access ?? '') || access === 'invite-only' && !allowedUids.length) return null;
+  const budgets = demoBudgets(env, { dailySeconds: globalDailySeconds, concurrency: globalConcurrency });
+  if (!budgets) return null;
   return { ownerDailySeconds, globalDailySeconds, globalConcurrency, access: access as VoicePolicy['access'], allowedUids,
-    ...(env.FLOWPATH_PUBLIC_DEMO_ENABLED === '1' ? { publicDemoSeconds: PUBLIC_VOICE_SECONDS } : {}) };
+    ...(env.FLOWPATH_PUBLIC_DEMO_ENABLED === '1' ? { publicDemoSeconds: PUBLIC_VOICE_SECONDS, demoBudgets: budgets } : {}) };
 }
 
 export function voiceReservationSeconds(owner: VoiceOwner, policy: VoicePolicy): number {
@@ -93,7 +105,8 @@ export function voiceReservationSeconds(owner: VoiceOwner, policy: VoicePolicy):
 /** Reservations never expire automatically: uncertain calls need confirmed provider closure. */
 export function createProductionVoiceStore(database: VoiceDatabase, now: () => number = Date.now,
   previousPaidCall?: (tx: VoiceTransaction, id: string) => Promise<StoredVoice | null>,
-  activePaidCall?: (tx: VoiceTransaction, uid: string) => Promise<boolean>) {
+  activePaidCall?: (tx: VoiceTransaction, uid: string) => Promise<boolean>,
+  assertContentAllowed?: (tx: VoiceTransaction, owner: VoiceOwner) => Promise<void>) {
   function check(owner: VoiceOwner, policy: VoicePolicy, auth: Record<string, unknown> | null,
     global: Record<string, unknown>, own: Record<string, unknown>) {
     const seconds = owner.admin?.override ? Math.min(VOICE_SESSION_SECONDS, Math.ceil(((owner.admin.deadline ?? now() + VOICE_SESSION_SECONDS * 1000) - now()) / 1000)) : voiceReservationSeconds(owner, policy);
@@ -113,7 +126,7 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
     }
     if (!owner.admin?.override && reserved(own, now()) + seconds > (visitor ? seconds : policy.ownerDailySeconds)) {
       throw new VoiceAdmissionError(visitor
-        ? 'This page’s three-minute demo has ended. Refresh the page to start another.'
+        ? 'Your three-minute demo allowance has ended. Please try again tomorrow.'
         : 'The daily voice allowance has been reached.', 429, true);
     }
   }
@@ -147,7 +160,24 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
     }
     validateGuards(global, own);
     check({ ...owner, ...(admin ? { admin } : {}) }, policy, auth, global ?? {}, own ?? {});
-    return { global: global ?? {}, own: own ?? {}, seconds, admin };
+    if (!isPublicVoiceOwner(owner)) await assertContentAllowed?.(tx, owner);
+    const demo = !owner.admin?.override && isPublicVoiceOwner(owner) && owner.demoVisitorId ? {
+      budgetPath: 'voiceDemoBudgets/studio', visitorPath: `voiceDemoVisitors/${hash(owner.demoVisitorId)}`,
+      budget: policy.demoBudgets?.studio ?? { dailySeconds: policy.globalDailySeconds, concurrency: policy.globalConcurrency, visitorDailySeconds: 180 },
+    } : null;
+    let demoGlobal: Record<string, unknown> | null = null, demoVisitor: Record<string, unknown> | null = null;
+    if (demo) {
+      const b = demo.budget;
+      if (!Number.isSafeInteger(b.dailySeconds) || b.dailySeconds < 0 || b.dailySeconds > policy.globalDailySeconds
+        || !Number.isSafeInteger(b.concurrency) || b.concurrency < 1 || b.concurrency > policy.globalConcurrency
+        || !Number.isSafeInteger(b.visitorDailySeconds) || b.visitorDailySeconds < 0 || b.visitorDailySeconds > 180) throw new VoiceAdmissionError('Demo limits are unavailable.', 503);
+      [demoGlobal, demoVisitor] = await Promise.all([tx.get(demo.budgetPath), tx.get(demo.visitorPath)]);
+      validateDemoGuard(demoGlobal, true); validateDemoGuard(demoVisitor, false);
+      if (reserved(demoGlobal ?? {}, now()) + seconds > demo.budget.dailySeconds
+        || Object.keys(active(demoGlobal ?? {})).length >= demo.budget.concurrency) throw new VoiceAdmissionError('The public demo budget is currently unavailable.', 429);
+      if (reserved(demoVisitor ?? {}, now()) + seconds > demo.budget.visitorDailySeconds) throw new VoiceAdmissionError('Your three-minute demo allowance has ended. Please try again tomorrow.', 429, true);
+    }
+    return { global: global ?? {}, own: own ?? {}, seconds, admin, demo, demoGlobal, demoVisitor };
   }
   async function finish(id: string, result: { finalized: boolean; seconds?: number; rejected?: boolean; providerId?: string }) {
     if (result.finalized && !result.rejected && (typeof result.seconds !== 'number' || !Number.isFinite(result.seconds) || result.seconds < 0)) {
@@ -160,6 +190,8 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
       const call = stored(await tx.get(callPath(id)));
       if (call?.providerId && result.providerId && call.providerId !== result.providerId) throw new Error('Provider identifier does not match');
       if (!call || call.state === 'closed' || call.state === 'rejected') return;
+      const demo = call.demoVisitorId ? await tx.get('voiceDemoBudgets/studio') : null;
+      validateDemoGuard(demo, true);
       const [global, own, adminOwner] = await Promise.all([tx.get(globalPath), tx.get(ownerPath(call.ownerUid)),
         call.admin ? tx.get(adminPath(call.admin.uid)) : Promise.resolve(null)]);
       validateGuards(global, own);
@@ -171,6 +203,7 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
         ...(result.finalized && !result.rejected ? { seconds: result.seconds } : {}),
       });
       tx.set(globalPath, { ...global, active: slots });
+      if (demo) { const demoSlots = { ...active(demo) }; if (result.finalized) delete demoSlots[id]; else demoSlots[id] = 'uncertain'; tx.set('voiceDemoBudgets/studio', { ...demo, active: demoSlots }); }
       if (call.admin && adminOwner?.active === id && result.finalized) tx.set(adminPath(call.admin.uid), { active: null });
       if (own?.active === id && result.finalized) tx.set(ownerPath(call.ownerUid), { ...own, active: null });
     });
@@ -183,7 +216,7 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
       return database.transaction(async tx => {
         const previous = await tx.get(callPath(id));
         if (previous) throw new VoiceAdmissionError('This conversation identifier has already been used.');
-        const { global, own, seconds, admin } = await admission(tx, owner, policy);
+        const { global, own, seconds, admin, demo, demoGlobal, demoVisitor } = await admission(tx, owner, policy);
         const call: StoredVoice = {
           ...owner, ...(admin ? { admin } : {}), id, state: 'creating', createdAt: now(),
           expiresAt: Math.min(now() + seconds * 1000, admin?.deadline ?? Infinity), canceled: false,
@@ -192,6 +225,10 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
         if (admin) tx.set(adminPath(admin.uid), { active: id });
         tx.set(globalPath, { day: day(now()), reservedSeconds: reserved(global, now()) + seconds, active: { ...active(global), [id]: 'creating' } });
         tx.set(ownerPath(owner.ownerUid), { day: day(now()), reservedSeconds: reserved(own, now()) + seconds, active: id });
+        if (demo) {
+          tx.set(demo.budgetPath, { day: day(now()), reservedSeconds: reserved(demoGlobal ?? {}, now()) + seconds, active: { ...active(demoGlobal ?? {}), [id]: 'creating' } });
+          tx.set(demo.visitorPath, { day: day(now()), reservedSeconds: reserved(demoVisitor ?? {}, now()) + seconds });
+        }
         return call;
       });
     },
@@ -213,6 +250,7 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
         if (!call || call.state !== 'creating' || call.canceled || call.expiresAt <= now()) return false;
         if (call.admin && !activeAccountSession(await tx.get(`${ACCOUNT_SESSION_COLLECTION}/${call.admin.accountSessionId}`), call.admin.uid, now())) return false;
         if (isPublicVoiceOwner(call)) return true;
+        await assertContentAllowed?.(tx, call);
         return activeAccountSession(await tx.get(`${ACCOUNT_SESSION_COLLECTION}/${call.accountSessionId}`), call.ownerUid, now());
       });
     },
@@ -229,7 +267,8 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
         return expired;
       });
     },
-    async cancel(ownerUid: string, waveformId: string | undefined, id?: string, accountSessionId?: string, kind?: 'visitor', policy?: VoicePolicy) {
+    async cancel(ownerUid: string, waveformId: string | undefined, id?: string, accountSessionId?: string, kind?: 'visitor', policy?: VoicePolicy, demoVisitorId?: string) {
+      if (demoVisitorId !== undefined && !/^[a-f0-9]{64}$/.test(demoVisitorId)) throw new VoiceAdmissionError('Invalid demo identity.', 403);
       if (kind !== undefined && !isPublicVoiceOwner({ ownerUid, waveformId, accountSessionId, kind })) {
         throw new VoiceAdmissionError('Invalid public voice identity.', 403);
       }
@@ -245,12 +284,17 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
             const canceled: StoredVoice = {
               id, ownerUid, waveformId, accountSessionId, state: 'rejected', canceled: true, createdAt: now(), expiresAt: now(),
               ...(kind ? { kind } : {}),
+              ...(demoVisitorId ? { demoVisitorId } : {}),
             };
             if (kind === 'visitor') {
               if (!policy || typeof policy.publicDemoSeconds !== 'number' || !Number.isSafeInteger(policy.publicDemoSeconds)
                 || policy.publicDemoSeconds < 1 || policy.publicDemoSeconds > VOICE_SESSION_SECONDS) return null;
               // An anonymous pre-cancel is a bounded attempt, just like creation.
               const allowance = await admission(tx, canceled, policy);
+              if (allowance.demo) {
+                tx.set(allowance.demo.budgetPath, { day: day(now()), reservedSeconds: reserved(allowance.demoGlobal ?? {}, now()) + allowance.seconds, active: active(allowance.demoGlobal ?? {}) });
+                tx.set(allowance.demo.visitorPath, { day: day(now()), reservedSeconds: reserved(allowance.demoVisitor ?? {}, now()) + allowance.seconds });
+              }
               tx.set(globalPath, {
                 day: day(now()), reservedSeconds: reserved(allowance.global, now()) + allowance.seconds,
                 active: active(allowance.global),

@@ -25,6 +25,8 @@ button { font: inherit; }
 [data-profile-photo="true"][data-connected="true"] .wordmark { opacity: 1; transform: translateY(var(--portrait-shift)); }
 [data-profile-photo="true"][data-connected="true"] .wave-control { transform: translate(-50%, -50%) translateY(var(--portrait-shift)); }
 .footer-position { padding: 18px 24px 28px; }
+.voice-text-panel { position: relative; width: min(calc(100% - 48px), 576px); margin: calc(50svh + 240px) auto 24px; padding-bottom: 24px; }
+[data-connected="true"] .voice-text-panel { margin-top: max(240px, calc(var(--logo-top) + 200px)); }
 .personal-footer { text-align: center; color: var(--muted, #a59e90); font-size: 11px; }
 .presented-by { color: var(--accent, #c5bba6); font-weight: 600; margin: 0 0 10px; }
 .social-links { display: flex; justify-content: center; gap: 12px; }

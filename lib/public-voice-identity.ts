@@ -6,6 +6,7 @@ export const PUBLIC_WAVEFORM_ID = '00000000-0000-4000-8000-000000000000';
 export const PUBLIC_VOICE_COOKIE = '__Host-flowpath_demo';
 export type PublicVoiceOwner = {
   kind: 'visitor'; ownerUid: string; waveformId: string; accountSessionId: string;
+  demoVisitorId?: string;
 };
 const validToken = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 const cookieName = (value: string) => value.slice(0, value.includes('=') ? value.indexOf('=') : value.length).trim();
@@ -16,7 +17,7 @@ function publicDemoId(request: Request): string | null | undefined {
     ? value.toLowerCase() : null;
 }
 
-/** A page-scoped browser identifier for public limits; it grants no account access. */
+/** Page scope retains cancellation authority; the stable cookie hash bounds refresh usage. */
 export function publicVoiceOwner(request: Request): PublicVoiceOwner | null {
   const demoId = publicDemoId(request);
   if (demoId === null) return null;
@@ -27,13 +28,15 @@ export function publicVoiceOwner(request: Request): PublicVoiceOwner | null {
   if (!validToken(token)) return null;
   // Missing page IDs retain the old identity so already-open clients can close safely.
   const accountSessionId = createHash('sha256').update(demoId ? `${token}:${demoId}` : token).digest('hex');
-  return { kind: 'visitor', ownerUid: `visitor:${accountSessionId}`, waveformId: PUBLIC_WAVEFORM_ID, accountSessionId };
+  return { kind: 'visitor', ownerUid: `visitor:${accountSessionId}`, waveformId: PUBLIC_WAVEFORM_ID, accountSessionId,
+    demoVisitorId: createHash('sha256').update(token).digest('hex') };
 }
 
 export function isPublicVoiceOwner(value: unknown): value is PublicVoiceOwner {
   if (!value || typeof value !== 'object') return false;
   const owner = value as Record<string, unknown>;
   return owner.kind === 'visitor' && validToken(owner.accountSessionId)
+    && (owner.demoVisitorId === undefined || validToken(owner.demoVisitorId))
     && owner.ownerUid === `visitor:${owner.accountSessionId}` && owner.waveformId === PUBLIC_WAVEFORM_ID;
 }
 

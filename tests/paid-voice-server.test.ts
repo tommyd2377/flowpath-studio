@@ -9,6 +9,18 @@ import { createVoiceDeadline } from '../lib/voice-deadline';
 import { paidFixture } from './paid-fixture';
 
 const sdp = 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n';
+test('a rejected pre-provider safety check releases its hold without creating an uncertain remote call', async () => {
+  const f = await fixture(), id = randomUUID();
+  let providerCalls = 0;
+  const server = createVoiceServer({ ...f.options,
+    production: { ...f.options.production, store: { ...f.options.production.store, mayStart: async () => { throw new Error('Review changed'); } } },
+    requestProvider: (async () => { providerCalls++; throw new Error('Must not create'); }) as typeof fetch,
+  });
+  assert.equal((await server.POST(f.req('POST', id))).status, 409);
+  assert.equal(providerCalls, 0);
+  assert.equal((await f.store.segment(id))?.state, 'rejected');
+  assert.equal((await f.store.publication(f.wave.id))?.held, 0);
+});
 async function fixture() {
   const f = paidFixture(); await f.credit(); await f.publish('intro', 900, 300);
   let finalize = true, duration = 12, scheduled = 0;

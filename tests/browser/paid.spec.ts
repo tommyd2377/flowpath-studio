@@ -3,11 +3,12 @@ import { expect, test, type Page } from '@playwright/test';
 test.beforeEach(async ({ context }) => {
   await context.route('**/*', route => ['127.0.0.1', 'localhost'].includes(new URL(route.request().url()).hostname) ? route.continue() : route.abort('blockedbyclient'));
 });
-async function createOwner(page: Page, mode: 'creator' | 'intro' | 'visitor' = 'creator', seconds = 300) {
+async function createOwner(page: Page, mode: 'creator' | 'intro' | 'visitor' = 'creator', seconds = 300, text?: string) {
   await page.goto('/account');
   await page.getByRole('button', { name: 'Use test owner A', exact: true }).click();
   await page.getByLabel('Waveform name', { exact: true }).fill(`Paid test ${mode}`);
   await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('Synthetic private instructions.');
+  if (text !== undefined) await page.getByLabel('Text below the waveform (optional)', { exact: true }).fill(text);
   await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
   await expect(page.getByText('Minutes and publishing', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Get a synthetic test pack', exact: true }).click();
@@ -24,6 +25,34 @@ async function createOwner(page: Page, mode: 'creator' | 'intro' | 'visitor' = '
   await expect(page.getByRole('link', { name: 'Open published experience' })).toBeVisible();
   return (await page.getByRole('link', { name: 'Open published experience' }).getAttribute('href'))!;
 }
+test('published approved text supports visitor reveal and creator updates without starting voice', async ({ page, browser }) => {
+  const text = 'Approved text: <img src=x onerror="window.panelAttack=true">';
+  const address = await createOwner(page, 'creator', 300, text);
+  const context = await browser.newContext({ baseURL: 'http://127.0.0.1:3226' });
+  await context.route('**/*', route => ['127.0.0.1', 'localhost'].includes(new URL(route.request().url()).hostname) ? route.continue() : route.abort('blockedbyclient'));
+  try {
+    const visitor = await context.newPage();
+    let starts = 0;
+    visitor.on('request', request => { if (request.method() === 'POST' && request.url().includes('/api/paid-session')) starts++; });
+    await visitor.goto(address);
+    await visitor.getByRole('button', { name: 'Continue with creator-funded time', exact: true }).click();
+    await visitor.getByRole('button', { name: 'Show text', exact: true }).click();
+    await expect(visitor.getByText(text, { exact: true })).toBeVisible();
+    expect(await visitor.evaluate(() => 'panelAttack' in window)).toBe(false);
+    const projection = await (await visitor.request.get(`/api/published?id=${address.slice(3)}`)).json();
+    expect(projection.waveform.textPanel.text).toBe(text);
+    expect(projection.waveform.initialPrompt).toBeUndefined();
+    await page.getByLabel('Text below the waveform (optional)', { exact: true }).fill('Updated approved creator text');
+    await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
+    await expect(page.locator('.account-status')).toContainText('Saved.');
+    await visitor.reload();
+    await visitor.getByRole('button', { name: 'Continue with creator-funded time', exact: true }).click();
+    await expect(visitor.getByRole('button', { name: 'Show text', exact: true })).toBeVisible();
+    await visitor.getByRole('button', { name: 'Show text', exact: true }).click();
+    await expect(visitor.getByText('Updated approved creator text', { exact: true })).toBeVisible();
+    expect(starts).toBe(0);
+  } finally { await context.close(); }
+});
 async function fakeMedia(page: Page) {
   await page.addInitScript(() => {
     const track = { enabled: true, onended: null, stop() {} };

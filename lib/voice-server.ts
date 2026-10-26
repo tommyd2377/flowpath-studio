@@ -2,6 +2,8 @@ import WebSocket from 'ws';
 import { PUBLIC_GREETING_INSTRUCTIONS, VOICE_SESSION_SECONDS, voiceSessionConfig, type WaveformPrompt } from './voice-config';
 import { isAllowedRequest } from './request-origin';
 import { VoiceAdmissionError, type ProductionVoiceStore, type StoredVoice, type VoiceOwner, type VoicePolicy } from './production-voice-store';
+import { creationContentDigest } from './creation-safety';
+import { serverAnalytics } from './analytics-runtime';
 
 type Socket = Pick<WebSocket, 'readyState' | 'send' | 'terminate'> & {
   on(event: 'open' | 'close' | 'error', listener: () => void): unknown;
@@ -296,6 +298,9 @@ export function createVoiceServer(options: Options = {}) {
       try { await options.production!.store.finish(session.id, { ...(result ?? { finalized: false }), providerId: session.providerId }); }
       catch { settled = false; /* Its durable reservation remains occupied until confirmed cleanup. */ }
     } else if (!result?.finalized) blocked = true;
+    if (result?.finalized && typeof result.seconds === 'number' && Number.isFinite(result.seconds) && result.seconds >= 0) {
+      serverAnalytics.record({ eventName: 'usage_observed', properties: { seconds: Math.ceil(result.seconds), evidence: 'provider_confirmed' } });
+    }
     release(session);
     return Boolean(result?.finalized && (!options.requireSettlement || settled));
   }
@@ -328,6 +333,7 @@ export function createVoiceServer(options: Options = {}) {
     if (access.visitor) return { ...access.visitor, ...(access.admin ? { admin: access.admin } : {}) };
     return access.personal?.accountSessionId && access.waveformId ? {
       ownerUid: access.personal.ownerUid, waveformId: access.waveformId, accountSessionId: access.personal.accountSessionId,
+      contentDigest: creationContentDigest(access.personal.waveform),
       ...(access.personal.paid ? { paid: access.personal.paid } : {}),
       ...(access.admin ? { admin: access.admin } : {}),
     } : null;
@@ -435,7 +441,12 @@ export function createVoiceServer(options: Options = {}) {
       const abort = () => { session.canceled = true; if (session.control) void close(session); };
       request.signal.addEventListener('abort', abort, { once: true });
       try {
-        if (session.durable && (request.signal.aborted || !await options.production!.store.mayStart(session.id))) {
+        let mayStart = !request.signal.aborted;
+        if (session.durable && mayStart) {
+          try { mayStart = await options.production!.store.mayStart(session.id); }
+          catch { mayStart = false; /* No provider request has been attempted, so this is not remote uncertainty. */ }
+        }
+        if (session.durable && !mayStart) {
           await options.production!.store.finish(session.id, { finalized: true, rejected: true });
           release(session);
           return json({ error: 'The conversation was canceled.' }, 409);
@@ -521,7 +532,7 @@ export function createVoiceServer(options: Options = {}) {
         if (!owner) return json({ error: accessMessage(access) }, 403);
         try {
           const call = await options.production.store.cancel(owner.ownerUid, owner.waveformId, body.sessionId,
-            owner.accountSessionId, owner.kind, options.production.policy() ?? undefined);
+            owner.accountSessionId, owner.kind, options.production.policy() ?? undefined, owner.demoVisitorId);
           const finalized = call ? await closeStored(call) : true;
           return finalized ? json({ closed: true }) : json({ closed: false, pending: true }, 202);
         } catch (error) { return failure(error); }
