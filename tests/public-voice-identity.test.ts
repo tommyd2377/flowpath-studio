@@ -121,3 +121,18 @@ test('cookie issuance is limited to enabled, same-origin, public readiness throu
   }, { ...options, trustedProxyHost: 'synthetic.run.app' });
   assert.ok(result.headers.get('set-cookie'));
 });
+
+test('explicit full local runtime issues the same visitor identity only on loopback readiness', async () => {
+  const req = new Request('http://localhost:3220/api/session', { headers: { host: 'localhost:3220' } });
+  const response = await withPublicVoiceVisitor(req, async prepared => {
+    assert.ok(isPublicVoiceOwner(publicVoiceOwner(prepared)));
+    return Response.json({ enabled: true });
+  }, { enabled: true, local: true });
+  assert.ok(response.headers.get('set-cookie')?.includes('HttpOnly'));
+  const remote = new Request('http://evil.example:3220/api/session', { headers: { host: 'evil.example:3220' } });
+  const rejected = await withPublicVoiceVisitor(remote, async prepared => {
+    assert.equal(publicVoiceOwner(prepared), null);
+    return Response.json({ enabled: false });
+  }, { enabled: true, local: true });
+  assert.equal(rejected.headers.get('set-cookie'), null);
+});

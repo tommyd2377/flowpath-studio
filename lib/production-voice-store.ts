@@ -9,7 +9,9 @@ export type VoicePolicy = {
   access: 'signed-in' | 'invite-only'; allowedUids: string[];
   publicDemoSeconds?: number;
 };
-export type VoiceOwner = { ownerUid: string; waveformId: string; accountSessionId: string; kind?: 'visitor' };
+export type AdminVoice = { uid: string; accountSessionId: string; override: boolean; previousSessionId?: string; deadline?: number };
+export type VoiceOwner = { ownerUid: string; waveformId: string; accountSessionId: string; kind?: 'visitor'; admin?: AdminVoice;
+  paid?: { actor: { visitorId: string; uid?: string; accountSessionId?: string }; choice: 'creator' | 'self' } };
 export type StoredVoice = VoiceOwner & {
   id: string; state: 'creating' | 'active' | 'uncertain' | 'closed' | 'rejected';
   createdAt: number; expiresAt: number; canceled: boolean; providerId?: string; seconds?: number;
@@ -20,10 +22,11 @@ export type VoiceTransaction = {
 };
 export type VoiceDatabase = { transaction<T>(work: (tx: VoiceTransaction) => Promise<T>): Promise<T> };
 export class VoiceAdmissionError extends Error {
-  constructor(message: string, readonly status = 409) { super(message); }
+  constructor(message: string, readonly status = 409, readonly normalLimit = status === 402) { super(message); }
 }
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const globalPath = 'voiceAdmission/global';
+const adminPath = (uid: string) => `voiceAdminOwners/${hash(uid)}`;
 const ownerPath = (uid: string) => `voiceOwners/${hash(uid)}`;
 const callPath = (id: string) => `voiceConversations/${id}`;
 const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value)
@@ -40,6 +43,12 @@ function stored(row: Record<string, unknown> | null): StoredVoice | null {
     || typeof row.expiresAt !== 'number' || !Number.isFinite(row.expiresAt) || typeof row.canceled !== 'boolean'
     || row.providerId !== undefined && (typeof row.providerId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(row.providerId))) {
     throw new Error('Invalid durable voice record');
+  }
+  if (row.admin !== undefined) {
+    const admin = object(row.admin);
+    if (typeof admin.uid !== 'string' || !admin.uid || typeof admin.accountSessionId !== 'string' || !admin.accountSessionId
+      || typeof admin.override !== 'boolean' || typeof admin.deadline !== 'number' || !Number.isFinite(admin.deadline)
+      || admin.deadline < row.expiresAt || admin.deadline > row.createdAt + VOICE_SESSION_SECONDS * 1000) throw new Error('Invalid durable admin record');
   }
   if (row.kind !== undefined && !isPublicVoiceOwner(row)) throw new Error('Invalid durable voice record');
   return row as StoredVoice;
@@ -82,10 +91,12 @@ export function voiceReservationSeconds(owner: VoiceOwner, policy: VoicePolicy):
 }
 
 /** Reservations never expire automatically: uncertain calls need confirmed provider closure. */
-export function createProductionVoiceStore(database: VoiceDatabase, now: () => number = Date.now) {
+export function createProductionVoiceStore(database: VoiceDatabase, now: () => number = Date.now,
+  previousPaidCall?: (tx: VoiceTransaction, id: string) => Promise<StoredVoice | null>,
+  activePaidCall?: (tx: VoiceTransaction, uid: string) => Promise<boolean>) {
   function check(owner: VoiceOwner, policy: VoicePolicy, auth: Record<string, unknown> | null,
     global: Record<string, unknown>, own: Record<string, unknown>) {
-    const seconds = voiceReservationSeconds(owner, policy);
+    const seconds = owner.admin?.override ? Math.min(VOICE_SESSION_SECONDS, Math.ceil(((owner.admin.deadline ?? now() + VOICE_SESSION_SECONDS * 1000) - now()) / 1000)) : voiceReservationSeconds(owner, policy);
     const visitor = isPublicVoiceOwner(owner);
     if (!visitor && !activeAccountSession(auth, owner.ownerUid, now())) throw new VoiceAdmissionError('Sign in again to continue.', 403);
     if (!visitor && policy.access === 'invite-only' && !policy.allowedUids.includes(owner.ownerUid)) {
@@ -95,23 +106,48 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
     if (own.active) throw new VoiceAdmissionError('Your previous conversation must close before starting another.');
     if (Object.keys(active(global)).length >= policy.globalConcurrency) throw new VoiceAdmissionError('All available voice connections are in use.');
     if (reserved(global, now()) + seconds > policy.globalDailySeconds) {
-      throw new VoiceAdmissionError('The daily voice allowance has been reached.', 429);
+      const remainingMinutes = Math.floor(Math.max(0, policy.globalDailySeconds - reserved(global, now())) / 60);
+      throw new VoiceAdmissionError(owner.admin?.override
+        ? `Today's shared test limit has ${remainingMinutes} minutes left. Starting this conversation needs a ${Math.ceil(seconds / 60)}-minute block, even if you end early.`
+        : 'The shared daily voice limit has been reached. Please try again tomorrow.', 429);
     }
-    if (reserved(own, now()) + seconds > (visitor ? seconds : policy.ownerDailySeconds)) {
+    if (!owner.admin?.override && reserved(own, now()) + seconds > (visitor ? seconds : policy.ownerDailySeconds)) {
       throw new VoiceAdmissionError(visitor
         ? 'This page’s three-minute demo has ended. Refresh the page to start another.'
-        : 'The daily voice allowance has been reached.', 429);
+        : 'The daily voice allowance has been reached.', 429, true);
     }
   }
   async function admission(tx: VoiceTransaction, owner: VoiceOwner, policy: VoicePolicy) {
-    const seconds = voiceReservationSeconds(owner, policy);
-    const [auth, global, own] = await Promise.all([
+    if (owner.paid) throw new VoiceAdmissionError('Paid sessions require the paid admission store.', 403);
+    let seconds = voiceReservationSeconds(owner, policy);
+    const [auth, global, own, adminAuth, previousRow, adminOwner, paidActive] = await Promise.all([
       isPublicVoiceOwner(owner) ? Promise.resolve(null) : tx.get(`${ACCOUNT_SESSION_COLLECTION}/${owner.accountSessionId}`),
       tx.get(globalPath), tx.get(ownerPath(owner.ownerUid)),
+      owner.admin ? tx.get(`${ACCOUNT_SESSION_COLLECTION}/${owner.admin.accountSessionId}`) : Promise.resolve(null),
+      owner.admin?.previousSessionId ? tx.get(callPath(owner.admin.previousSessionId)).then(async row => row ?? await previousPaidCall?.(tx, owner.admin!.previousSessionId!) ?? null) : Promise.resolve(null),
+      owner.admin ? tx.get(adminPath(owner.admin.uid)) : Promise.resolve(null),
+      owner.admin ? activePaidCall?.(tx, owner.admin.uid) ?? Promise.resolve(false) : Promise.resolve(false),
     ]);
+    let admin: AdminVoice | undefined;
+    if (owner.admin) {
+      if (adminOwner?.active || paidActive) throw new VoiceAdmissionError('Your previous conversation must close before starting another.');
+      if (!activeAccountSession(adminAuth, owner.admin.uid, now())) throw new VoiceAdmissionError('Sign in again to continue as admin.', 403);
+      let deadline = now() + VOICE_SESSION_SECONDS * 1000;
+      if (owner.admin.previousSessionId) {
+        const previous = stored(previousRow);
+        if (!owner.admin.override || !previous || previous.state !== 'closed'
+          || previous.admin?.uid !== owner.admin.uid || previous.admin.accountSessionId !== owner.admin.accountSessionId
+          || previous.ownerUid !== owner.ownerUid || previous.waveformId !== owner.waveformId
+          || !Number.isFinite(previous.admin.deadline)) throw new VoiceAdmissionError('The previous conversation must close before continuing as admin.', 409);
+        deadline = previous.admin.deadline!;
+      }
+      if (deadline <= now()) throw new VoiceAdmissionError('The overall 15-minute conversation limit has been reached.', 429);
+      admin = { ...owner.admin, deadline };
+      if (admin.override) seconds = Math.min(VOICE_SESSION_SECONDS, Math.ceil((deadline - now()) / 1000));
+    }
     validateGuards(global, own);
-    check(owner, policy, auth, global ?? {}, own ?? {});
-    return { global: global ?? {}, own: own ?? {}, seconds };
+    check({ ...owner, ...(admin ? { admin } : {}) }, policy, auth, global ?? {}, own ?? {});
+    return { global: global ?? {}, own: own ?? {}, seconds, admin };
   }
   async function finish(id: string, result: { finalized: boolean; seconds?: number; rejected?: boolean; providerId?: string }) {
     if (result.finalized && !result.rejected && (typeof result.seconds !== 'number' || !Number.isFinite(result.seconds) || result.seconds < 0)) {
@@ -124,7 +160,8 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
       const call = stored(await tx.get(callPath(id)));
       if (call?.providerId && result.providerId && call.providerId !== result.providerId) throw new Error('Provider identifier does not match');
       if (!call || call.state === 'closed' || call.state === 'rejected') return;
-      const [global, own] = await Promise.all([tx.get(globalPath), tx.get(ownerPath(call.ownerUid))]);
+      const [global, own, adminOwner] = await Promise.all([tx.get(globalPath), tx.get(ownerPath(call.ownerUid)),
+        call.admin ? tx.get(adminPath(call.admin.uid)) : Promise.resolve(null)]);
       validateGuards(global, own);
       const slots = { ...active(global ?? {}) };
       if (result.finalized) delete slots[id]; else slots[id] = 'uncertain';
@@ -134,6 +171,7 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
         ...(result.finalized && !result.rejected ? { seconds: result.seconds } : {}),
       });
       tx.set(globalPath, { ...global, active: slots });
+      if (call.admin && adminOwner?.active === id && result.finalized) tx.set(adminPath(call.admin.uid), { active: null });
       if (own?.active === id && result.finalized) tx.set(ownerPath(call.ownerUid), { ...own, active: null });
     });
   }
@@ -145,11 +183,13 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
       return database.transaction(async tx => {
         const previous = await tx.get(callPath(id));
         if (previous) throw new VoiceAdmissionError('This conversation identifier has already been used.');
-        const { global, own, seconds } = await admission(tx, owner, policy);
+        const { global, own, seconds, admin } = await admission(tx, owner, policy);
         const call: StoredVoice = {
-          ...owner, id, state: 'creating', createdAt: now(), expiresAt: now() + seconds * 1000, canceled: false,
+          ...owner, ...(admin ? { admin } : {}), id, state: 'creating', createdAt: now(),
+          expiresAt: Math.min(now() + seconds * 1000, admin?.deadline ?? Infinity), canceled: false,
         };
         tx.set(callPath(id), call);
+        if (admin) tx.set(adminPath(admin.uid), { active: id });
         tx.set(globalPath, { day: day(now()), reservedSeconds: reserved(global, now()) + seconds, active: { ...active(global), [id]: 'creating' } });
         tx.set(ownerPath(owner.ownerUid), { day: day(now()), reservedSeconds: reserved(own, now()) + seconds, active: id });
         return call;
@@ -171,6 +211,7 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
       return database.transaction(async tx => {
         const call = stored(await tx.get(callPath(id)));
         if (!call || call.state !== 'creating' || call.canceled || call.expiresAt <= now()) return false;
+        if (call.admin && !activeAccountSession(await tx.get(`${ACCOUNT_SESSION_COLLECTION}/${call.admin.accountSessionId}`), call.admin.uid, now())) return false;
         if (isPublicVoiceOwner(call)) return true;
         return activeAccountSession(await tx.get(`${ACCOUNT_SESSION_COLLECTION}/${call.accountSessionId}`), call.ownerUid, now());
       });
@@ -194,7 +235,8 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
       }
       return database.transaction(async tx => {
         const own = await tx.get(ownerPath(ownerUid));
-        const target = id ?? (typeof own?.active === 'string' ? own.active : undefined);
+        const adminOwner = !id && !waveformId ? await tx.get(adminPath(ownerUid)) : null;
+        const target = id ?? (typeof own?.active === 'string' ? own.active : typeof adminOwner?.active === 'string' ? adminOwner.active : undefined);
         if (!target) return null;
         const call = stored(await tx.get(callPath(target)));
         if (!call) {
@@ -222,7 +264,7 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
           }
           return null;
         }
-        if (call.ownerUid !== ownerUid || waveformId && call.waveformId !== waveformId) throw new VoiceAdmissionError('This conversation belongs to another waveform.', 403);
+        if (call.ownerUid !== ownerUid && !(waveformId === undefined && call.admin?.uid === ownerUid) || waveformId && call.waveformId !== waveformId) throw new VoiceAdmissionError('This conversation belongs to another waveform.', 403);
         if (call.state === 'closed' || call.state === 'rejected') return call;
         tx.set(callPath(target), { ...call, canceled: true });
         return { ...call, canceled: true };

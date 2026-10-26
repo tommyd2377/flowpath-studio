@@ -3,6 +3,7 @@ import type { AccountMode, FirebasePublicConfig } from './account-model';
 import { configuredFirebaseProjectId, createFirebaseAccountAdapter } from './firebase-accounts';
 import type { createVoiceServer } from './voice-server';
 import { configuredPublicOrigin } from './request-origin';
+import { localAppOrigin } from './local-app-runtime';
 import { cancelProductionOwnerVoice } from './production-voice-runtime';
 
 function firebaseConfig(): FirebasePublicConfig | undefined {
@@ -32,14 +33,32 @@ const state = globalThis as typeof globalThis & {
 export const accountServer = state.flowpathAccounts ??= createAccountServer({
   mode,
   localDirectory: mode === 'local' ? process.env.FLOWPATH_ACCOUNT_FIXTURE_DIRECTORY : undefined,
-  beforeAccountChange: owner => process.env.NODE_ENV === 'production'
-    ? cancelProductionOwnerVoice(owner.uid)
-    : state.flowpathVoiceServer?.cancelOwner(owner.uid) ?? Promise.resolve(true),
+  beforeAccountChange: async owner => {
+    const paid = await import('./paid-runtime');
+    if (paid.paidEnabled && !await (await import('./paid-voice-runtime')).cancelPaidOwnerVoice(owner.uid)) return false;
+    return process.env.NODE_ENV === 'production' || localAppOrigin() ? cancelProductionOwnerVoice(owner.uid)
+      : state.flowpathVoiceServer?.cancelOwner(owner.uid) ?? true;
+  },
+  afterSignIn: async (request, owner) => {
+    const paid = await import('./paid-runtime');
+    const visitor = (await import('./paid-http')).paidVisitor(request);
+    if (paid.paidEnabled && visitor) await paid.getPaidStore().link(visitor, owner.uid);
+  },
+  afterWaveformSaved: async (request, waveform) => {
+    const paid = await import('./paid-runtime');
+    if (!paid.paidEnabled) return;
+    const identity = await accountServer.resolveIdentity(request);
+    if (!identity) throw new Error('Account changed while saving');
+    const store = paid.getPaidStore();
+    await store.saveWaveform({ visitorId: (await import('./paid-http')).paidVisitor(request) ?? 'owner-save', uid: identity.owner.uid,
+      accountSessionId: identity.accountSessionId }, waveform);
+  },
   firebaseConfig,
   firebaseAutoConfig: autoFirebaseConfig,
+  openRegistration: () => process.env.FLOWPATH_PAID_TEST_ENABLED === '1',
   publicOrigin: () => process.env.FLOWPATH_PUBLIC_ORIGIN,
   trustedProxyHost: () => process.env.FLOWPATH_TRUSTED_PROXY_HOST,
   firebase: configuredFirebase ? createFirebaseAccountAdapter(
-    projectId!, process.env.FLOWPATH_FIREBASE_DATABASE_ID ?? '(default)',
+    projectId!, process.env.FLOWPATH_FIREBASE_DATABASE_ID ?? '(default)', undefined, process.env.FLOWPATH_PAID_TEST_ENABLED === '1',
   ) : undefined,
 });

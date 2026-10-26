@@ -27,7 +27,10 @@ type Options = {
   firebase?: FirebaseAccountAdapter;
   firebaseConfig?: () => FirebasePublicConfig | undefined;
   firebaseAutoConfig?: () => boolean;
+  openRegistration?: () => boolean;
   beforeAccountChange?: (owner: AccountUser) => Promise<boolean>;
+  afterSignIn?: (request: Request, owner: AccountUser) => Promise<void>;
+  afterWaveformSaved?: (request: Request, waveform: Waveform) => Promise<void>;
   localDirectory?: string;
   development?: () => boolean;
   publicOrigin?: () => string | undefined;
@@ -77,8 +80,9 @@ async function readBody(request: Request, maxBytes = 20_000) {
 }
 
 function waveformInput(value: Record<string, unknown>): WaveformInput | null {
-  if (Object.keys(value).some(key => !['name', 'initialPrompt', 'voice', 'accentColor', 'profilePhoto'].includes(key))
-    || typeof value.name !== 'string' || typeof value.initialPrompt !== 'string') return null;
+  if (Object.keys(value).some(key => !['name', 'initialPrompt', 'voice', 'accentColor', 'profilePhoto', 'adminTesting'].includes(key))
+    || typeof value.name !== 'string' || typeof value.initialPrompt !== 'string'
+    || value.adminTesting !== undefined && typeof value.adminTesting !== 'boolean') return null;
   const voice = value.voice === undefined ? DEFAULT_VOICE : value.voice;
   if (!isVoiceName(voice)) return null;
   const accentColor = value.accentColor === undefined ? WAVEFORM_DEFAULT_COLOR : value.accentColor;
@@ -90,7 +94,8 @@ function waveformInput(value: Record<string, unknown>): WaveformInput | null {
   if (!name || name.length > WAVEFORM_NAME_LIMIT || /[\u0000-\u001f\u007f]/.test(name)
     || !initialPrompt || initialPrompt.length > WAVEFORM_PROMPT_LIMIT
     || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(initialPrompt)) return null;
-  return { name, initialPrompt, voice, accentColor: accentColor.toLowerCase(), profilePhoto };
+  return { name, initialPrompt, voice, accentColor: accentColor.toLowerCase(), profilePhoto,
+    ...(value.adminTesting !== undefined ? { adminTesting: value.adminTesting as boolean } : {}) };
 }
 
 export function waveformRecord(value: unknown): Waveform | null {
@@ -100,6 +105,7 @@ export function waveformRecord(value: unknown): Waveform | null {
   const input = waveformInput({
     name: row.name, initialPrompt: row.initialPrompt, voice: row.voice,
     accentColor: row.accentColor, profilePhoto: row.profilePhoto,
+    adminTesting: row.adminTesting,
   });
   return input ? { id: row.id, ...input, updatedAt: row.updatedAt } : null;
 }
@@ -219,6 +225,13 @@ export function createAccountServer(options: Options = {}) {
   async function resolveWaveform(request: Request, id?: string): Promise<Waveform | null> {
     return (await resolveVoiceWaveform(request, id))?.waveform ?? null;
   }
+  async function resolveAdmin(request: Request) {
+    const identity = await resolveIdentity(request);
+    if (identity?.owner.role !== 'admin') return null;
+    const waveform = await store().readWaveform(identity.owner.uid);
+    return await identity.isCurrent() ? { uid: identity.owner.uid, accountSessionId: identity.accountSessionId,
+      isCurrent: identity.isCurrent, testing: waveform?.adminTesting === true } : null;
+  }
   const forbidden = () => json({ error: 'Only requests from this application are allowed.' }, 403);
   const unavailable = () => json({ error: 'Accounts are not enabled.' }, 503);
   const unauthorized = () => json({ error: 'Sign in to access your waveform.' }, 401);
@@ -255,13 +268,14 @@ export function createAccountServer(options: Options = {}) {
   const finishing = () => json({ error: 'Your previous conversation is still finishing. Please wait before changing accounts.' }, 503);
 
   return {
-    resolveOwner, resolveWaveform, resolveVoiceWaveform,
+    resolveOwner, resolveWaveform, resolveVoiceWaveform, resolveIdentity, resolveAdmin,
     async accountGET(request: Request) {
       if (!allowed(request, false)) return forbidden();
       const currentMode = mode();
       const firebaseConfig = currentMode === 'firebase' ? options.firebaseConfig?.() : undefined;
       const autoFirebaseConfig = currentMode === 'firebase' && options.firebaseAutoConfig?.();
       return json({ mode: currentMode, user: await resolveOwner(request),
+        ...(options.openRegistration?.() ? { openRegistration: true } : {}),
         ...(firebaseConfig ? { firebaseConfig } : {}), ...(autoFirebaseConfig ? { autoFirebaseConfig: true } : {}) });
     },
     async accountPOST(request: Request) {
@@ -287,6 +301,8 @@ export function createAccountServer(options: Options = {}) {
           : json({ error: 'Sign-in could not be verified. Please try again.' }, 401); }
       }
       if (!await canChangeAccount(request)) return finishing();
+      try { await options.afterSignIn?.(request, user); }
+      catch { return json({ error: 'Finish the previous conversation before linking this browser allowance.' }, 409); }
       if (mode() === 'firebase' && options.firebase?.sessions) {
         try { await options.firebase.sessions.create(cookie, user, now() + ACCOUNT_COOKIE_SECONDS * 1_000); }
         catch { return json({ error: 'Sign-in could not be completed. Please try again.' }, 503); }
@@ -329,6 +345,7 @@ export function createAccountServer(options: Options = {}) {
       let input: WaveformInput | null;
       try { input = waveformInput(await readBody(request, 200 * 1024)); } catch { input = null; }
       if (!input) return json({ error: `Use a name up to ${WAVEFORM_NAME_LIMIT} characters, instructions up to ${WAVEFORM_PROMPT_LIMIT} characters, a six-digit hex color and a PNG, JPEG or WebP photo up to 128 KB and 512 pixels.` }, 400);
+      if (input.adminTesting !== undefined && identity.owner.role !== 'admin') return json({ error: 'Admin access is required for testing mode.' }, 403);
       if (!await identity.isCurrent()) return unauthorized();
       try {
         if (input.profilePhoto !== null) {
@@ -344,6 +361,7 @@ export function createAccountServer(options: Options = {}) {
         const waveform = identity.mode === 'firebase'
           ? await options.firebase!.saveWaveform(identity.owner.uid, input, identity.accountSessionId)
           : await localStore.saveWaveform(identity.owner.uid, input);
+        await options.afterWaveformSaved?.(request, waveform);
         return json({ waveform });
       }
       catch (error) { return error instanceof AccountSessionInactiveError ? unauthorized()

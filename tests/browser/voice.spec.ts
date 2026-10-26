@@ -130,18 +130,20 @@ async function syntheticProfilePhoto(page: Page) {
   });
 }
 
-async function mockSession(page: Page, options: { enabled?: boolean; delayPost?: Promise<void>; durationMs?: number } = {}) {
-  const calls: { method: string; sessionId?: string; waveformId?: string; demoId?: string; diagnostics?: boolean }[] = [];
+async function mockSession(page: Page, options: { enabled?: boolean; delayPost?: Promise<void>; durationMs?: number; admin?: boolean; adminOverride?: boolean; adminDeadlineMs?: number } = {}) {
+  const calls: { method: string; sessionId?: string; waveformId?: string; demoId?: string; diagnostics?: boolean; admin?: string; previous?: string }[] = [];
   await page.route('**/api/session*', async route => {
     const method = route.request().method();
     const body = method === 'GET' ? null : route.request().postDataJSON();
     calls.push({ method, sessionId: body?.sessionId, waveformId: new URL(route.request().url()).searchParams.get('waveformId') ?? undefined,
+      admin: route.request().headers()['x-flowpath-admin'], previous: route.request().headers()['x-flowpath-continue'],
       demoId: route.request().headers()['x-flowpath-demo'], diagnostics: body?.diagnostics });
-    if (method === 'GET') await route.fulfill({ json: { enabled: options.enabled !== false, message: 'Voice is disabled for this local preview.' } });
+    if (method === 'GET') await route.fulfill({ json: { adminEligible: options.admin === true, enabled: options.enabled !== false, message: 'Voice is disabled for this local preview.' } });
     else if (method === 'DELETE') await route.fulfill({ status: 204 });
     else {
       await options.delayPost;
-      await route.fulfill({ json: { sessionId: body.sessionId, sdp: 'v=0\r\n', expiresAt: Date.now() + (options.durationMs ?? 900_000) } });
+      await route.fulfill({ json: { sessionId: body.sessionId, sdp: 'v=0\r\n', expiresAt: Date.now() + (options.durationMs ?? 900_000),
+        ...(options.admin ? { adminEligible: true, adminOverride: options.adminOverride === true, adminDeadline: Date.now() + (options.adminDeadlineMs ?? 900_000) } : {}) } });
     }
   });
   return calls;
@@ -673,10 +675,18 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
       await expect(page.locator(selector)).toHaveCSS('transition-duration', '0.8s');
       await expect(page.locator(selector)).toHaveCSS('transition-timing-function', 'ease-in-out');
     }
-    await expect(page.locator('.wordmark')).toHaveCSS('opacity', '0');
+    await expect(page.locator('.wordmark')).toHaveCSS('opacity', '1');
+    await expect(page.locator('.wordmark')).toHaveAttribute('aria-hidden', 'false');
+    const moving = await page.evaluate(() => ({ photo: document.querySelector('.profile-photo')!.getBoundingClientRect().y,
+      wave: document.querySelector('.wave-control')!.getBoundingClientRect().y }));
+    expect(Math.abs((moving.photo - identity.y) - (moving.wave - initial.y))).toBeLessThan(1);
+    await expect.poll(async () => Math.abs((await photo.boundingBox())!.y - 12)).toBeLessThan(1);
     await expect(page.locator('.voice-hint')).toHaveCSS('opacity', '0');
     const connected = (await wave.boundingBox())!;
-    expect(Math.abs(connected.y + connected.height / 2 - (identity.y + identity.height / 2))).toBeLessThan(1);
+    const connectedPhoto = (await photo.boundingBox())!;
+    expect(Math.abs((connectedPhoto.y - identity.y) - (connected.y - initial.y))).toBeLessThan(1);
+    expect(connectedPhoto.y + connectedPhoto.height).toBeLessThan(connected.y);
+    await expect(photo).toBeVisible();
     expect(connected.width).toBe(initial.width);
     expect(connected.height).toBe(initial.height);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
@@ -691,6 +701,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     expect(tinted).toBe(true);
     await page.screenshot({ path: `test-results/private-profile-${viewport.width}-connected.png` });
     await page.keyboard.press('Escape');
+    await expect.poll(async () => Math.abs((await photo.boundingBox())!.y - identity.y)).toBeLessThan(1);
     await expect(page.locator('.wordmark')).toHaveCSS('opacity', '1');
     await expect(page.locator('.voice-hint')).toHaveCSS('opacity', '1');
     const returned = (await wave.boundingBox())!;
@@ -719,6 +730,7 @@ test('a private profile remains accessible with reduced motion and an immediate 
   await page.goto(`/w/${waveformId}`);
   const photo = (await page.getByRole('img', { name: 'Reduced motion profile profile photo', exact: true }).boundingBox())!;
   const wave = page.locator('.wave-control');
+  const initial = (await wave.boundingBox())!;
   await wave.focus();
   await page.keyboard.press('Enter');
   await expect(page.locator('main')).toHaveAttribute('data-voice-phase', 'listening');
@@ -726,8 +738,78 @@ test('a private profile remains accessible with reduced motion and an immediate 
   await expect(page.locator('.wave-control')).toHaveCSS('transition-duration', '0s');
   await expect(page.locator('.voice-hint')).toHaveCSS('opacity', '0');
   const connected = (await wave.boundingBox())!;
-  expect(Math.abs(connected.y + connected.height / 2 - (photo.y + photo.height / 2))).toBeLessThan(1);
+  const connectedPhoto = (await page.locator('.profile-photo').boundingBox())!;
+  expect(Math.abs(connectedPhoto.y - 12)).toBeLessThan(1);
+  expect(Math.abs((connectedPhoto.y - photo.y) - (connected.y - initial.y))).toBeLessThan(1);
+  await expect(page.locator('.wordmark')).toHaveCSS('opacity', '1');
+  await expect(page.locator('.wordmark')).toHaveAttribute('aria-hidden', 'false');
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeFocused();
   await expect(page.locator('.wordmark')).toHaveCSS('opacity', '1');
+  expect(Math.abs((await page.locator('.profile-photo').boundingBox())!.y - photo.y)).toBeLessThan(1);
+});
+
+test('admin with testing off reaches the regular demo limit without a modal or automatic restart', async ({ page }) => {
+  await fakeMedia(page);
+  const calls = await mockSession(page, { durationMs: 1_100, admin: true });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect.poll(() => calls.filter(call => call.method === 'DELETE').length).toBe(1);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(calls.filter(call => call.method === 'POST')).toHaveLength(1);
+  expect((await tracker(page)).stoppedTracks).toBe(1);
+});
+
+test('admin with testing off keeps the normal silence limit', async ({ page }) => {
+  await page.clock.install();
+  await fakeMedia(page);
+  const calls = await mockSession(page, { admin: true });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await page.clock.fastForward(46_000);
+  await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(calls.filter(call => call.method === 'POST')).toHaveLength(1);
+});
+
+test('saved admin testing removes silence cutoff but still ends after 15 minutes without confirmation clicks', async ({ page }) => {
+  await page.clock.install();
+  await fakeMedia(page);
+  const calls = await mockSession(page, { admin: true, adminOverride: true });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await page.clock.fastForward(46_000);
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await page.clock.fastForward(854_001);
+  await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(calls.filter(call => call.method === 'POST')).toHaveLength(1);
+  expect(calls.some(call => call.admin || call.previous)).toBe(false);
+});
+
+test('ordinary users and the final 15-minute cap never offer an admin override', async ({ page }) => {
+  await fakeMedia(page);
+  const calls = await mockSession(page, { durationMs: 1_100 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect.poll(() => calls.filter(call => call.method === 'DELETE').length).toBe(1);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await mockSession(page, { durationMs: 1_100, admin: true, adminOverride: true, adminDeadlineMs: 1_100 });
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await emit(page, { type: 'session.closed' });
+  await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+
+test('a normal allowance denial stays visible without microphone permission or an admin modal', async ({ page }) => {
+  await fakeMedia(page);
+  await page.route('**/api/session*', route => route.fulfill({ json: { enabled: false, adminLimit: true, message: 'This page’s three-minute demo has ended.' } }));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('This page’s three-minute demo has ended.');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect((await tracker(page)).microphoneCalls).toBe(0);
 });

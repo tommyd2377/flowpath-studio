@@ -18,6 +18,8 @@ type Options = {
   closeMs?: number;
   connectMs?: number;
   maxStarts?: number;
+  connected?: (id: string) => Promise<void>;
+  requireSettlement?: boolean;
   publicOrigin?: string;
   trustedProxyHost?: string;
   production?: {
@@ -27,8 +29,10 @@ type Options = {
   };
   resolveWaveform?: (request: Request, id: string) => Promise<{
     ownerUid: string; waveform: WaveformPrompt; accountSessionId?: string; isCurrent: () => boolean | Promise<boolean>;
+    paid?: VoiceOwner['paid'];
   } | null>;
   resolvePublicVisitor?: (request: Request) => VoiceOwner | null;
+  resolveAdmin?: (request: Request) => Promise<{ uid: string; accountSessionId?: string; testing?: boolean; isCurrent: () => boolean | Promise<boolean> } | null>;
 };
 type Conversation = {
   id: string;
@@ -42,6 +46,7 @@ type Conversation = {
   ownerUid?: string;
   waveformId?: string;
   durable?: StoredVoice;
+  connected?: Promise<void>;
 };
 const MAX_BODY_BYTES = 65_536;
 const validId = (value: unknown): value is string => typeof value === 'string'
@@ -160,6 +165,10 @@ function attachControl(session: Conversation, options: Options, onFatal: () => v
       }
       if (closing) return;
       if (event.type === 'error') { fatal(); return; }
+      if (event.type === 'session.started' && options.connected && !session.connected) {
+        session.connected = options.connected(session.id);
+        void session.connected.catch(fatal);
+      }
       if ((event.type === 'session.started' || event.type === 'session.input_audio.append') && !greeted && !session.canceled) {
         greeted = true;
         clearTimeout(session.startTimer);
@@ -171,16 +180,24 @@ function attachControl(session: Conversation, options: Options, onFatal: () => v
         }));
       } else if (event.type === 'session.delegation.created') {
         const delegation = record(event.delegation);
-        if (delegation.target !== 'client' || typeof delegation.id !== 'string'
+        if (!['client', 'responses'].includes(String(delegation.target)) || typeof delegation.id !== 'string'
           || !/^[A-Za-z0-9_-]{1,200}$/.test(delegation.id)) throw new Error('Invalid delegation');
         if (handledDelegations.has(delegation.id)) return;
         if (handledDelegations.size >= 64) throw new Error('Too many delegations');
         handledDelegations.add(delegation.id);
+        // Managed Responses runs and returns its own result; do not replace it with the unavailable-tools reply.
+        if (delegation.target === 'responses') return;
         socket.send(JSON.stringify({
           type: 'session.commentary.append', event_id: `flowpath_unavailable_${handledDelegations.size}`,
           delegation_id: delegation.id,
           content: 'That capability is unavailable in this version. No lookup or action was performed. You can continue a conversation using my general knowledge.',
         }));
+      }
+      if (event.type === 'response.event') {
+        const backend = record(event.event);
+        const response = record(backend.response);
+        if (backend.type === 'error' || backend.type === 'response.failed' || backend.type === 'response.incomplete'
+          || backend.type === 'response.completed' && ['failed', 'incomplete'].includes(String(response.status))) fatal();
       }
       // Transcripts and reflected audio are deliberately neither retained nor logged.
     } catch { fatal(); }
@@ -200,26 +217,43 @@ export function createVoiceServer(options: Options = {}) {
   const maxStarts = options.maxStarts ?? 3;
   let attemptedStarts = 0;
   const recent = new Map<string, number>();
+  const adminWindows = new Map<string, { uid: string; waveformId?: string; deadline: number; closed: boolean }>();
   const cleanupMessage = 'The previous connection could not be confirmed closed. Check the local server before trying again.';
   const budgetMessage = 'This local test has reached its three-conversation limit.';
   const pausedMessage = options.production ? 'Live voice is paused while launch is configured.' : 'Live voice is paused for this local preview.';
 
   async function scope(request: Request) {
     const params = new URL(request.url).searchParams;
+    const override = request.headers.get('X-FlowPath-Admin');
+    const previousSessionId = request.headers.get('X-FlowPath-Continue');
+    if (override !== null && override !== 'continue' || previousSessionId !== null && (!validId(previousSessionId) || !override)) {
+      return { error: json({ error: 'Invalid admin continuation.' }, 400) };
+    }
+    const identity = await options.resolveAdmin?.(request);
+    if (override && (!identity?.testing || !await identity.isCurrent())) return { error: json({ error: 'Enable admin testing in your waveform settings first.' }, 403) };
+    if (!options.production && previousSessionId) {
+      const previous = adminWindows.get(previousSessionId);
+      if (!previous || previous.uid !== identity?.uid || previous.waveformId !== (params.get('waveformId') ?? undefined) || !previous.closed) {
+        return { error: json({ error: 'The previous conversation must close before continuing as admin.' }, 409) };
+      }
+      if (previous.deadline <= now()) return { error: json({ error: 'The overall 15-minute conversation limit has been reached.' }, 429) };
+    }
+    const admin = identity && await identity.isCurrent() ? { uid: identity.uid, accountSessionId: identity.accountSessionId ?? '',
+      override: identity.testing === true, ...(previousSessionId ? { previousSessionId } : {}) } : undefined;
     if ([...params.keys()].some(name => name !== 'waveformId') || params.getAll('waveformId').length > 1) {
       return { error: json({ error: 'Invalid waveform identifier.' }, 400) };
     }
     if (!params.has('waveformId')) {
       // A known visitor can still close an existing conversation after new starts are paused.
       const visitor = options.production ? options.resolvePublicVisitor?.(request) : null;
-      return { waveformId: undefined, personal: undefined, visitor: visitor?.kind === 'visitor' ? visitor : undefined };
+      return { waveformId: undefined, personal: undefined, visitor: visitor?.kind === 'visitor' ? visitor : undefined, admin, isAdminCurrent: identity?.isCurrent };
     }
     const id = params.get('waveformId');
     if (!validId(id)) return { error: json({ error: 'Invalid waveform identifier.' }, 400) };
     try {
       const personal = await options.resolveWaveform?.(request, id);
       if (!personal || !await personal.isCurrent()) return { error: json({ error: 'Sign in as this waveform’s owner to continue.' }, 403) };
-      return { waveformId: id, personal, visitor: undefined };
+      return { waveformId: id, personal, visitor: undefined, admin, isAdminCurrent: identity?.isCurrent };
     } catch { return { error: json({ error: 'Your waveform could not be loaded. Try again later.' }, 503) }; }
   }
 
@@ -245,6 +279,8 @@ export function createVoiceServer(options: Options = {}) {
       } catch { /* The fallback hangup still runs when sideband attachment fails. */ }
     }
     const result = await session.control?.close();
+    const window = adminWindows.get(session.id);
+    if (result?.finalized && window) window.closed = true;
     if (!result?.finalized && session.providerId) {
       // One best-effort fallback. A REST acknowledgment cannot confirm final usage.
       try {
@@ -254,12 +290,14 @@ export function createVoiceServer(options: Options = {}) {
         });
       } catch { /* Do not retry an uncertain remote teardown. */ }
     }
+    let settled = true;
     if (session.durable) {
+      await session.connected?.catch(() => undefined);
       try { await options.production!.store.finish(session.id, { ...(result ?? { finalized: false }), providerId: session.providerId }); }
-      catch { /* Its durable reservation remains occupied until confirmed cleanup. */ }
+      catch { settled = false; /* Its durable reservation remains occupied until confirmed cleanup. */ }
     } else if (!result?.finalized) blocked = true;
     release(session);
-    return result?.finalized ?? false;
+    return Boolean(result?.finalized && (!options.requireSettlement || settled));
   }
   function close(session: Conversation) {
     session.canceled = true;
@@ -287,17 +325,24 @@ export function createVoiceServer(options: Options = {}) {
   }
 
   function productionOwner(access: Awaited<ReturnType<typeof scope>>): VoiceOwner | null {
-    if (access.visitor) return access.visitor;
+    if (access.visitor) return { ...access.visitor, ...(access.admin ? { admin: access.admin } : {}) };
     return access.personal?.accountSessionId && access.waveformId ? {
       ownerUid: access.personal.ownerUid, waveformId: access.waveformId, accountSessionId: access.personal.accountSessionId,
+      ...(access.personal.paid ? { paid: access.personal.paid } : {}),
+      ...(access.admin ? { admin: access.admin } : {}),
     } : null;
   }
   const accessMessage = (access: Awaited<ReturnType<typeof scope>>) => !access.waveformId && options.production?.policy()?.publicDemoSeconds
     ? 'Allow cookies to try the public voice, then tap the waveform again.' : 'Sign in and open your waveform to talk.';
-  const failure = (error: unknown) => error instanceof VoiceAdmissionError
-    ? json({ error: error.message }, error.status) : json({ error: 'Voice admission is temporarily unavailable.' }, 503);
+  const failure = (error: unknown, admin = false) => error instanceof VoiceAdmissionError
+    ? json({ error: error.message, ...(admin && error.normalLimit ? { adminLimit: true } : {}) }, error.status) : json({ error: 'Voice admission is temporarily unavailable.' }, 503);
 
   return {
+    async cancelReservation(id: string, ownerUid: string, waveformId: string) {
+      if (!options.production || !validId(id)) return false;
+      try { const call = await options.production.store.cancel(ownerUid, waveformId, id); return call ? closeStored(call) : true; }
+      catch { return false; }
+    },
     async cancelOwner(ownerUid: string) {
       if (options.production) {
         try { const call = await options.production.store.cancel(ownerUid, undefined); return call ? closeStored(call) : true; }
@@ -327,14 +372,15 @@ export function createVoiceServer(options: Options = {}) {
         if (!policy) return json({ enabled: false, message: 'Live voice is paused while launch allowances are configured.' });
         if (access.visitor && !policy.publicDemoSeconds) return json({ enabled: false, message: 'Public voice is paused.' });
         try { await options.production.store.available(productionOwner(access)!, policy); }
-        catch (error) { return json({ enabled: false, message: error instanceof VoiceAdmissionError ? error.message : 'Voice admission is temporarily unavailable.' }); }
+        catch (error) { return json({ enabled: false, message: error instanceof VoiceAdmissionError ? error.message : 'Voice admission is temporarily unavailable.',
+          ...(error instanceof VoiceAdmissionError && error.normalLimit && access.admin && !access.admin.override ? { adminLimit: true } : {}) }); }
         const configured = Boolean(key());
-        return json({ enabled: configured, ...(!configured ? { message: 'The voice connection is not configured.' } : {}) });
+        return json({ enabled: configured, ...(access.admin ? { adminEligible: true } : {}), ...(!configured ? { message: 'The voice connection is not configured.' } : {}) });
       }
       if (blocked) return json({ enabled: false, message: cleanupMessage });
       if (active.size) return json({ enabled: false, message: 'A conversation is already open.' });
       if (attemptedStarts >= maxStarts) return json({ enabled: false, message: budgetMessage });
-      return key() ? json({ enabled: true, remainingStarts: maxStarts - attemptedStarts }) : json({ enabled: false, message: 'The voice connection is not configured.' });
+      return key() ? json({ enabled: true, ...(access.admin ? { adminEligible: true } : {}), remainingStarts: maxStarts - attemptedStarts }) : json({ enabled: false, message: 'The voice connection is not configured.' });
     },
     async POST(request: Request) {
       if (!isAllowedRequest(request, true, options.publicOrigin, options.trustedProxyHost)) return json({ error: 'Only same-origin requests are allowed.' }, 403);
@@ -362,6 +408,7 @@ export function createVoiceServer(options: Options = {}) {
       if (request.signal.aborted || recent.has(reservationKey(body.sessionId, owner?.ownerUid ?? access.personal?.ownerUid, access.waveformId))) return json({ error: 'The conversation was canceled or already used.' }, 409);
       // Auth/store reads and the streamed body can outlive sign-out in another tab.
       // Public admission also rechecks the durable lease inside its reservation transaction.
+      if (access.admin && !await access.isAdminCurrent?.()) return json({ error: 'Sign in again to continue as admin.' }, 403);
       if (access.personal && !await access.personal.isCurrent()) return json({ error: 'Sign in as this waveform’s owner to continue.' }, 403);
       // Recheck after reading the body so concurrent tabs cannot reserve two calls.
       if (blocked) return json({ error: cleanupMessage }, 503);
@@ -382,7 +429,7 @@ export function createVoiceServer(options: Options = {}) {
             await options.production.store.finish(session.id, { finalized: true, rejected: true });
             return json({ error: 'The voice deadline could not be scheduled. No conversation was started.' }, 503);
           }
-        } catch (error) { return failure(error); }
+        } catch (error) { return failure(error, access.admin?.override === false); }
       }
       active.set(session.id, session);
       const abort = () => { session.canceled = true; if (session.control) void close(session); };
@@ -417,7 +464,12 @@ export function createVoiceServer(options: Options = {}) {
         const providerId = record(payload.session).id;
         if (typeof providerId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(providerId)) throw new Error('Missing provider ID');
         session.providerId = providerId;
-        const expiresAt = session.durable?.expiresAt ?? now() + (options.sessionMs ?? VOICE_SESSION_SECONDS * 1000);
+        const previousWindow = access.admin?.previousSessionId ? adminWindows.get(access.admin.previousSessionId) : undefined;
+        const expiresAt = session.durable?.expiresAt ?? previousWindow?.deadline ?? now() + (options.sessionMs ?? VOICE_SESSION_SECONDS * 1000);
+        if (access.admin && !options.production) {
+          for (const [id, window] of adminWindows) if (window.deadline <= now()) adminWindows.delete(id);
+          adminWindows.set(session.id, { uid: access.admin.uid, waveformId: access.waveformId, deadline: expiresAt, closed: false });
+        }
         if (session.durable) {
           const canceled = await options.production!.store.created(session.id, providerId, expiresAt);
           session.canceled ||= canceled;
@@ -428,17 +480,21 @@ export function createVoiceServer(options: Options = {}) {
         session.startTimer.unref?.();
         session.control = attachControl(session, options, () => { void close(session); });
         await session.control.ready;
-        void session.control.closed.then(result => {
+        void session.control.closed.then(async result => {
+          await session.connected?.catch(() => undefined);
+          const window = adminWindows.get(session.id);
+          if (result.finalized && window) window.closed = true;
           if (result.finalized && session.durable) void options.production!.store.finish(session.id, { ...result, providerId: session.providerId }).then(() => release(session)).catch(() => { release(session); });
           else if (result.finalized) release(session);
           else void close(session);
         });
-        const canceled = session.canceled || request.signal.aborted || access.personal && !await access.personal.isCurrent();
+        const canceled = session.canceled || request.signal.aborted || access.admin && !await access.isAdminCurrent?.() || access.personal && !await access.personal.isCurrent();
         if (canceled || !audioSdp(record(payload.transport).sdp)) {
           await close(session);
           return json({ error: canceled ? 'The conversation was canceled.' : 'The voice service returned an invalid connection.' }, canceled ? 409 : 502);
         }
-        return json({ sdp: record(payload.transport).sdp, sessionId: session.id, expiresAt }, 201);
+        return json({ sdp: record(payload.transport).sdp, sessionId: session.id, expiresAt,
+          ...(access.admin ? { adminEligible: true, adminOverride: access.admin.override, adminDeadline: session.durable?.admin?.deadline ?? expiresAt } : {}) }, 201);
       } catch {
         if (session.providerId) await close(session);
         else {

@@ -151,7 +151,7 @@ test('prompt validation rejects oversized bodies, owner fields, invalid content 
     { ...input, name: ' ' },
     { ...input, name: 'a'.repeat(81) },
     { ...input, initialPrompt: '' },
-    { ...input, initialPrompt: 'a'.repeat(4_001) },
+    { ...input, initialPrompt: 'a'.repeat(8_001) },
     { ...input, initialPrompt: 'a'.repeat(21_000) },
     { ...input, name: 'Hidden\u0000text' },
     { ...input, initialPrompt: 'Hidden\u0000text' },
@@ -375,4 +375,20 @@ test('storage failures return a bounded generic error without exposing provider 
     assert.equal(response.status, 503);
     assert.equal((await response.text()).includes('Private provider detail'), false);
   }
+});
+
+test('an 8,000-character prompt survives save/read exactly and oversize requests never replace it', async t => {
+  const { server, signIn } = await harness(t);
+  const cookie = await signIn();
+  const prompt = `${'x'.repeat(7983)}COMPLETE ENDING!!`;
+  assert.equal(prompt.length, 8000);
+  const response = await server.waveformPUT(request('waveform', 'PUT', { ...input, initialPrompt: prompt }, cookie));
+  assert.equal(response.status, 200);
+  const saved = (await response.json()).waveform;
+  assert.equal(saved.initialPrompt, prompt);
+  const oversized = await server.waveformPUT(request('waveform', 'PUT', { ...input, initialPrompt: `${prompt}x` }, cookie));
+  assert.equal(oversized.status, 400);
+  assert.match((await oversized.json()).error, /8[,.]?000/);
+  const read = await (await server.waveformGET(request('waveform', 'GET', undefined, cookie))).json();
+  assert.equal(read.waveform.id, saved.id); assert.equal(read.waveform.initialPrompt, prompt);
 });

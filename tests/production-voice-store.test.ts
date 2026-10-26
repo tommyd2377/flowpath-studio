@@ -619,3 +619,76 @@ test('paused public demos create no unknown cancellation tombstones while known 
   assert.equal(known?.canceled, true);
   assert.equal(known?.state, 'creating');
 });
+
+test('admin sees the ordinary public limit, then explicitly continues within the original 15 minutes across instances', async () => {
+  let clock = start;
+  const db = database(owner('admin'));
+  const regular = { ...visitor(), admin: { uid: owner('admin').ownerUid, accountSessionId: owner('admin').accountSessionId, override: false } };
+  const first = createProductionVoiceStore(db, () => clock);
+  const call = await first.reserve(regular, 'normal-demo', publicPolicy);
+  assert.equal(call.expiresAt, start + 180_000);
+  assert.equal(call.admin?.deadline, start + 900_000);
+  const admin = { ...regular, admin: { ...regular.admin, override: true, previousSessionId: call.id } };
+  await assert.rejects(first.reserve(admin, 'too-soon', publicPolicy), /previous conversation must close/);
+  await first.created(call.id, 'synthetic_provider', call.expiresAt);
+  await first.finish(call.id, { finalized: true, seconds: 180 });
+  clock += 180_000;
+  await assert.rejects(first.available(regular, publicPolicy), admissionError(429, /three-minute/));
+  const restarted = createProductionVoiceStore(db, () => clock);
+  const continuation = await restarted.reserve(admin, 'admin-continuation', publicPolicy);
+  assert.equal(continuation.expiresAt, start + 900_000);
+  await restarted.created(continuation.id, 'synthetic_admin', continuation.expiresAt);
+  await restarted.finish(continuation.id, { finalized: true, seconds: 720 });
+  clock = start + 900_000;
+  await assert.rejects(restarted.reserve({ ...admin, admin: { ...admin.admin, previousSessionId: continuation.id } }, 'past-cap', publicPolicy), /overall 15-minute/);
+});
+
+test('admin continuation remains bound to its account, waveform and confirmed cleanup; global guards still apply', async () => {
+  const db = database(owner('a'), owner('b'));
+  const store = createProductionVoiceStore(db, () => start);
+  const regular = { ...owner('a'), admin: { uid: owner('a').ownerUid, accountSessionId: owner('a').accountSessionId, override: false } };
+  const call = await store.reserve(regular, 'initial-admin', policy);
+  await store.finish(call.id, { finalized: true, seconds: 1 });
+  const admin = { ...regular, admin: { ...regular.admin, override: true, previousSessionId: call.id } };
+  await assert.rejects(store.reserve({ ...admin, waveformId: 'another-waveform' }, 'other-wave', policy), /previous conversation/);
+  await assert.rejects(store.reserve({ ...owner('b'), admin: { ...admin.admin, uid: owner('b').ownerUid, accountSessionId: owner('b').accountSessionId } }, 'other-account', policy), /previous conversation/);
+  await assert.rejects(store.reserve(admin, 'global-cap', { ...policy, globalDailySeconds: 900 }), /shared test limit.*15-minute block/);
+  await assert.rejects(store.reserve({ ...admin, admin: { ...admin.admin, accountSessionId: 'revoked' } }, 'revoked-admin', policy), /Sign in again/);
+});
+
+test('admin budget messages explain a partial block without refunding or resetting reservations', async () => {
+  const a = owner('admin');
+  const admin = { ...a, admin: { uid: a.ownerUid, accountSessionId: a.accountSessionId, override: true } };
+  const db = database(a);
+  await db.transaction(async tx => { tx.set('voiceAdmission/global', { day: new Date(start).toISOString().slice(0, 10), reservedSeconds: 3060, active: {} }); });
+  const store = createProductionVoiceStore(db, () => start);
+  const bounded = { ...policy, globalDailySeconds: 3600 };
+  const before = db.snapshot();
+  await assert.rejects(store.available(admin, bounded), admissionError(429, /9 minutes left.*15-minute block.*even if you end early/));
+  await assert.rejects(store.reserve(admin, 'does-not-fit', bounded), admissionError(429));
+  assert.deepEqual(db.snapshot(), before);
+  const call = await store.reserve(admin, 'fits-approved-budget', { ...bounded, globalDailySeconds: 7200 });
+  assert.equal(call.expiresAt, start + 900_000);
+  const global = db.snapshot().find(([path]) => path === 'voiceAdmission/global')![1];
+  assert.equal(global.reservedSeconds, 3960, 'the old reservations remain intact');
+});
+
+test('sign-out can cancel the founder homepage session and revoked admin sessions cannot reach the provider', async () => {
+  const adminOwner = owner('admin');
+  const db = database(adminOwner);
+  const store = createProductionVoiceStore(db, () => start);
+  const regular = { ...visitor(), admin: { uid: adminOwner.ownerUid, accountSessionId: adminOwner.accountSessionId, override: false } };
+  const call = await store.reserve(regular, 'founder-home', publicPolicy);
+  const canceled = await store.cancel(adminOwner.ownerUid, undefined);
+  assert.equal(canceled?.id, call.id);
+  assert.equal(canceled?.canceled, true);
+  assert.equal(await store.mayStart(call.id), false);
+  await store.finish(call.id, { finalized: true, rejected: true });
+  const pending = await store.reserve(regular, 'new-founder-home', publicPolicy).catch(() => null);
+  // The public page's allowance remains consumed after cancellation.
+  assert.equal(pending, null);
+  const anotherPage = { ...visitor('b'), admin: regular.admin };
+  const next = await store.reserve(anotherPage, 'revoked-after-admission', publicPolicy);
+  await db.transaction(async tx => { tx.set(accountPath(adminOwner), { uid: adminOwner.ownerUid, state: 'revoked', expiresAt: start + 900_000 }); });
+  assert.equal(await store.mayStart(next.id), false);
+});

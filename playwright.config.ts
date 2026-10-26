@@ -10,6 +10,7 @@ const accountFixtures = mkdtempSync(join(tmpdir(), 'flowpath-accounts-browser-')
 
 export default defineConfig({
   testDir: './tests/browser',
+  testIgnore: 'paid.spec.ts',
   fullyParallel: false,
   workers: 1,
   use: { baseURL: 'http://127.0.0.1:3225', browserName: 'chromium', launchOptions: { executablePath }, trace: 'retain-on-failure' },

@@ -85,6 +85,46 @@ function firebaseFixture() {
   return { server, options, signIn, rows, records };
 }
 
+test('admin testing persists across instances and every read/write rechecks the verified role', async () => {
+  const f = firebaseFixture();
+  let admin = true;
+  const base = f.options.firebase;
+  const firebase: FirebaseAccountAdapter = { ...base,
+    async signIn(...args) { const result = await base.signIn(...args); return { ...result, user: { ...result.user, ...(admin ? { role: 'admin' as const } : {}) } }; },
+    async authenticate(cookie) { const owner = await base.authenticate(cookie); return owner ? { ...owner, ...(admin ? { role: 'admin' as const } : {}) } : null; },
+  };
+  const options = { ...f.options, firebase };
+  const server = createAccountServer(options);
+  const login = await server.accountPOST(request('account', 'POST', { idToken: 'synthetic.id.token' }));
+  const cookie = login.headers.get('set-cookie')!.split(';')[0];
+  assert.equal((await server.waveformPUT(request('waveform', 'PUT', { ...input, adminTesting: true }, cookie))).status, 200);
+  const saved = await server.resolveWaveform(request('waveform', 'GET', undefined, cookie));
+  assert.equal(saved?.adminTesting, true);
+  const fresh = createAccountServer(options);
+  assert.equal((await fresh.resolveAdmin(request('account', 'GET', undefined, cookie)))?.testing, true);
+  admin = false;
+  assert.equal(await fresh.resolveAdmin(request('account', 'GET', undefined, cookie)), null);
+  for (const adminTesting of [true, false]) assert.equal((await fresh.waveformPUT(request('waveform', 'PUT', { ...input, adminTesting }, cookie))).status, 403);
+  assert.deepEqual(await fresh.resolveWaveform(request('waveform', 'GET', undefined, cookie)), saved);
+  admin = true;
+  assert.equal((await fresh.waveformPUT(request('waveform', 'PUT', { ...input, adminTesting: false }, cookie))).status, 200);
+  assert.equal((await fresh.resolveAdmin(request('account', 'GET', undefined, cookie)))?.testing, false);
+  assert.equal((await fresh.resolveWaveform(request('waveform', 'GET', undefined, cookie)))?.id, saved?.id);
+  assert.equal((await fresh.waveformPUT(request('waveform', 'PUT', { ...input, adminTesting: 'true' }, cookie))).status, 400);
+});
+
+test('paid test registration admits verified new accounts without invitations while disabled memberships remain blocked', async () => {
+  const { db, rows } = fakeDatabase();
+  const closed = createInvitationAccess(db, () => 100_000);
+  assert.equal(await closed.admit('new-listener'), false);
+  const open = createInvitationAccess(db, () => 100_000, true);
+  assert.equal(await open.admit('new-listener'), true);
+  assert.equal(await open.isMember('new-listener'), true);
+  rows.set(`${MEMBERS_COLLECTION}/disabled-listener`, { state: 'disabled' });
+  assert.equal(await open.admit('disabled-listener'), false);
+  assert.equal(await open.admit('another-listener', 'invalid-invitation'), false);
+});
+
 test('production requires explicit HTTPS origin and durable Firebase sessions; fixtures remain local', async () => {
   const { server, options } = firebaseFixture();
   for (const publicOrigin of [undefined, 'http://flowpath.studio', 'https://flowpath.studio/path', 'https://user:pass@flowpath.studio']) {
@@ -393,4 +433,15 @@ test('verified Firebase identities cannot receive an application cookie before i
   for (const value of [null, 2, {}, 'x'.repeat(65)]) {
     assert.equal((await server.accountPOST(request('account', 'POST', { idToken: 'synthetic.id.token', inviteCode: value }))).status, 400);
   }
+});
+
+test('only the verified founder Google claims grant admin, regardless of browser display name', async () => {
+  const { accountRole } = await import('../lib/firebase-accounts');
+  const claims = { email: 'TomDevito27@gmail.com', email_verified: true, firebase: { sign_in_provider: 'google.com' } };
+  assert.equal(accountRole(claims), 'admin');
+  for (const value of [
+    { ...claims, email: 'another@gmail.com' }, { ...claims, email: undefined },
+    { ...claims, email_verified: false }, { ...claims, email_verified: 'true' },
+    { ...claims, firebase: { sign_in_provider: 'password' } }, { ...claims, firebase: undefined },
+  ]) assert.equal(accountRole(value), undefined);
 });

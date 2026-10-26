@@ -189,7 +189,7 @@ test('Next normalized loopback URLs retain the browser host origin and exact por
   assert.equal((await server.GET(new Request('http://localhost:3225/api/session', { headers }))).status, 403);
 });
 
-test('create sends one audio-only GPT-Live request with no backend, tools, or history', async () => {
+test('create sends one audio-only GPT-Live request with managed reasoning and no external tools or history', async () => {
   const now = 100_000;
   const { server, calls, sockets } = harness({ now: () => now });
   const sessionId = randomUUID();
@@ -205,7 +205,8 @@ test('create sends one audio-only GPT-Live request with no backend, tools, or hi
   assert.deepEqual(JSON.parse(String(calls[0].options.body)), {
     session: voiceSessionConfig(), transport: { type: 'webrtc', sdp },
   });
-  assert.deepEqual(voiceSessionConfig().delegation, { type: 'client' });
+  assert.equal(voiceSessionConfig().delegation.type, 'responses');
+  assert.deepEqual(voiceSessionConfig().delegation.responses.tools, []);
   assert.deepEqual(voiceSessionConfig().client.data_channel.allowed_client_events, ['session.close']);
   sockets[0].event({ type: 'session.started' });
   sockets[0].event({ type: 'session.started' });
@@ -359,4 +360,36 @@ test('a failed REST teardown stays blocked and is not automatically retried', as
   await server.DELETE(request('DELETE', { sessionId }));
   assert.equal(creates, 1);
   assert.equal(hangups, 1);
+});
+
+
+test('managed reasoning delegation is left to Responses without an unavailable reply or duplicate application request', async () => {
+  const { server, calls, sockets } = harness();
+  const sessionId = randomUUID();
+  await server.POST(request('POST', { sessionId, sdp }));
+  const delegated = { type: 'session.delegation.created', delegation: { id: 'reasoning_task', target: 'responses', response_id: 'resp_synthetic' } };
+  sockets[0].event(delegated); sockets[0].event(delegated);
+  sockets[0].event({ type: 'response.event', delegation_id: 'reasoning_task', event: { type: 'response.completed', response: { status: 'completed' } } });
+  await tick();
+  assert.equal(sockets[0].sent.length, 0);
+  assert.equal(calls.length, 1, 'the provider manages reasoning; the app creates no extra Responses request');
+  assert.equal((await server.DELETE(request('DELETE', { sessionId }))).status, 200);
+});
+
+test('a failed or incomplete reasoning response closes cleanly without an automatic retry or expensive fallback', async () => {
+  for (const backend of [
+    { type: 'response.failed', response: { status: 'failed' } },
+    { type: 'response.incomplete', response: { status: 'incomplete' } },
+    { type: 'response.completed', response: { status: 'incomplete' } },
+    { type: 'error', error: { message: 'Synthetic backend rejection' } },
+  ]) {
+    const { server, calls, sockets } = harness();
+    const sessionId = randomUUID();
+    await server.POST(request('POST', { sessionId, sdp }));
+    sockets[0].event({ type: 'response.event', delegation_id: 'reasoning_task', event: backend });
+    await tick();
+    assert.ok(sockets[0].sent.some(event => event.type === 'session.close'));
+    assert.equal(calls.length, 1);
+    assert.equal((await server.DELETE(request('DELETE', { sessionId }))).status, 200);
+  }
 });

@@ -28,12 +28,19 @@ export function supportedAccountClaims(claims: { firebase?: { sign_in_provider?:
     || claims.firebase?.sign_in_provider === 'password' && claims.email_verified === true;
 }
 
+/** Derived only from Firebase-verified claims, never from browser profile fields. */
+export function accountRole(claims: { email?: unknown; email_verified?: unknown; firebase?: { sign_in_provider?: string } }): 'admin' | undefined {
+  return claims.firebase?.sign_in_provider === 'google.com' && claims.email_verified === true
+    && typeof claims.email === 'string' && claims.email.trim().toLowerCase() === 'tomdevito27@gmail.com' ? 'admin' : undefined;
+}
+
 /** Dormant until explicit Firebase configuration; never initialized by fixtures. */
 export function createFirebaseAccountAdapter(projectId: string, databaseId: string,
-  services = () => getFirebaseAccountServices(projectId, databaseId)): FirebaseAccountAdapter {
+  services = () => getFirebaseAccountServices(projectId, databaseId), openRegistration = false): FirebaseAccountAdapter {
   const durableSessions = () => createDurableAccountSessions(services().db);
-  const invitations = () => createInvitationAccess(services().db);
-  const user = (claims: { uid: string; name?: unknown }): AccountUser => ({
+  const invitations = () => createInvitationAccess(services().db, Date.now, openRegistration);
+  const user = (claims: { uid: string; name?: unknown; email?: unknown; email_verified?: unknown; firebase?: { sign_in_provider?: string } }): AccountUser => ({
+    ...(accountRole(claims) ? { role: accountRole(claims) } : {}),
     uid: claims.uid, displayName: typeof claims.name === 'string' ? claims.name.slice(0, 80) : 'Waveform owner',
   });
 

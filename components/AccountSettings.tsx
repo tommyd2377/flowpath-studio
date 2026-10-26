@@ -7,8 +7,10 @@ import { WAVEFORM_DEFAULT_COLOR, WAVEFORM_NAME_LIMIT, WAVEFORM_PROMPT_LIMIT, typ
 import { appearanceTheme } from '@/lib/appearance-theme';
 import { prepareProfilePhoto } from '@/lib/prepare-profile-photo';
 import { DEFAULT_VOICE, VOICE_OPTIONS, isVoiceName, type VoiceName } from '@/lib/voice-options';
+import PaidSettings from './PaidSettings';
+import { returnDestination } from '@/lib/paid-model';
 
-type Account = { mode: AccountMode; user: AccountUser | null };
+type Account = { mode: AccountMode; user: AccountUser | null; openRegistration?: boolean };
 
 function normalizedColor(value: string): string | null {
   const match = /^#?([0-9a-f]{6})$/i.exec(value.trim());
@@ -27,6 +29,8 @@ export default function AccountSettings() {
   const [name, setName] = useState('');
   const [voice, setVoice] = useState<VoiceName>(DEFAULT_VOICE);
   const [initialPrompt, setInitialPrompt] = useState('');
+  const [adminTesting, setAdminTesting] = useState(false);
+  const promptTooLong = initialPrompt.length > WAVEFORM_PROMPT_LIMIT;
   const [accentColor, setAccentColor] = useState(WAVEFORM_DEFAULT_COLOR);
   const [previewColor, setPreviewColor] = useState(WAVEFORM_DEFAULT_COLOR);
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
@@ -40,6 +44,7 @@ export default function AccountSettings() {
   const [inviteCode, setInviteCode] = useState('');
   const [emailAction, setEmailAction] = useState<Exclude<EmailAccountAction, 'resend-verification'>>('sign-in');
   const [verificationAvailable, setVerificationAvailable] = useState(false);
+  const [returnTo, setReturnTo] = useState('/account');
   const accountRevision = useRef(0);
   const photoRevision = useRef<symbol | null>(null);
 
@@ -50,6 +55,7 @@ export default function AccountSettings() {
       const requestedRevision = ++revision;
       const current = () => !cancelled && requestedRevision === revision;
       if (changed) {
+        setAdminTesting(false);
         accountRevision.current++;
         photoRevision.current = null;
         setAccentColor(WAVEFORM_DEFAULT_COLOR); setPreviewColor(WAVEFORM_DEFAULT_COLOR); setProfilePhoto(null); setPreparingPhoto(false);
@@ -60,11 +66,13 @@ export default function AccountSettings() {
         const result = await readResponse<Account>(await fetch('/api/account', { cache: 'no-store' }));
         const saved = result.user ? await readResponse<{ waveform: Waveform | null }>(await fetch('/api/waveform', { cache: 'no-store' })) : null;
         if (!current()) return;
+        setReturnTo(returnDestination(new URL(location.href).searchParams.get('returnTo')));
         setAccount(result);
         setWaveform(saved?.waveform ?? null);
         setName(saved?.waveform?.name ?? '');
         setVoice(saved?.waveform?.voice ?? DEFAULT_VOICE);
         setInitialPrompt(saved?.waveform?.initialPrompt ?? '');
+        setAdminTesting(result.user?.role === 'admin' && saved?.waveform?.adminTesting === true);
         setAccentColor(saved?.waveform?.accentColor ?? WAVEFORM_DEFAULT_COLOR);
         setPreviewColor(saved?.waveform?.accentColor ?? WAVEFORM_DEFAULT_COLOR);
         setProfilePhoto(saved?.waveform?.profilePhoto ?? null);
@@ -113,8 +121,8 @@ export default function AccountSettings() {
       if (result === 'verification-sent' || result === 'verification-required') {
         setEmailAction('sign-in'); setVerificationAvailable(true);
         setMessage(result === 'verification-sent'
-          ? 'Check your inbox for a verification link, then sign in here. If you’re new, include your invitation code. Enter your password again if you need to resend the email.'
-          : 'Verify your email before signing in. Check your inbox, or enter your password again to resend the verification email. If you’re new, include your invitation code when you sign in.');
+          ? `Check your inbox for a verification link, then sign in here.${account?.openRegistration ? '' : ' If you’re new, include your invitation code.'} Enter your password again if you need to resend the email.`
+          : `Verify your email before signing in. Check your inbox, or enter your password again to resend the verification email.${account?.openRegistration ? '' : ' If you’re new, include your invitation code when you sign in.'}`);
       } else if (result === 'password-reset-sent') {
         setMessage('If an account uses that email, a password reset link is on its way.');
       }
@@ -128,16 +136,19 @@ export default function AccountSettings() {
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (preparingPhoto) return;
+    if (promptTooLong) { setError('Your full prompt is still in the editor. Shorten it to 8,000 characters before saving.'); return; }
     const color = normalizedColor(accentColor);
     if (!color) { setError(`Enter a six-digit hex color, such as ${WAVEFORM_DEFAULT_COLOR}.`); return; }
     const requestedRevision = accountRevision.current;
     setBusy(true); setError(''); setMessage('');
     try {
       const saved = await readResponse<{ waveform: Waveform }>(await fetch('/api/waveform', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, voice, initialPrompt, accentColor: color, profilePhoto }),
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, voice, initialPrompt, accentColor: color, profilePhoto,
+          ...(account?.user?.role === 'admin' ? { adminTesting } : {}) }),
       }));
       if (requestedRevision !== accountRevision.current) return;
       setWaveform(saved.waveform); setName(saved.waveform.name); setVoice(saved.waveform.voice); setInitialPrompt(saved.waveform.initialPrompt);
+      setAdminTesting(account?.user?.role === 'admin' && saved.waveform.adminTesting === true);
       setAccentColor(saved.waveform.accentColor); setPreviewColor(saved.waveform.accentColor); setProfilePhoto(saved.waveform.profilePhoto);
       setMessage('Saved. Your settings will apply to your next conversation.');
     } catch (error) { if (requestedRevision === accountRevision.current) setError(error instanceof Error ? error.message : 'Your waveform could not be saved. Please try again.'); }
@@ -171,6 +182,7 @@ export default function AccountSettings() {
     {loading ? <p role="status">Loading your account…</p> : account?.user ? <>
       <div className="account-identity"><span>Signed in as {account.user.displayName}</span><button type="button" onClick={() => void signOut()} disabled={busy}>Sign out</button></div>
       {account.mode === 'local' && <p className="local-account-note">Local test account. No Google account or Firebase service is connected.</p>}
+      {returnTo !== '/account' && <Link className="primary-button" href={returnTo}>Continue to waveform</Link>}
       <form onSubmit={event => void save(event)}>
         <label htmlFor="waveform-name">Waveform name</label>
         <input id="waveform-name" value={name} onChange={event => setName(event.target.value)} maxLength={WAVEFORM_NAME_LIMIT} required disabled={busy} autoComplete="off" placeholder="Tom’s assistant" />
@@ -194,20 +206,28 @@ export default function AccountSettings() {
         </select>
         <p id="voice-help" className="field-help">{VOICE_OPTIONS.find(option => option.id === voice)?.description} Your choice applies to your next conversation.</p>
         <label htmlFor="initial-prompt">What should your voice know about itself?</label>
-        <textarea id="initial-prompt" value={initialPrompt} onChange={event => setInitialPrompt(event.target.value)} maxLength={WAVEFORM_PROMPT_LIMIT} required rows={8} disabled={busy} aria-describedby="prompt-help" placeholder="You are Tom’s assistant. Speak warmly and keep your answers concise." />
-        <p id="prompt-help" className="field-help">Give it an identity and a style, up to {WAVEFORM_PROMPT_LIMIT.toLocaleString('en-US')} characters. Conversations start fresh; these instructions don’t add tools or conversation memory.</p>
-        <div className="account-actions"><button className="primary-button" type="submit" disabled={busy || preparingPhoto}>{busy ? 'Saving…' : 'Save waveform'}</button>{waveform && <Link className="secondary-button" href={`/w/${encodeURIComponent(waveform.id)}`}>Open waveform</Link>}</div>
+        <textarea id="initial-prompt" value={initialPrompt} onChange={event => setInitialPrompt(event.target.value)} aria-invalid={promptTooLong} required rows={8} disabled={busy} aria-describedby={`prompt-help prompt-count${promptTooLong ? ' prompt-limit-error' : ''}`} placeholder="You are Tom’s assistant. Speak warmly and keep your answers concise." />
+        <p id="prompt-count" className="field-help" aria-live="polite">{initialPrompt.length.toLocaleString('en-US')} / {WAVEFORM_PROMPT_LIMIT.toLocaleString('en-US')} characters</p>
+        {promptTooLong && <p id="prompt-limit-error" className="account-error" role="alert">Your full text is preserved. Shorten it by {(initialPrompt.length - WAVEFORM_PROMPT_LIMIT).toLocaleString('en-US')} characters before saving.</p>}
+        {waveform?.initialPrompt.length === 4_000 && <p className="field-help">This saved prompt reaches the previous 4,000-character limit. If your original was longer, paste it again to restore the missing ending.</p>}
+        <p id="prompt-help" className="field-help">Give it an identity and a style, up to {WAVEFORM_PROMPT_LIMIT.toLocaleString('en-US')} characters. Longer drafts stay intact so you can edit them. Conversations start fresh; these instructions don’t add tools or conversation memory.</p>
+        {account.user.role === 'admin' && <div>
+          <label className="admin-testing-toggle" htmlFor="admin-testing"><input id="admin-testing" type="checkbox" role="switch" checked={adminTesting} disabled={busy} onChange={event => setAdminTesting(event.target.checked)} aria-describedby="admin-testing-help" /> Admin testing</label>
+          <p id="admin-testing-help" className="field-help">Skip your prepaid, personal time and silence limits. Conversations end at 15 minutes. Each start uses a 15-minute block from the shared daily testing budget, even if you end early. Shared capacity limits still apply. Turn off to experience regular-user limits. Save to apply on your next conversation.</p>
+        </div>}
+        <div className="account-actions"><button className="primary-button" type="submit" disabled={busy || preparingPhoto || promptTooLong}>{busy ? 'Saving…' : 'Save waveform'}</button>{waveform && <Link className="secondary-button" href={`/w/${encodeURIComponent(waveform.id)}`}>Open waveform</Link>}</div>
       </form>
-      {waveform && <p className="field-help">Your waveform is private. Only you can open it while signed in.</p>}
+      {waveform && <p className="field-help">Your owner settings and personal waveform address stay private. Publishing is an explicit choice below when available.</p>}
+      {waveform && <PaidSettings key={waveform.id} waveformId={waveform.id} />}
     </> : account ? <section className="account-sign-in" aria-label="Sign in">
       <p>Create an account to save one waveform and its starting instructions. It stays private to you.</p>
       {account.mode === 'local' ? <>
         <p className="local-account-note">Local preview: use a test account. This does not create a Google or Firebase account.</p>
         <div className="account-actions"><button className="primary-button" type="button" onClick={() => void signIn('owner-a')} disabled={busy}>Use test owner A</button><button className="secondary-button" type="button" onClick={() => void signIn('owner-b')} disabled={busy}>Use test owner B</button></div>
       </> : account.mode === 'firebase' ? <>
-        <label htmlFor="invitation-code">Invitation code</label>
+        {!account.openRegistration && <><label htmlFor="invitation-code">Invitation code</label>
         <input id="invitation-code" value={inviteCode} onChange={event => setInviteCode(event.target.value)} disabled={busy} maxLength={64} autoComplete="off" spellCheck={false} aria-describedby="invitation-help" />
-        <p id="invitation-help" className="field-help">New here? Enter your invitation code to join FlowPath Studio. Already joined? Sign in normally.</p>
+        <p id="invitation-help" className="field-help">New here? Enter your invitation code to join FlowPath Studio. Already joined? Sign in normally.</p></>}
         <button className="secondary-button google-sign-in" type="button" onClick={() => void signIn()} disabled={busy}>Continue with Google</button>
         <p className="auth-divider">or use your email</p>
         <form className="email-sign-in" onSubmit={event => void submitEmail(event)} aria-label="Email account">

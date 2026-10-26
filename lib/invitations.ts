@@ -16,7 +16,7 @@ export class InvitationRequiredError extends Error {
 }
 
 /** Authentication alone does not grant application access. Only this server admits members. */
-export function createInvitationAccess(db: Firestore, now: () => number = Date.now) {
+export function createInvitationAccess(db: Firestore, now: () => number = Date.now, openRegistration = false) {
   const member = (uid: string) => db.collection(MEMBERS_COLLECTION).doc(uid);
   return {
     async isMember(uid: string): Promise<boolean> {
@@ -29,7 +29,12 @@ export function createInvitationAccess(db: Firestore, now: () => number = Date.n
         const existing = await transaction.get(memberRef);
         if (existing.data()?.state === 'active') return true;
         // A disabled membership cannot be bypassed with another invitation.
-        if (existing.exists || !hash) return false;
+        if (existing.exists) return false;
+        if (openRegistration && !inviteCode) {
+          transaction.set(memberRef, { state: 'active', createdAt: now(), admission: 'paid-test-signup' });
+          return true;
+        }
+        if (!hash) return false;
         const invitationRef = db.collection(INVITATIONS_COLLECTION).doc(hash);
         const invitation = (await transaction.get(invitationRef)).data();
         if (!invitation || typeof invitation.expiresAt !== 'number' || !Number.isFinite(invitation.expiresAt)

@@ -1,0 +1,23 @@
+# Admin testing mode
+
+The verified Google sign-in for `tomdevito27@gmail.com` receives the server-derived `admin` role. The email must be verified and the Firebase provider must be Google. A matching display name, password account, browser email field or request header grants no authority. The current allowlist has only that email; adding another requires a deliberate server-side change.
+
+At the user's October 25 request, **Admin testing** is now a switch in My waveform settings, replacing all Continue as admin dialogs. Save waveform persists the boolean with the owner-only waveform record. Omitted legacy values mean off. The switch is rendered only for a server-verified admin, and the save endpoint rejects the protected field from every non-admin, including attempts to send false. Existing waveform IDs, persona text, voice and portraits are preserved.
+
+With the switch on, the admin's own waveform opens directly at its normal idle screen. One waveform gesture starts the connection. There is no prepaid gate confirmation, second admin confirmation or automatic microphone start. Personal prepaid, owner daily/page demo and silence limits are bypassed. Publishing may use the existing admin-only unfunded path without another dialog; that path grants no wallet credit or sponsored visitor time.
+
+For the shared daily cost limit, each admitted admin conversation counts as a full 15-minute block even if ended early. This is a reservation budget, not a count of actual talking minutes. Ordinary homepage demos reserve three minutes. The settings help explains the distinction, and an admin daily-limit error reports whole minutes remaining and the block needed for another start. Accounting, counters and spending limits are unchanged by this wording follow-up.
+
+With the switch off, the admin follows regular visitor/member/payment rules. Limits appear as ordinary status or purchase requirements, with no admin modal. Signed-out users and other accounts keep the normal flow and never receive this switch or an override.
+
+Both modes retain the 15-minute conversation maximum, global daily budget and concurrency limits, uncertain-cleanup guards, current account authority, ownership, microphone cleanup, cancellation and independent deadline. Mode changes apply to new conversations. Turning testing on is not authority to use another owner's private waveform, activate paused paid services, change billing, or deploy anything.
+
+The server reads the current saved preference and verified role at admission. A request header cannot turn testing on when the saved preference is off. The public paid-view response exposes the effective testing boolean only for the current verified owner; it reads the live owner record, not an older publication snapshot. The saved setting therefore follows the account between Mac and iPhone. A startup failure stays on the waveform with its visible error, rather than remounting the prepaid screen and hiding the failure.
+
+No auth-provider setting, custom claim, key or production environment change is needed for this feature. The real paid voice/Checkout path remains paused under its separate upstream-enforcement launch block. Local verification uses synthetic Firebase claims, transactional in-memory stores, mocked media/provider traffic and isolated browser sessions. Physical-device voice quality remains a manual test.
+
+October 25 verification: `npm run check` passed lint, type generation/typecheck, 188 unit/integration tests and the production build. All 45 standard browser checks and five synthetic paid-flow checks passed. The paid run exposed an initial settings-load race, now fixed by keeping publishing fields disabled until the saved settings load; an ambiguous status assertion was also scoped to its section. The final paid rerun passed all five cases. `git diff --check` passed.
+
+In the authorized localhost Brave session, Admin testing was saved on for the existing Franklin waveform, remained on after reloading settings, and the unchanged private waveform address opened directly with its portrait and idle Start conversation control. No confirmation dialog appeared. The Wi-Fi HTTPS readiness endpoint remained enabled after restart. Codex started zero provider conversations; nothing was deployed.
+
+The later budget-wording and shutdown follow-up passed `npm run check` with 189 unit/integration tests and all 45 standard browser checks. The new regression covers nine shared minutes remaining versus a required 15-minute block, preserves counters on denial, and confirms that a larger explicitly configured budget does not reset prior reservations. All real and fixture app/phone listeners were verified stopped afterward; no paid provider calls or deployment occurred.

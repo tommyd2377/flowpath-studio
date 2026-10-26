@@ -2,7 +2,7 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useVoiceSession } from '@/lib/use-voice-session';
 import Waveform from './Waveform';
 import PersonalFooter from './PersonalFooter';
@@ -10,14 +10,17 @@ import { appearanceTheme } from '@/lib/appearance-theme';
 import { WAVEFORM_DEFAULT_COLOR } from '@/lib/account-model';
 import VoiceDiagnostics, { useDiagnosticsMode } from './VoiceDiagnostics';
 
-export default function VoiceExperience({ waveformId, name, accentColor = WAVEFORM_DEFAULT_COLOR, profilePhoto = null }: {
-  waveformId?: string; name?: string; accentColor?: string; profilePhoto?: string | null;
+export default function VoiceExperience({ waveformId, name, accentColor = WAVEFORM_DEFAULT_COLOR, profilePhoto = null, paidPayer, onSettled }: {
+  waveformId?: string; name?: string; accentColor?: string; profilePhoto?: string | null; paidPayer?: 'creator' | 'self'; onSettled?: () => void;
 }) {
-  const voice = useVoiceSession(waveformId);
+  const voice = useVoiceSession(waveformId, paidPayer);
+  const handledSettlement = useRef(0);
+  useEffect(() => { if (voice.settledVersion > handledSettlement.current) { handledSettlement.current = voice.settledVersion; onSettled?.(); } }, [voice.settledVersion, onSettled]);
   const diagnosticsMode = useDiagnosticsMode();
   const [recordNext, setRecordNext] = useState(false);
   const { active, stop } = voice;
   const connected = voice.phase === 'listening' || voice.phase === 'speaking';
+  const hasPortrait = Boolean(waveformId && profilePhoto);
   const label = voice.needsAudioResume ? 'Resume voice playback' : voice.active
     ? voice.phase === 'connecting' ? 'Cancel connection' : 'End conversation'
     : 'Start conversation';
@@ -34,7 +37,7 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
   }, [active, stop]);
 
   return <div className="voice-experience" data-active={voice.active} data-connected={connected}
-    data-personal={Boolean(waveformId)} data-profile-photo={Boolean(waveformId && profilePhoto)}
+    data-personal={Boolean(waveformId)} data-profile-photo={hasPortrait}
     style={waveformId ? appearanceTheme(accentColor) : undefined}>
     <nav className="voice-navigation" aria-label="FlowPath navigation" hidden={Boolean(waveformId) && voice.active}>
       <a className="news-example-link" href="https://flowpathapp.com">FlowPath News example</a>
@@ -44,7 +47,7 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
       </div>
     </nav>
     <main className="voice-page" data-voice-phase={voice.phase}>
-      <header className="wordmark" aria-hidden={connected}>
+      <header className="wordmark" aria-hidden={connected && !hasPortrait}>
         {waveformId && profilePhoto
           // Raster-only, bounded owner photo; bypass the remote image optimizer.
           // eslint-disable-next-line @next/next/no-img-element
@@ -63,6 +66,7 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
       </button>
       <p className="voice-hint" id="voice-hint" aria-hidden={connected}>Tap the wave whenever you’re ready</p>
       <p className="voice-status" id="voice-status" role="status" aria-live="polite" aria-atomic="true">{showStatus ? status : ''}</p>
+      {paidPayer && <p className="paid-session-meter" aria-live="polite">{paidPayer === 'creator' ? 'Creator pays' : 'You pay from your prepaid balance'}{voice.remainingSeconds !== null ? ` · ${voice.remainingSeconds} seconds remaining${voice.remainingSeconds <= 30 ? ' — ending soon' : ''}` : ''}</p>}
       <span className="sr-only">{connected ? 'Conversation connected. Tap the waveform or press Escape to end.' : ''}</span>
     </main>
     {diagnosticsMode && <VoiceDiagnostics key={voice.diagnosticVersion} active={voice.active} recordNext={recordNext} onRecordNext={setRecordNext}

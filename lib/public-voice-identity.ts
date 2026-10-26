@@ -39,10 +39,10 @@ export function isPublicVoiceOwner(value: unknown): value is PublicVoiceOwner {
 
 /** Mint only on an allowed public readiness GET, never during paid creation. */
 export async function withPublicVoiceVisitor(request: Request, handler: (request: Request) => Promise<Response>, options: {
-  enabled: boolean; publicOrigin?: string; trustedProxyHost?: string;
+  enabled: boolean; local?: boolean; publicOrigin?: string; trustedProxyHost?: string;
 }): Promise<Response> {
   const url = new URL(request.url);
-  if (!options.enabled || !options.publicOrigin || request.method !== 'GET' || url.pathname !== '/api/session' || url.search
+  if (!options.enabled || !options.publicOrigin && !options.local || request.method !== 'GET' || url.pathname !== '/api/session' || url.search
     || !isAllowedRequest(request, false, options.publicOrigin, options.trustedProxyHost)
     || publicDemoId(request) === null || publicVoiceOwner(request)) {
     return handler(request);

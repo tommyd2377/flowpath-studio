@@ -19,6 +19,10 @@ type VoiceSession = {
   heardOutput?: boolean;
   lastActivity: number;
   expiresAt?: number;
+  adminEligible?: boolean;
+  adminOverride?: boolean;
+  adminDeadline?: number;
+  admissionLimit?: boolean;
   peer?: RTCPeerConnection;
   channel?: RTCDataChannel;
   microphone?: MediaStream;
@@ -44,13 +48,15 @@ async function deleteSession(id: string, endpoint: string, requestHeaders: Recor
       keepalive: true,
       signal: AbortSignal.timeout(20_000),
     });
-    return response.ok;
+    if (response.status === 204) return !endpoint.includes('/paid-session');
+    return response.ok && (await response.json()).closed === true;
   } catch { return false; }
 }
 
-async function errorMessage(response: Response) {
+async function errorMessage(response: Response, session?: VoiceSession) {
   try {
     const body: unknown = await response.json();
+    if (body && typeof body === 'object' && session && 'adminLimit' in body && body.adminLimit === true) session.admissionLimit = true;
     if (body && typeof body === 'object' && 'error' in body && typeof body.error === 'string') return body.error;
   } catch { /* A gateway can return a non-JSON failure. */ }
   return 'The voice connection is unavailable. Tap the wave to try again.';
@@ -102,12 +108,12 @@ function dispose(session: VoiceSession, leaving = false): Promise<boolean> {
       });
     }
     const serverClosed = session.requested ? await deleteSession(session.id, session.endpoint, session.headers) : true;
-    return finalized || serverClosed;
+    return session.endpoint.includes('/paid-session') ? serverClosed : finalized || serverClosed;
   })().finally(() => releaseMedia(session));
   return session.closePromise;
 }
 
-export function useVoiceSession(waveformId?: string) {
+export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'self') {
   const [phase, setPhase] = useState<VoicePhase>('idle');
   const [active, setActive] = useState(false);
   const [status, setStatus] = useState('');
@@ -118,6 +124,7 @@ export function useVoiceSession(waveformId?: string) {
   const [hasDiagnostic, setHasDiagnostic] = useState(false);
   const [diagnosticRecording, setDiagnosticRecording] = useState(false);
   const [diagnosticVersion, setDiagnosticVersion] = useState(0);
+  const [settledVersion, setSettledVersion] = useState(0);
   const diagnostic = useRef<ReturnType<typeof createVoiceDiagnostics> | null>(null);
   const current = useRef<VoiceSession | null>(null);
   const closing = useRef<Promise<boolean> | null>(null);
@@ -150,7 +157,11 @@ export function useVoiceSession(waveformId?: string) {
       if (closing.current === promise) { closing.current = null; closingSession.current = null; }
       if (!mounted.current || revision.current !== stoppedRevision) return;
       setDiagnosticRecording(false);
-      if (closed) setStatus(notice);
+      if (closed) {
+        setStatus(notice);
+        // Keep startup errors visible instead of remounting the prepaid gate in a loop.
+        if (reason !== 'connection_error') setSettledVersion(value => value + 1);
+      }
       else {
         setPhase('error');
         setStatus('Your microphone is off, but disconnection could not be confirmed. Wait for the session limit before reconnecting.');
@@ -189,8 +200,8 @@ export function useVoiceSession(waveformId?: string) {
     setDiagnosticVersion(value => value + 1);
     if (!waveformId) publicDemoId.current ??= crypto.randomUUID();
     const session: VoiceSession = {
-      id: crypto.randomUUID(), endpoint: waveformId ? `/api/session?waveformId=${encodeURIComponent(waveformId)}` : '/api/session',
-      headers: waveformId ? {} : { 'X-FlowPath-Demo': publicDemoId.current! },
+      id: crypto.randomUUID(), endpoint: waveformId ? `/api/${paidPayer ? 'paid-session' : 'session'}?waveformId=${encodeURIComponent(waveformId)}` : '/api/session',
+      headers: waveformId ? paidPayer ? { 'X-FlowPath-Payer': paidPayer } : {} : { 'X-FlowPath-Demo': publicDemoId.current! },
       controller: new AbortController(), requested: false,
       ready: false, started: false, answerApplied: false, finalized: false,
       needsAudioResume: false, lastActivity: Date.now(),
@@ -219,9 +230,13 @@ export function useVoiceSession(waveformId?: string) {
       const readiness = !waveformId && navigator.locks?.request
         ? await navigator.locks.request('flowpath-public-voice-identity', { signal: session.controller.signal }, readReadiness)
         : await readReadiness();
-      if (!readiness.ok) throw new Error(await errorMessage(readiness));
+      if (!readiness.ok) throw new Error(await errorMessage(readiness, session));
       const config: unknown = await readiness.json();
       if (!alive()) return;
+      if (config && typeof config === 'object') {
+        session.adminEligible = 'adminEligible' in config && config.adminEligible === true;
+        session.admissionLimit = 'adminLimit' in config && config.adminLimit === true;
+      }
       if (!config || typeof config !== 'object' || !('enabled' in config) || config.enabled !== true) {
         const message = config && typeof config === 'object' && 'message' in config && typeof config.message === 'string'
           ? config.message : 'Voice is disabled for this local preview.';
@@ -330,7 +345,7 @@ export function useVoiceSession(waveformId?: string) {
         method: 'POST', headers: { ...session.headers, 'Content-Type': 'application/json' },
         body: JSON.stringify({ sdp, sessionId: session.id, ...(recordDiagnostics ? { diagnostics: true } : {}) }), signal: AbortSignal.timeout(30_000),
       });
-      if (!response.ok) throw new Error(await errorMessage(response));
+      if (!response.ok) throw new Error(await errorMessage(response, session));
       const result: unknown = await response.json();
       if (!alive()) { void deleteSession(session.id, session.endpoint, session.headers); return; }
       if (!result || typeof result !== 'object' || !('sdp' in result) || typeof result.sdp !== 'string'
@@ -339,6 +354,9 @@ export function useVoiceSession(waveformId?: string) {
         throw new Error('The server returned an invalid voice connection.');
       }
       session.expiresAt = result.expiresAt;
+      session.adminEligible = 'adminEligible' in result && result.adminEligible === true;
+      session.adminOverride = 'adminOverride' in result && result.adminOverride === true;
+      session.adminDeadline = 'adminDeadline' in result && typeof result.adminDeadline === 'number' ? result.adminDeadline : undefined;
       await peer.setRemoteDescription({ type: 'answer', sdp: result.sdp });
       if (!alive()) return;
       session.answerApplied = true;
@@ -348,7 +366,7 @@ export function useVoiceSession(waveformId?: string) {
         const remaining = Math.max(0, Math.ceil((session.expiresAt! - Date.now()) / 1000));
         setRemainingSeconds(remaining);
         if (!remaining) stop('The conversation limit has been reached.', 'limit');
-        else if (session.ready && Date.now() - session.lastActivity >= 45_000) stop('Conversation ended after 45 seconds of silence.', 'idle');
+        else if (!session.adminOverride && session.ready && Date.now() - session.lastActivity >= 45_000) stop('Conversation ended after 45 seconds of silence.', 'idle');
       };
       session.tick = setInterval(tick, 1_000);
       tick();
@@ -359,7 +377,7 @@ export function useVoiceSession(waveformId?: string) {
         : error instanceof Error ? error.message : 'The voice connection is unavailable. Tap the wave to try again.';
       fail(session, notice);
     }
-  }, [fail, stop, waveformId]);
+  }, [fail, stop, waveformId, paidPayer]);
 
   useEffect(() => {
     mounted.current = true;
@@ -407,6 +425,6 @@ export function useVoiceSession(waveformId?: string) {
     setDiagnosticVersion(value => value + 1);
   }, []);
 
-  return { phase, active, status, remainingSeconds, inputAnalyser, outputAnalyser, needsAudioResume, start, stop,
+  return { phase, active, status, remainingSeconds, inputAnalyser, outputAnalyser, needsAudioResume, start, stop, settledVersion,
     hasDiagnostic, diagnosticRecording, diagnosticVersion, getDiagnostic, markDiagnostic, stopDiagnostic, clearDiagnostic };
 }

@@ -109,6 +109,27 @@ test('the homepage stays paused without public admission and an incomplete polic
   assert.equal(f.calls.length, 0);
 });
 
+test('paid cleanup waits for connection persistence and never confirms settlement after a ledger failure', async () => {
+  const f = fixture(), id = randomUUID();
+  let connected!: () => void, failSettlement = true, settlements = 0;
+  const persisted = new Promise<void>(resolve => { connected = resolve; });
+  const options = { ...f.options, requireSettlement: true, connected: () => persisted,
+    production: { ...f.options.production, store: { ...f.store, finish: async (...args: Parameters<typeof f.store.finish>) => {
+      settlements++; if (failSettlement) throw new Error('Synthetic ledger outage'); return f.store.finish(...args);
+    } } } };
+  const server = createVoiceServer(options);
+  assert.equal((await server.POST(request('POST', id))).status, 201);
+  f.started();
+  const cleanup = server.DELETE(request('DELETE', id)); await tick();
+  assert.equal(settlements, 0);
+  connected();
+  assert.equal((await cleanup).status, 202);
+  assert.equal(f.rows().get(`voiceConversations/${id}`)?.state, 'active');
+  failSettlement = false;
+  assert.equal(await createVoiceServer(options).cancelReservation(id, owner.ownerUid, owner.waveformId), true);
+  assert.equal(f.rows().get(`voiceConversations/${id}`)?.state, 'closed');
+});
+
 test('public voice requires its existing visitor cookie before admission and never looks up Firebase identity', async () => {
   const f = visitorFixture();
   const server = createVoiceServer({ ...f.options, apiKey: () => { throw new Error('Missing cookies must not read a key'); } });
@@ -171,7 +192,7 @@ test('refreshing the public page grants another three minutes while page and glo
   for (const page of [firstPage, randomUUID()]) {
     const exhaustedGlobal = await (await nextInstance.GET(onPage(page, 'GET'))).json();
     assert.equal(exhaustedGlobal.enabled, false);
-    assert.equal(exhaustedGlobal.message, 'The daily voice allowance has been reached.');
+    assert.equal(exhaustedGlobal.message, 'The shared daily voice limit has been reached. Please try again tomorrow.');
   }
   const before = structuredClone(f.rows());
   assert.equal((await server.POST(onPage(randomUUID(), 'POST', randomUUID()))).status, 429, 'fresh pages still consume the original finite global budget');
@@ -417,4 +438,77 @@ test('unconfirmed cross-instance teardown keeps durable blocking even after a RE
   assert.match(readiness.message, /confirmed cleanup/);
   // End the original synthetic control so its startup watchdog has no later work.
   await first.DELETE(request('DELETE', id));
+});
+
+test('admin headers cannot grant privileges and a normal public admin call retains the demo deadline', async () => {
+  const f = fixture();
+  const makeRequest = (method: string, id?: string, admin = false) => {
+    const req = request(method, id, false);
+    req.headers.set('cookie', `${PUBLIC_VOICE_COOKIE}=${'a'.repeat(64)}`);
+    if (admin) req.headers.set('X-FlowPath-Admin', 'continue');
+    return req;
+  };
+  const publicOptions = { ...f.options, resolvePublicVisitor: publicVoiceOwner,
+    production: { ...f.options.production, policy: () => ({ ...policy, publicDemoSeconds: 180 }) } };
+  const nonAdmin = createVoiceServer(publicOptions);
+  assert.equal((await nonAdmin.GET(makeRequest('GET', undefined, true))).status, 403);
+  assert.equal((await nonAdmin.POST(makeRequest('POST', randomUUID(), true))).status, 403);
+  assert.equal(f.calls.length, 0);
+  let testing = false;
+  const admin = createVoiceServer({ ...publicOptions, resolveAdmin: async () => ({ uid: owner.ownerUid, accountSessionId: owner.accountSessionId, testing, isCurrent: () => true }) });
+  assert.equal((await admin.GET(makeRequest('GET', undefined, true))).status, 403, 'a header cannot override the saved off setting');
+  const id = randomUUID();
+  const result = await (await admin.POST(makeRequest('POST', id))).json();
+  assert.equal(result.adminEligible, true);
+  assert.equal(result.adminOverride, false);
+  assert.equal(result.expiresAt, 100_000 + 180_000);
+  assert.equal(result.adminDeadline, 100_000 + 900_000);
+  f.started();
+  assert.equal((await admin.DELETE(makeRequest('DELETE', id))).status, 200);
+  f.advance(180_000);
+  const normal = await (await admin.GET(makeRequest('GET'))).json();
+  assert.equal(normal.enabled, false);
+  assert.equal(normal.adminLimit, true);
+  testing = true;
+  const resume = makeRequest('POST', randomUUID(), true);
+  resume.headers.set('X-FlowPath-Continue', id);
+  const resumed = await (await admin.POST(resume)).json();
+  assert.equal(resumed.expiresAt, result.adminDeadline);
+  assert.equal(resumed.adminOverride, true);
+  f.started();
+  const close = makeRequest('DELETE', resumed.sessionId, true);
+  close.headers.set('X-FlowPath-Continue', id);
+  assert.equal((await admin.DELETE(close)).status, 200);
+});
+
+test('saved admin testing starts a 15-minute public conversation directly with no privileged request header', async () => {
+  const f = fixture();
+  const server = createVoiceServer({ ...f.options, resolvePublicVisitor: publicVoiceOwner,
+    resolveAdmin: async () => ({ uid: owner.ownerUid, accountSessionId: owner.accountSessionId, testing: true, isCurrent: () => true }),
+    production: { ...f.options.production, policy: () => ({ ...policy, ownerDailySeconds: 1, publicDemoSeconds: 180 }) } });
+  const req = request('POST', randomUUID(), false);
+  req.headers.set('cookie', `${PUBLIC_VOICE_COOKIE}=${'b'.repeat(64)}`);
+  const response = await server.POST(req);
+  assert.equal(response.status, 201);
+  const result = await response.json();
+  assert.equal(result.adminOverride, true);
+  assert.equal(result.expiresAt, 100_000 + 900_000);
+  assert.equal(f.scheduled[0].expiresAt, result.expiresAt);
+  f.started();
+  const close = request('DELETE', result.sessionId, false);
+  close.headers.set('cookie', req.headers.get('cookie')!);
+  assert.equal((await server.DELETE(close)).status, 200);
+});
+
+test('normal durable admission does not inherit the old three-start development harness budget', async () => {
+  const f = fixture();
+  const server = createVoiceServer(f.options);
+  for (let index = 0; index < 4; index++) {
+    const id = randomUUID();
+    assert.equal((await server.POST(request('POST', id))).status, 201);
+    f.started();
+    assert.equal((await server.DELETE(request('DELETE', id))).status, 200);
+    f.advance(61_000);
+  }
+  assert.equal(f.calls.filter(url => url.endsWith('/live/sessions')).length, 4);
 });
