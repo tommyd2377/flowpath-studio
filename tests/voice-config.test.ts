@@ -48,7 +48,7 @@ test('transcript and handoff events require an explicit per-session diagnostic o
 
 
 test('managed reasoning uses the low-cost model with bounded output, minimal effort and no paid search tools', () => {
-  const config = voiceSessionConfig({ name: 'Historical persona', initialPrompt: 'P'.repeat(8000) });
+  const config = voiceSessionConfig({ name: 'Historical persona', initialPrompt: 'P'.repeat(15000) });
   assert.equal(config.delegation.type, 'responses');
   assert.equal(VOICE_BACKEND_MODEL, 'gpt-5-nano');
   const backend = config.delegation.responses;
@@ -58,8 +58,8 @@ test('managed reasoning uses the low-cost model with bounded output, minimal eff
   assert.equal(backend.service_tier, 'default');
   assert.deepEqual(backend.tools, []); assert.equal(backend.tool_choice, 'none');
   assert.equal(backend.parallel_tool_calls, false);
-  assert.ok(config.instructions.includes('P'.repeat(8000)));
-  assert.ok(backend.instructions.includes('P'.repeat(8000)));
+  assert.ok(config.instructions.includes('P'.repeat(15000)));
+  assert.ok(backend.instructions.includes('P'.repeat(15000)));
   assert.match(config.instructions, /Generate <\|SpawnThinking\|>/);
   assert.match(config.instructions, /dates and biographical facts/);
   assert.match(config.instructions, /Let me think about that for a moment/);

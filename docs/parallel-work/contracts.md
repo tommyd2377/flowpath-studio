@@ -12,7 +12,7 @@ Anonymous paid visitor identity and homepage demo identity grant usage scope onl
 
 ## Waveform configuration and publication
 
-**Implemented:** one `ownerWaveforms/{uid}` document; stable random waveform ID; name (80 characters), initialPrompt (8,000), voice, accentColor, bounded raster profilePhoto, optional founder-only adminTesting and updatedAt. Preserve old-record defaults and existing validation. Public settings live in the existing `Publication` in `lib/paid-store.ts`: ownerUid, waveform snapshot, published, settings, spent, held, revision. `PaymentSettings` is `{ mode: 'creator' | 'intro' | 'visitor', allowanceSeconds, budgetSeconds }`.
+**Implemented:** one `ownerWaveforms/{uid}` document; stable random waveform ID; name (80 characters), initialPrompt (15,000), voice, accentColor, bounded raster profilePhoto, optional founder-only adminTesting and updatedAt. Preserve old-record defaults and existing validation. Public settings live in the existing `Publication` in `lib/paid-store.ts`: ownerUid, waveform snapshot, published, settings, spent, held, revision. `PaymentSettings` is `{ mode: 'creator' | 'intro' | 'visitor', allowanceSeconds, budgetSeconds }`.
 
 Saving is private initially; `/api/publishing` explicitly publishes/unpublishes. Subsequent saves currently update a published snapshot while retaining its published flag. The private save and paid snapshot hook are separate operations. `/api/published` deliberately projects display ID/name/accent/photo and payment availability; it excludes owner UID, instructions, wallet/budget, provider settings and ledger. Do not serialize the full owner record publicly.
 

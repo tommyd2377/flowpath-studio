@@ -136,7 +136,7 @@ export default function AccountSettings() {
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (preparingPhoto) return;
-    if (promptTooLong) { setError('Your full prompt is still in the editor. Shorten it to 8,000 characters before saving.'); return; }
+    if (promptTooLong) { setError(`Your full prompt is still in the editor. Shorten it to ${WAVEFORM_PROMPT_LIMIT.toLocaleString('en-US')} characters before saving.`); return; }
     const color = normalizedColor(accentColor);
     if (!color) { setError(`Enter a six-digit hex color, such as ${WAVEFORM_DEFAULT_COLOR}.`); return; }
     const requestedRevision = accountRevision.current;

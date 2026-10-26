@@ -343,7 +343,7 @@ export function createAccountServer(options: Options = {}) {
       const identity = await resolveIdentity(request);
       if (!identity) return unauthorized();
       let input: WaveformInput | null;
-      try { input = waveformInput(await readBody(request, 200 * 1024)); } catch { input = null; }
+      try { input = waveformInput(await readBody(request, 256 * 1024)); } catch { input = null; }
       if (!input) return json({ error: `Use a name up to ${WAVEFORM_NAME_LIMIT} characters, instructions up to ${WAVEFORM_PROMPT_LIMIT} characters, a six-digit hex color and a PNG, JPEG or WebP photo up to 128 KB and 512 pixels.` }, 400);
       if (input.adminTesting !== undefined && identity.owner.role !== 'admin') return json({ error: 'Admin access is required for testing mode.' }, 403);
       if (!await identity.isCurrent()) return unauthorized();
