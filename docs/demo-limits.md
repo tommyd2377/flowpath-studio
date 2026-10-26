@@ -7,7 +7,7 @@ The local MVP candidate retains the 180-second Studio welcome demo. Its random H
 | Entry | Daily seconds | Concurrency | Visitor seconds per UTC day |
 | --- | --- | --- | --- |
 | Studio | `FLOWPATH_DEMO_STUDIO_DAILY_SECONDS`, defaults to the parent global ceiling | `FLOWPATH_DEMO_STUDIO_CONCURRENCY`, defaults to parent | `FLOWPATH_DEMO_STUDIO_VISITOR_SECONDS`, defaults to 180 |
-| News contract | `FLOWPATH_DEMO_NEWS_DAILY_SECONDS`, defaults to 0 (paused) | `FLOWPATH_DEMO_NEWS_CONCURRENCY` | `FLOWPATH_DEMO_NEWS_VISITOR_SECONDS`, defaults to 180 |
+| Unused News reference only | `FLOWPATH_DEMO_NEWS_DAILY_SECONDS`, defaults to 0; no route consumes it | `FLOWPATH_DEMO_NEWS_CONCURRENCY` | `FLOWPATH_DEMO_NEWS_VISITOR_SECONDS`, defaults to 180 |
 
 Daily seconds must be finite nonnegative safe integers and cannot exceed the parent limit. Concurrency cannot exceed parent capacity. Visitor seconds are bounded to 0–180; reducing below a whole 180-second reservation pauses new attempts. No deployed environment/configuration was changed.
 
@@ -17,6 +17,6 @@ Anonymous identity is a browser capability, not proof of a human. Clearing cooki
 
 ## Independent News boundary
 
-News remains an independent deployed application and an ordinary external example link. Studio does not start a News call, import its source, install it as a plugin or claim to enforce its spending. The News policy entry is a separately configurable contract, tested here without enabling any route/resource. A separate authorized News task must adapt its actual admission/deadline store to the chosen finite policy and independently verify enforcement. The sibling checkout was not inspected or edited.
+News remains a separate application and an ordinary external example link, serving only as a reference for future plugins designed one at a time. Studio does not start a News call, import its source, install it as a plugin or enforce its spending. The abstract News entry is unused/reference-only: no route/resource consumes or activates it, and it is not delivered News protection. Independent News implementation, activation and enforcement are outside the current Studio scope and are not Studio launch blockers. The sibling checkout was not inspected or edited.
 
 No queue, trigger, scheduler or automatic provider retry was added. Existing independent closure tasks remain closure-only; this change does not amplify provider creation or establish a guaranteed provider hard cutoff.

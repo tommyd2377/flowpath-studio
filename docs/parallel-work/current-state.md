@@ -4,6 +4,8 @@ October 26, 2026. Scope: current local source and synthetic checks, with no live
 
 **Subsequent repository handoff:** the user later authorized committing/pushing this source and clarified that **`main`** must contain the waveform application and be the GitHub default. The inherited app is committed at `ccdddb59e34f0da33a9742143c686fb6e3d084e0`; use the `origin/main` tip including these docs as described in [ownership](ownership.md). The dirty-Git, branch and temporary-archive notes below record the earlier audit state, not instructions to recreate it. The handoff does not deploy or change the tested application code; the latest source includes improvements beyond the last recorded deployment.
 
+**Later local MVP candidate:** see [implementation status](implementation.md) for the implemented safety, text, analytics, billing and demo changes. This audit's earlier 189-test result and browser blocker remain historical; current candidate evidence is recorded separately in [QA](../parallel-qa.md).
+
 ## Verified checkout
 
 - Repository: `https://github.com/tommyd2377/flowpath-studio.git`; checkout `/Users/thomasdevito/Projects/theVoice`; branch `codex/simple-waveform`.
