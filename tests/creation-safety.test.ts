@@ -1,0 +1,282 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { createCreationReviewStore, type CreationActor, type CreationReviewOptions, type CreationReviewProof } from '../lib/creation-review';
+import {
+  canonicalCreationCandidate, CREATION_SAFETY_CATEGORIES, CreationSafetyError, creationContentDigest,
+  creationPolicyDigest, evaluateCreationReview, type CreationCandidate, type CreationReviewerResult, type CreationSafetyPolicy,
+} from '../lib/creation-safety';
+import { createFixtureCreationReviewer } from '../lib/creation-safety-fixtures';
+import type { VoiceDatabase, VoiceTransaction } from '../lib/production-voice-store';
+
+class MemoryDatabase implements VoiceDatabase {
+  rows = new Map<string, Record<string, unknown>>();
+  private pending = Promise.resolve();
+  async transaction<T>(work: (tx: VoiceTransaction) => Promise<T>): Promise<T> {
+    const previous = this.pending;
+    let release!: () => void;
+    this.pending = new Promise<void>(resolve => { release = resolve; });
+    await previous;
+    const next = new Map(structuredClone([...this.rows]));
+    let writing = false;
+    try {
+      const result = await work({
+        get: async path => { assert.equal(writing, false, 'Firestore requires all reads before writes'); return structuredClone(next.get(path) ?? null); },
+        set: (path, value) => { writing = true; next.set(path, structuredClone(value) as Record<string, unknown>); },
+      });
+      this.rows = next;
+      return result;
+    } finally { release(); }
+  }
+}
+const owner: CreationActor = { uid: 'owner-a', accountSessionId: 'owner-a-session' };
+const other: CreationActor = { uid: 'owner-b', accountSessionId: 'owner-b-session' };
+const admin: CreationActor = { uid: 'admin', accountSessionId: 'admin-session' };
+const candidate: CreationCandidate = { name: 'Example', initialPrompt: 'A synthetic test persona.' };
+const policy = (): CreationSafetyPolicy => ({ version: 'fixture-v1', categories: {
+  'extremist-impersonation': 'block', 'violent-extremism': 'block', 'sexual-content-minors': 'block',
+  'hateful-abuse': 'manual-review', 'credible-harm': 'block', 'fraud-impersonation': 'manual-review', 'privacy-abuse': 'manual-review',
+} });
+const evidence = (changes: Partial<CreationReviewerResult['findings']> = {}): CreationReviewerResult => ({ findings: {
+  ...Object.fromEntries(CREATION_SAFETY_CATEGORIES.map(key => [key, 'clear'])), ...changes,
+} as CreationReviewerResult['findings'] });
+const reviewer = (review: NonNullable<CreationReviewOptions['reviewer']>['review'] = async () => evidence()) =>
+  createFixtureCreationReviewer({ nodeEnv: 'development', enabled: true }, review);
+function setup(overrides: Partial<CreationReviewOptions> = {}) {
+  const db = new MemoryDatabase();
+  let selected: CreationSafetyPolicy | null = policy();
+  db.rows.set('sessions/owner-a-session', { uid: owner.uid, active: true });
+  db.rows.set('sessions/owner-b-session', { uid: other.uid, active: true });
+  db.rows.set('sessions/admin-session', { uid: admin.uid, active: true, creationReviewAdmin: true });
+  const verifyOwner: CreationReviewOptions['verifyOwner'] = async (tx, actor) => {
+    const session = await tx.get(`sessions/${actor.accountSessionId}`);
+    if (!session?.active || session.uid !== actor.uid) throw new CreationSafetyError('Invalid owner.', 403);
+  };
+  const verifyAdmin: CreationReviewOptions['verifyAdmin'] = async (tx, actor) => {
+    await verifyOwner(tx, actor);
+    if (!(await tx.get(`sessions/${actor.accountSessionId}`))?.creationReviewAdmin) throw new CreationSafetyError('Admin required.', 403);
+  };
+  const options: CreationReviewOptions = { mode: 'fixture', policy: () => selected, verifyOwner, verifyAdmin,
+    reviewer: reviewer(), now: () => 1000, ...overrides };
+  return { db, store: createCreationReviewStore(db, options), options,
+    setPolicy: (next: CreationSafetyPolicy | null) => { selected = next; } };
+}
+const denied = (status = 409) => (error: unknown) => error instanceof CreationSafetyError && error.status === status;
+const allowed = async (s: ReturnType<typeof setup>, input = candidate) => {
+  const requested = await s.store.request(owner, input);
+  return s.store.runReview(requested.record);
+};
+
+test('canonical name/prompt match saved trim rules; text is exact, bounded and never clipped', () => {
+  const canonical = canonicalCreationCandidate({ ...candidate, name: '  Example ', initialPrompt: ' A synthetic test persona.\n',
+    textPanel: { type: 'text', version: 1, text: '  <script>escaped by renderer</script>\n' }, allowed: true });
+  assert.equal(canonical.name, candidate.name);
+  assert.equal(canonical.initialPrompt, candidate.initialPrompt);
+  assert.equal(canonical.textPanel?.text, '  <script>escaped by renderer</script>\n');
+  assert.equal(creationContentDigest(candidate), creationContentDigest({ ...candidate, name: ' Example ' }));
+  assert.notEqual(creationContentDigest(candidate), creationContentDigest({ ...candidate, textPanel: { type: 'text', version: 1, text: '' } }));
+  for (const input of [
+    { ...candidate, name: 'a'.repeat(81) }, { ...candidate, initialPrompt: 'a'.repeat(8001) },
+    { ...candidate, name: 'bad\nname' }, { ...candidate, initialPrompt: '\u0000' },
+    { ...candidate, textPanel: { type: 'text', version: 1, text: 'a'.repeat(4001) } },
+    { ...candidate, textPanel: { type: 'html', version: 1, text: 'x' } },
+    { ...candidate, textPanel: { type: 'text', version: 1, text: 'x', html: true } },
+  ]) assert.throws(() => canonicalCreationCandidate(input), denied(400));
+});
+
+test('policy explicitly covers every category and always blocks extremist impersonation', () => {
+  const original = policy(), changed = policy();
+  changed.categories['privacy-abuse'] = 'block';
+  assert.notEqual(creationPolicyDigest(original), creationPolicyDigest(changed));
+  assert.throws(() => creationPolicyDigest({ ...original, categories: { ...original.categories, 'extremist-impersonation': 'manual-review' } }), denied(503));
+  assert.throws(() => creationPolicyDigest({ ...original, categories: {} as CreationSafetyPolicy['categories'] }), denied(503));
+  assert.equal(evaluateCreationReview(evidence({ 'extremist-impersonation': 'violation' }), original).status, 'blocked');
+  assert.equal(evaluateCreationReview(evidence({ 'privacy-abuse': 'violation' }), original).status, 'manual-review');
+  assert.equal(evaluateCreationReview(evidence({ 'credible-harm': 'uncertain' }), original).status, 'manual-review');
+  assert.equal(evaluateCreationReview({ findings: {} }, original).status, 'manual-review');
+});
+
+test('identical requests and Create reuse one allowed server review without another reviewer call', async () => {
+  let calls = 0;
+  const s = setup({ reviewer: reviewer(async () => { calls++; return evidence(); }) });
+  const first = await s.store.request(owner, candidate);
+  assert.equal(first.record.status, 'pending');
+  await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, candidate)), denied());
+  const duplicate = await s.store.request(owner, candidate);
+  assert.equal(duplicate.needsReview, false);
+  assert.equal(duplicate.record.reviewId, first.record.reviewId);
+  const completed = await s.store.runReview(first.record);
+  assert.equal(completed.status, 'allowed');
+  await s.store.runReview(first.record);
+  const create = await s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, candidate, completed));
+  assert.equal(create.reviewId, completed.reviewId);
+  assert.equal((await s.store.request(owner, candidate)).needsReview, false);
+  assert.equal(calls, 1);
+  assert.equal((await s.store.listManual(admin)).length, 0);
+});
+
+test('material name, instruction and text edits stale an approval; client status or adminTesting cannot bypass it', async () => {
+  const s = setup();
+  const approved = await allowed(s);
+  for (const edit of [
+    { ...candidate, name: 'Changed' }, { ...candidate, initialPrompt: 'Changed' },
+    { ...candidate, textPanel: { type: 'text' as const, version: 1 as const, text: 'New material text' } },
+    { ...candidate, name: 'Changed', status: 'allowed', adminTesting: true },
+  ]) await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, edit, approved)), denied());
+  const withText = { ...candidate, textPanel: { type: 'text' as const, version: 1 as const, text: 'Original' } };
+  await allowed(s, withText);
+  await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid,
+    { ...withText, textPanel: { ...withText.textPanel, text: 'Original ' } })), denied());
+});
+
+test('policy version and same-version category changes stale an approval; no policy fails closed', async () => {
+  const s = setup();
+  await allowed(s);
+  s.setPolicy({ ...policy(), version: 'fixture-v2' });
+  await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, candidate)), denied());
+  await allowed(s);
+  const changed = { ...policy(), version: 'fixture-v2' };
+  changed.categories['privacy-abuse'] = 'block';
+  s.setPolicy(changed);
+  await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, candidate)), denied());
+  s.setPolicy(null);
+  await assert.rejects(s.store.request(owner, candidate), denied(503));
+  await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, candidate)), denied(503));
+});
+
+test('missing reviewer, rejected provider and production fixture injection fail closed without retries', async () => {
+  for (const options of [
+    { reviewer: null },
+    { reviewer: reviewer(async () => { throw new Error('Synthetic reviewer outage'); }) },
+    { mode: 'production' as const, reviewer: reviewer(async () => { assert.fail('Production invoked a fake reviewer'); }) },
+  ]) {
+    const s = setup(options), pending = await s.store.request(owner, candidate);
+    const reviewed = await s.store.runReview(pending.record);
+    assert.equal(reviewed.status, 'manual-review');
+    assert.equal(reviewed.reason, 'review-unavailable');
+    assert.equal((await s.store.runReview(pending.record)).status, 'manual-review');
+    await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, candidate)), denied());
+    assert.equal((await s.store.listManual(admin))[0].reviewId, pending.record.reviewId);
+  }
+  assert.throws(() => createFixtureCreationReviewer({ nodeEnv: 'production', enabled: true }, async () => evidence()));
+  assert.throws(() => createFixtureCreationReviewer({ nodeEnv: 'development', enabled: false }, async () => evidence()));
+});
+
+test('forged owner/session or review proof cannot read, replace, run or reuse another owner review', async () => {
+  const s = setup(), approved = await allowed(s);
+  const forged = { ...owner, uid: other.uid };
+  const before = structuredClone([...s.db.rows]);
+  await assert.rejects(s.store.get(forged), denied(403));
+  await assert.rejects(s.store.request(forged, candidate), denied(403));
+  await assert.rejects(s.store.runReview({ ...approved, ownerUid: other.uid }), denied());
+  await assert.rejects(s.store.runReview({ ...approved, digest: 'f'.repeat(64) }), denied());
+  await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, other.uid, candidate, approved)), denied());
+  assert.deepEqual([...s.db.rows], before);
+  assert.equal(await s.store.get(other), null);
+});
+
+test('a delayed old review cannot authorize a newer draft or replace its blocked result', async () => {
+  let release!: (value: CreationReviewerResult) => void;
+  let started!: () => void;
+  const began = new Promise<void>(resolve => { started = resolve; });
+  const delayed = new Promise<CreationReviewerResult>(resolve => { release = resolve; });
+  const s = setup({ reviewer: reviewer(async input => {
+    if (input.name === candidate.name) { started(); return delayed; }
+    return evidence({ 'extremist-impersonation': 'violation' });
+  }) });
+  const old = await s.store.request(owner, candidate);
+  const pending = s.store.runReview(old.record);
+  await began;
+  const changed = { ...candidate, name: 'Changed' };
+  const next = await s.store.request(owner, changed);
+  assert.equal((await s.store.runReview(next.record)).status, 'blocked');
+  release(evidence());
+  await assert.rejects(pending, denied());
+  assert.equal((await s.store.get(owner))?.reviewId, next.record.reviewId);
+  assert.equal((await s.store.get(owner))?.status, 'blocked');
+  await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, changed)), denied());
+});
+
+test('parallel workers claim a pending review once; policy changes during work reject completion', async () => {
+  let calls = 0, release!: (value: CreationReviewerResult) => void, started!: () => void;
+  const began = new Promise<void>(resolve => { started = resolve; });
+  const wait = new Promise<CreationReviewerResult>(resolve => { release = resolve; });
+  const s = setup({ reviewer: reviewer(async () => { calls++; started(); return wait; }) });
+  const second = createCreationReviewStore(s.db, s.options), requested = await s.store.request(owner, candidate);
+  const firstRun = s.store.runReview(requested.record);
+  await began;
+  assert.equal((await second.runReview(requested.record)).status, 'pending');
+  s.setPolicy({ ...policy(), version: 'fixture-v2' });
+  release(evidence());
+  await assert.rejects(firstRun, denied());
+  assert.equal(calls, 1);
+  await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, candidate)), denied());
+});
+
+test('a concurrent edit wins before Create and rejection rolls back the entire mutation transaction', async () => {
+  const s = setup(), approved = await allowed(s);
+  const edit = s.store.request(owner, { ...candidate, initialPrompt: 'New content' });
+  const create = s.db.transaction(async tx => {
+    await s.store.requireAllowed(tx, owner.uid, candidate, approved);
+    tx.set('created/example', { saved: true });
+  });
+  await edit;
+  await assert.rejects(create, denied());
+  assert.equal(s.db.rows.has('created/example'), false);
+});
+
+test('manual review requires verified admin and exact proof; explicit approval is auditable and reusable', async () => {
+  const s = setup({ reviewer: null });
+  const pending = await s.store.request(owner, candidate);
+  const manual = await s.store.runReview(pending.record);
+  const request = { ...manual, decision: 'allowed' as const };
+  await assert.rejects(s.store.listManual(owner), denied(403));
+  await assert.rejects(s.store.decide(owner, request), denied(403));
+  await assert.rejects(s.store.decide({ ...owner, uid: admin.uid }, request), denied(403));
+  await assert.rejects(s.store.decide(admin, { ...request, digest: 'f'.repeat(64) }), denied());
+  await assert.rejects(s.store.decide(admin, { ...request, ownerUid: other.uid }), denied());
+  const reviewed = await s.store.decide(admin, request);
+  assert.equal(reviewed.status, 'allowed');
+  assert.deepEqual(reviewed.decision, { actorUid: admin.uid, decision: 'allowed', decidedAt: 1000 });
+  await s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, candidate, reviewed));
+  assert.equal((await s.store.listManual(admin)).length, 0);
+  await assert.rejects(s.store.decide(admin, { ...request, decision: 'blocked' }), denied());
+});
+
+test('manual rejection stays blocked and cannot override a category block or pending review', async () => {
+  const s = setup({ reviewer: null }), pending = await s.store.request(owner, candidate);
+  await assert.rejects(s.store.decide(admin, { ...pending.record, decision: 'allowed' }), denied());
+  const manual = await s.store.runReview(pending.record);
+  assert.equal((await s.store.decide(admin, { ...manual, decision: 'blocked' })).status, 'blocked');
+  await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, candidate)), denied());
+  const blocked = setup({ reviewer: reviewer(async () => evidence({ 'extremist-impersonation': 'violation' })) });
+  const record = await allowed(blocked);
+  assert.equal(record.status, 'blocked');
+  await assert.rejects(blocked.store.decide(admin, { ...record, decision: 'allowed' }), denied());
+});
+
+test('manual decisions stale on an edit or policy change; superseded records leave the queue', async () => {
+  const s = setup({ reviewer: null }), initial = await s.store.request(owner, candidate);
+  const manual = await s.store.runReview(initial.record);
+  const updated = await s.store.request(owner, { ...candidate, name: 'Changed' });
+  await assert.rejects(s.store.decide(admin, { ...manual, decision: 'allowed' }), denied());
+  assert.deepEqual((await s.store.listManual(admin)).map(row => row.reviewId), [updated.record.reviewId]);
+  const newest = await s.store.runReview(updated.record);
+  s.setPolicy({ ...policy(), version: 'fixture-v2' });
+  await assert.rejects(s.store.decide(admin, { ...newest, decision: 'allowed' }), denied());
+});
+
+test('malformed stored content fails closed and missing legacy approval is never inferred', async () => {
+  const s = setup();
+  await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, candidate)), denied());
+  const reviewed = await allowed(s);
+  s.db.rows.set(`creationSafetyReviews/${reviewed.reviewId}`, { ...reviewed, candidate: { ...candidate, name: 'Changed without review' } });
+  await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, candidate)), denied(503));
+});
+
+test('expected binding cannot substitute another policy or digest during guarded mutation', async () => {
+  const s = setup(), reviewed = await allowed(s);
+  for (const binding of [
+    { ...reviewed, digest: 'f'.repeat(64) }, { ...reviewed, policyVersion: 'forged' },
+    { ...reviewed, policyDigest: 'f'.repeat(64) },
+  ] satisfies CreationReviewProof[]) await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, candidate, binding)), denied());
+});
