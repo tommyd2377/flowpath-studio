@@ -2,7 +2,7 @@
 
 October 26, 2026. Pair with [contracts](contracts.md) and [current state](current-state.md). These are file leases, not authorization to deploy, operate accounts, use paid APIs or change private configuration.
 
-**Local implementation follow-up:** `codex/mvp-integration` contains the subsequent MVP candidate, whose tested application code is `a6feb96dfc1bea69ba4d73980a63bade385a21ba`. Shared main remains at the complete foundation `599b592`. For continued candidate work, branch isolated worktrees from the coordinator's recorded final candidate SHA, not from main or the old source archive. See [implementation status](implementation.md) and [QA/launch boundaries](../parallel-qa.md). No merge/push/deployment approval is implied.
+**Local implementation follow-up:** `codex/mvp-integration` contains the subsequent MVP candidate. Latest application baseline: `bd24198` (Text Box startup correction), after `3983302` (interactive plugin integration); `a6feb96` is historical. Shared main remains at foundation `599b592`. Branch isolated worktrees from the coordinator's recorded final candidate SHA, not main or the archive. See [implementation status](implementation.md), [experience direction](../experience-design.md) and [QA/launch boundaries](../parallel-qa.md). No merge/push/deployment approval is implied.
 
 ## Base and isolation
 

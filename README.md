@@ -1,5 +1,7 @@
 # FlowPath Studio
 
+Latest [experience direction](docs/experience-design.md): plugins appear only on visitor request, below a compact portrait/waveform row with all panel controls visible; News belongs on the Studio homepage only. These UX requirements/designs await implementation. The current Text Box still renders immediately.
+
 FlowPath Studio is the current voice-first waveform app. Choose **Create your waveform** to configure a name, instructions, voice, accent color and optional portrait. An opt-in local test preview also supports public sharing and the three creator/visitor payment modes; real paid usage remains paused.
 
 The active application branch is **`main`** in `tommyd2377/flowpath-studio`. The earlier website builder is retired; older branches and Git history are retained for recovery. See the [current-state audit](docs/parallel-work/current-state.md) and [parallel-work handoff](docs/parallel-work/ownership.md) for implementation status, test results and contributor boundaries.

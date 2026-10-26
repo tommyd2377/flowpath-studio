@@ -1,5 +1,7 @@
 # Candidate verification and remaining launch work
 
+**Latest October 26 follow-up:** application commit `bd24198` adds the interactive Text Box/Luna integration and corrects the provider's required nested event selectors. That correction passed lint/types/build, 288 unit tests and 52 standard browser tests; the initial plugin integration passed six paid browser tests. Actual Brave/Google-account startup was verified and the user reports basic dictation works. See [Text Box](text-panel.md) for evidence limits and [experience design](experience-design.md) for proposed on-demand display/layout and future plugin QA. The MVP snapshot/table below is historical; no desktop redesign is implemented yet.
+
 October 26, 2026. Branch `codex/mvp-integration`; tested application code snapshot **`a6feb96dfc1bea69ba4d73980a63bade385a21ba`**. The final handoff adds verification documentation only, preserving this exact application/test tree. Shared `main` is clean at `599b5920d5aee767397d654417ce3afd74befef7`; no push, deployment or shared-main merge occurred.
 
 ## Local evidence
@@ -21,22 +23,13 @@ Coverage includes ownership/session revocation; exact-name/prompt/text approval 
 
 Logs: `/private/tmp/flowpath-mvp-check-final.log`, `/private/tmp/flowpath-mvp-browser-final.log`, `/private/tmp/flowpath-mvp-browser-paid-final.log`. All checks used Node 24, installed dependencies, a sanitized child environment and fresh test fixtures. No private env/runtime was copied into worktrees. Existing closure tasks were retained; no new trigger, queue or provider-creation retry loop was added.
 
-## Try the current text panel locally
+## Current manual Text Box acceptance
 
-This preview exercises accounts, background synthetic review, text display, publication and fake checkout. It makes no paid/provider call and does not demonstrate real voice or measured latency. Keep this worktree free of private environment files; none were copied here.
+The user's manual preview is the actual Firebase/Google-account application at `http://localhost:3220`, with the existing configured local runtime. It is not the synthetic-owner harness. Preserve existing sessions and saved instructions. Runtime startup guidance is in [local app](local-app.md); never print or copy private environment values.
 
-```sh
-cd /Users/thomasdevito/.codex/worktrees/studio-mvp-integration/theVoice
-env -i PATH=/Users/thomasdevito/.nvm/versions/node/v24.6.0/bin:/usr/bin:/bin:/usr/sbin:/sbin \
-  TMPDIR=/private/tmp NEXT_TELEMETRY_DISABLED=1 FLOWPATH_LIVE_ENABLED=0 \
-  FLOWPATH_ACCOUNT_MODE=local FLOWPATH_SAFETY_FIXTURES=1 FLOWPATH_PAID_FIXTURES=1 \
-  FLOWPATH_ACCOUNT_FIXTURE_DIRECTORY="$(mktemp -d /private/tmp/flowpath-mvp-preview.XXXXXX)" \
-  npm run dev
-```
+In waveform settings, choose Plugins → Text Box → Apply plugin → Save waveform, then Open waveform. The current UI displays Text Box immediately; visitor-requested reveal/dismissal is proposed next work. Start a conversation only within explicit host/task/call-budget authorization. Verify Start writing, dictated text, Stop writing, requested written answers/edits, Clear/Undo/Copy, ended-call retention and next-call reset. Real provider behavior/latency must be recorded separately from fake media/provider tests. Coordinate browser ownership: the coordinator must not click End/Escape while the human is trying a spoken command.
 
-Open `http://127.0.0.1:3220/account`, choose **Use test owner A**, enter a name/instructions and **Text below the waveform**, wait for the explicitly synthetic approval and Save. The synthetic pack/checkout controls grant fake credit only. Continue to the waveform, choose own-balance continuation when shown, and try **Show text / Hide text** without tapping Start conversation. To test a published visitor experience, use a finite synthetic sponsorship budget and an unsigned-in window. The displayed legacy test pack is not approved pricing. Stop the preview with Ctrl-C; the fixture directory is temporary synthetic data.
-
-The text plugin is deliberately finished at creator-authored plain text plus local visitor Show/Hide. No arbitrary voice-driven text tool, transcription, search or executable content was added. Seamless voice interaction and responsiveness in hundreds of milliseconds remain future design goals, not measured benchmarks or claims about this preview.
+Internal Playwright/unit tests continue using clearly synthetic owners, fake providers/media/payments and isolated source copies. They do not establish real Google sign-in or full spoken acceptance. Legacy v1 static text retains separate compatibility coverage. No live purchase, provider activation, pricing change or deployment is implied by manual voice authorization.
 
 ## Launch work: decisions, code and acceptance are different
 

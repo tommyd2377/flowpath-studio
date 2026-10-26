@@ -1,5 +1,7 @@
 # FlowPath Studio foundation audit
 
+**Later October 26 follow-up:** this remains the original foundation audit. Interactive Text Box, Luna delegation and its real-startup correction now exist through application commit `bd24198`; the user reports basic dictation works. See [implementation follow-up](implementation.md), [Text Box verification](../text-panel.md) and [latest experience direction](../experience-design.md) before treating planned/historical findings below as today's feature list.
+
 October 26, 2026. Scope: current local source and synthetic checks, with no live account, cloud, payment or provider verification. Read [shared contracts](contracts.md) and [ownership / pasteable thread header](ownership.md) before starting a lane.
 
 **Subsequent repository handoff:** the user later authorized committing/pushing this source and clarified that **`main`** must contain the waveform application and be the GitHub default. The inherited app is committed at `ccdddb59e34f0da33a9742143c686fb6e3d084e0`; use the `origin/main` tip including these docs as described in [ownership](ownership.md). The dirty-Git, branch and temporary-archive notes below record the earlier audit state, not instructions to recreate it. The handoff does not deploy or change the tested application code; the latest source includes improvements beyond the last recorded deployment.

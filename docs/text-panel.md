@@ -1,5 +1,7 @@
 # Text Box plugin
 
+**Next UX requirement (October 26):** applied does not mean visible. The user confirmed basic dictation works and requested desktop mockups with no panel until requested, a compact raised portrait/waveform row, complete visible controls and an approximately 800 ms reveal. The current implementation still mounts the panel immediately. See the [experience brief](experience-design.md) for proposed visibility states, mobile adaptation and plugin QA; no show/hide action or layout is implemented by that document.
+
 The October 26 user-approved interaction replaces the creator text-entry field with **Plugins → Text Box → Apply plugin** in waveform settings. Save, then open the waveform and start a new conversation. The user's manual testing uses the normal application and Google account flow on `http://localhost:3220`; synthetic owners belong only to internal automated tests.
 
 ## First version

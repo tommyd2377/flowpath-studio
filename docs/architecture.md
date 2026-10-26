@@ -1,5 +1,7 @@
 # FlowPath waveform architecture
 
+Latest UI direction: [waveform experience brief](experience-design.md). Plugin availability will be independent of visitor-requested display. Compact desktop layout, on-demand mounting, homepage-only News and later multi-plugin compatibility are documented next work, not implemented architecture yet.
+
 The October 25 local paid-MVP implementation is documented in [paid-mvp.md](paid-mvp.md). It is opt-in and test-only, with a separate durable ledger and public `/p/<id>` snapshots. The deployed pilot behavior described below is unchanged when that preview is off. Paid upstream enforcement and real Stripe sandbox acceptance remain launch blockers; source implementation is not activation evidence.
 
 The browser connects audio directly to GPT-Live over standard WebRTC. The application server creates and supervises the same session through a sideband WebSocket. At the user's explicit October 26 request, managed Responses delegation uses GPT-6 Luna as its default backend, replacing the earlier nano selection. There is no web search or automatic model fallback. An enabled Text Box adds a bounded browser executor for session-local text operations; it has no account, financial or external-action authority.

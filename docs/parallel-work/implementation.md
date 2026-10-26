@@ -1,5 +1,7 @@
 # Local MVP integration candidate
 
+**Later October 26 update:** interactive Text Box, Luna delegation and the real-startup selector correction are implemented through application commit `bd24198`. The latest check passed 288 unit tests and 52 standard browser checks; the initial plugin integration also passed six paid browser tests. Real Brave/Google-account startup was verified, and the user reports basic dictation works. [Experience direction](../experience-design.md) records the requested on-demand display, compact layout and homepage-only News link as next UX work. The original MVP snapshot/results below are historical, not the latest text-plugin feature list.
+
 October 26, 2026. Candidate branch: `codex/mvp-integration`, based on complete baseline `599b5920d5aee767397d654417ce3afd74befef7`. Shared `main` remains at that baseline. This is local implementation with synthetic verification, not deployment or live acceptance. Resolve the candidate's final SHA from Git or the coordinator handoff before review.
 
 ## Implemented in the candidate
