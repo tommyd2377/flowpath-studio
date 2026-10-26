@@ -2,7 +2,7 @@
 
 October 26, 2026. Pair with [contracts](contracts.md) and [current state](current-state.md). These are file leases, not authorization to deploy, operate accounts, use paid APIs or change private configuration.
 
-**Local implementation follow-up:** `codex/mvp-integration` contains the MVP candidate and the user-selected left-portrait/on-demand Text Box follow-up. Branch from its verified final tip recorded in the coordinator handoff; `bd24198` (startup correction), `3983302` (initial interactive plugin) and `a6feb96` are earlier application snapshots. The design baseline was saved in `28be2a6`. Shared main remains at foundation `599b592`. Use an isolated worktree, never reconstruct from main or the archive. See [implementation status](implementation.md), [experience direction](../experience-design.md) and [QA/launch boundaries](../parallel-qa.md). No merge/push/deployment approval is implied.
+**Latest source handoff:** the user explicitly authorized promoting today's integrated work to **main** and pushing it to GitHub, while withholding deployment approval. New work starts from the verified current `origin/main` tip, including Knowledge, the shared plugin contract, selected desktop UX and 15,000-character prompt support. `599b592`, `bd24198`, `3983302` and `a6feb96` are earlier snapshots. See the [October 26 handoff](october-26-handoff.md), [experience direction](../experience-design.md) and [QA/launch boundaries](../parallel-qa.md). Use isolated worktrees; no future push/deployment authorization is implied.
 
 ## Base and isolation
 
@@ -17,6 +17,8 @@ October 26, 2026. Pair with [contracts](contracts.md) and [current state](curren
 System `/usr/bin/git` is blocked by an unaccepted Xcode license. An already-installed fallback works: `/Users/thomasdevito/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback/git`. Use it where necessary; do not accept a license or install tools automatically. Managed Codex worktrees may be used when their Git setup supports this environment.
 
 ## One owner per shared surface
+
+October 26 Knowledge follow-up: integration owns `lib/plugin-contract.ts`, `lib/plugin-session.ts` and all exported Knowledge/source DTOs. The Knowledge lane owns `lib/knowledge-{model,provider,store,server,runtime}.ts`, `app/api/knowledge/**`, `app/account/knowledge/**`, `components/KnowledgeSettings.tsx`, `tests/knowledge.test.ts` and `tests/browser/knowledge.spec.ts`. Runtime/voice config, account selector, Text Box renderer and shared CSS changes remain integration-owned. Public Knowledge, hosted funding and document-version review require coordinated decisions before activation. No other worker edits these shared files concurrently; use isolated worktrees and return a scoped patch.
 
 The **integration coordinator** is the sole owner of shared schemas, auth/security, manifests and integration wiring. The **billing lane** is the sole owner of billing primitives. An owner may accept another lane's patch, but the contributor does not edit the owner's files concurrently. Exported type/signature changes require schema-owner review, even inside billing-owned modules.
 

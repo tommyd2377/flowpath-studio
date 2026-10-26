@@ -283,7 +283,7 @@ test('invalid tools and arguments get rejected without executing anything else',
   invalid.forEach((item, index) => h.backend({ type: 'response.output_item.done', response_id: 'response_1',
     item: { ...item, type: 'function_call', call_id: `bad_${index}` } }));
   assert.equal(h.state().text, '');
-  assert.equal(h.sent.length, invalid.length);
+  assert.equal(h.sent.length, invalid.length - 1, 'unregistered functions are ignored, never acknowledged by another plugin');
   for (const event of h.sent) assert.equal(JSON.parse((event.item as { output: string }).output).status, 'invalid_action');
 });
 

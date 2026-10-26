@@ -14,6 +14,7 @@ import CreationSafetyStatus from './CreationSafetyStatus';
 import CreationReviewQueue from './CreationReviewQueue';
 import { clientAnalytics, observeVisit } from '@/lib/analytics-runtime';
 import type { TextPanelConfiguration } from '@/lib/text-panel';
+import { PLUGINS } from '@/lib/plugin-contract';
 
 type Account = { mode: AccountMode; user: AccountUser | null; openRegistration?: boolean; creationSafetyEnabled?: boolean; safetyAdminFixture?: boolean; localUnmeteredTesting?: boolean };
 
@@ -35,6 +36,7 @@ export default function AccountSettings() {
   const [voice, setVoice] = useState<VoiceName>(DEFAULT_VOICE);
   const [initialPrompt, setInitialPrompt] = useState('');
   const [textPanel, setTextPanel] = useState<TextPanelConfiguration | null>(null);
+  const [pluginChoice, setPluginChoice] = useState('text');
   const [adminTesting, setAdminTesting] = useState(false);
   const promptTooLong = initialPrompt.length > WAVEFORM_PROMPT_LIMIT;
   const [accentColor, setAccentColor] = useState(WAVEFORM_DEFAULT_COLOR);
@@ -154,7 +156,7 @@ export default function AccountSettings() {
     event.preventDefault();
     if (preparingPhoto) return;
     if (!safety.canSave) { setError('This version must pass its safety review before saving.'); return; }
-    if (promptTooLong) { setError('Your full prompt is still in the editor. Shorten it to 8,000 characters before saving.'); return; }
+    if (promptTooLong) { setError(`Your full prompt is still in the editor. Shorten it to ${WAVEFORM_PROMPT_LIMIT.toLocaleString('en-US')} characters before saving.`); return; }
     const color = normalizedColor(accentColor);
     if (!color) { setError(`Enter a six-digit hex color, such as ${WAVEFORM_DEFAULT_COLOR}.`); return; }
     const requestedRevision = accountRevision.current;
@@ -233,13 +235,14 @@ export default function AccountSettings() {
         <p id="prompt-help" className="field-help">Give it an identity and a style, up to {WAVEFORM_PROMPT_LIMIT.toLocaleString('en-US')} characters. Longer drafts stay intact so you can edit them. Conversations start fresh; these instructions don’t add tools or conversation memory.</p>
         <label htmlFor="waveform-plugin">Plugins</label>
         <div className="waveform-plugin-picker">
-          <select id="waveform-plugin" defaultValue="text" disabled={busy} aria-describedby="plugin-help">
-            <option value="text">Text Box</option>
+          <select id="waveform-plugin" value={pluginChoice} onChange={event => setPluginChoice(event.target.value)} disabled={busy} aria-describedby="plugin-help">
+            {PLUGINS.map(plugin => <option key={plugin.id} value={plugin.id}>{plugin.name}</option>)}
           </select>
-          <button type="button" className="secondary-button" disabled={busy || textPanel?.version === 2} onClick={() => { setTextPanel({ type: 'text', version: 2 }); setMessage('Text Box applied. Save your waveform to use it in your next conversation.'); setError(''); }}>Apply plugin</button>
+          {pluginChoice === 'knowledge' ? waveform ? <Link className="secondary-button" href="/account/knowledge">Manage Knowledge</Link> : <span className="field-help">Save your waveform to add Knowledge.</span>
+            : <button type="button" className="secondary-button" disabled={busy || textPanel?.version === 2} onClick={() => { setTextPanel({ type: 'text', version: 2 }); setMessage('Text Box applied. Save your waveform to use it in your next conversation.'); setError(''); }}>Apply plugin</button>}
           {textPanel && <button type="button" className="secondary-button" disabled={busy} onClick={() => { setTextPanel(null); setMessage('Text Box removed. Save your waveform to keep this change.'); setError(''); }}>Remove Text Box</button>}
         </div>
-        <p id="plugin-help" className="field-help">Add a voice-controlled text panel below your waveform. Say “Start writing,” “Stop writing,” or ask the waveform to put an answer in the box. Each conversation has its own text.</p>
+        <p id="plugin-help" className="field-help">{pluginChoice === 'knowledge' ? 'Upload private documents so your waveform can answer from them. Pair Knowledge with Text Box to show relevant passages and sources.' : 'Add a voice-controlled text panel below your waveform. Say “Start writing,” “Stop writing,” or ask the waveform to put an answer in the box. Each conversation has its own text.'}</p>
         {textPanel?.version === 2 && <p className="field-help">Text Box is enabled. Save changes, then open your waveform to try it.</p>}
         {textPanel?.version === 1 && <p className="field-help">Your existing saved text is preserved. Apply Text Box to replace it with an empty, voice-controlled panel.</p>}
         <CreationSafetyStatus status={safety.status} />

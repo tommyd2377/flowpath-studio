@@ -217,8 +217,16 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
     textController.current?.finish();
     textController.current = null;
     setTextState(emptyTextState());
-    if (textBoxEnabled) {
+    if (textBoxEnabled || waveformId && !paidPayer) {
       const controller = createLiveTextSession({
+        textEnabled: textBoxEnabled,
+        ...(!paidPayer && waveformId ? { searchKnowledge: async (query: string, signal: AbortSignal) => {
+          const response = await fetch('/api/knowledge/search', { method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ waveformId, query }),
+            signal: AbortSignal.any([signal, session.controller.signal, AbortSignal.timeout(30_000)]) });
+          if (!response.ok) throw new Error('Knowledge search was unavailable.');
+          return response.json();
+        } } : {}),
         onChange: state => { if (mounted.current && session.text && textController.current === session.text) setTextState(state); },
         send: event => {
           if (current.current === session && !session.controller.signal.aborted && session.channel?.readyState === 'open') {

@@ -24,13 +24,13 @@ test('review keys match server trim rules while preserving internal newlines and
 test('invalid editor candidates are rejected locally without clipping or sending review requests', () => {
   for (const input of [{ ...candidate, name: '' }, { ...candidate, name: ' '.repeat(81) },
     { ...candidate, name: 'x'.repeat(81) }, { ...candidate, name: 'Bad\nName' },
-    { ...candidate, initialPrompt: '' }, { ...candidate, initialPrompt: 'x'.repeat(8_001) },
+    { ...candidate, initialPrompt: '' }, { ...candidate, initialPrompt: 'x'.repeat(15_001) },
     { ...candidate, initialPrompt: 'Bad\u0000prompt' },
     { ...candidate, textPanel: { type: 'text', version: 1, text: 'x'.repeat(4_001) } },
     { ...candidate, textPanel: { type: 'html', version: 1, text: 'invalid' } }]) {
     assert.equal(canonicalCreationReviewCandidate(input as CreationReviewCandidate), null);
   }
-  assert.ok(canonicalCreationReviewCandidate({ name: 'x'.repeat(80), initialPrompt: 'x'.repeat(8_000), textPanel: { type: 'text', version: 1, text: 'x'.repeat(4_000) } }));
+  assert.ok(canonicalCreationReviewCandidate({ name: 'x'.repeat(80), initialPrompt: 'x'.repeat(15_000), textPanel: { type: 'text', version: 1, text: 'x'.repeat(4_000) } }));
 });
 
 test('only an enabled complete response with a known status can allow Save', () => {

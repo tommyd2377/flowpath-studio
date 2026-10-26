@@ -1,9 +1,11 @@
-export type LiveTextState = { text: string; writing: boolean; visible: boolean; canUndo: boolean; message: string };
-type Options = { onChange: (state: LiveTextState) => void; send: (event: Record<string, unknown>) => void };
-type TextAction = 'start_dictation' | 'stop_dictation' | 'show' | 'hide' | 'replace' | 'append' | 'clear' | 'undo' | 'read';
-type BackendResponse = { generation: number; calls: number; continued: boolean; completed: boolean; failed: boolean };
+import { createPluginSession, pluginObject as object } from './plugin-session';
+import { validKnowledgeResult, type KnowledgePassage, type PluginContext } from './plugin-contract';
 
-const MAX_TEXT = 4_000, MAX_CALLS = 64, MAX_EVENTS = 8_000;
+export type LiveTextState = { text: string; writing: boolean; visible: boolean; canUndo: boolean; message: string; sources?: KnowledgePassage[]; pending?: boolean };
+type Options = { onChange: (state: LiveTextState) => void; send: (event: Record<string, unknown>) => void; textEnabled?: boolean; searchKnowledge?: (query: string, signal: AbortSignal) => Promise<unknown> };
+type TextAction = 'start_dictation' | 'stop_dictation' | 'show' | 'hide' | 'replace' | 'append' | 'clear' | 'undo' | 'read';
+
+const MAX_TEXT = 4_000, MAX_EVENTS = 8_000;
 const commands: Record<string, TextAction> = {
   'start writing': 'start_dictation', 'start dictation': 'start_dictation',
   'stop writing': 'stop_dictation', 'stop dictation': 'stop_dictation',
@@ -12,32 +14,29 @@ const commands: Record<string, TextAction> = {
   'close the text box': 'hide', 'close text box': 'hide',
 };
 const actions: TextAction[] = ['start_dictation', 'stop_dictation', 'show', 'hide', 'replace', 'append', 'clear', 'undo', 'read'];
-const object = (value: unknown): Record<string, unknown> | null => value && typeof value === 'object'
-  && !Array.isArray(value) ? value as Record<string, unknown> : null;
 const identifier = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(value);
 const validText = (value: unknown): value is string => typeof value === 'string' && value.length <= MAX_TEXT
   && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value);
 
 /** One conversation's ephemeral text. No storage, logging, extra model or financial authority. */
-export function createLiveTextSession({ onChange, send }: Options) {
-  let text = '', writing = false, visible = false, message = '', finished = false, generation = 0, toolsLimited = false;
+export function createLiveTextSession({ onChange, send, textEnabled = true, searchKnowledge }: Options) {
+  let text = '', writing = false, visible = false, message = '', finished = false, generation = 0;
   let transcriptBuffer = '', lastTranscriptEnd = -1, dictationCheckpoint = false, bufferBoundary = true;
   let controlBarrier = -1, textRevision = 0;
-  const undo: string[] = [];
-  const events = new Set<string>(), calls = new Set<string>();
-  const responses = new Map<string, BackendResponse>();
-  const delegations = new Map<string, string>();
-  const delegationGenerations = new Map<string, number>();
+  let sources: KnowledgePassage[] = [];
+  let pendingSearch: object | null = null;
+  const undo: { text: string; sources: KnowledgePassage[] }[] = [];
+  const events = new Set<string>();
   const readRevisions = new Map<string, number>();
-  const emit = () => onChange({ text, writing, visible, canUndo: undo.length > 0, message });
+  const emit = () => onChange({ text, writing, visible, canUndo: undo.length > 0, message, sources, pending: !!pendingSearch });
   function checkpoint() {
-    if (undo.at(-1) !== text) undo.push(text);
+    if (undo.at(-1)?.text !== text || undo.at(-1)?.sources !== sources) undo.push({ text, sources });
     if (undo.length > 10) undo.shift();
   }
-  function replace(next: string, saveUndo = true) {
-    if (next === text) return;
+  function replace(next: string, saveUndo = true, nextSources: KnowledgePassage[] = []) {
+    if (next === text && (nextSources === sources || !nextSources.length && !sources.length)) return;
     if (saveUndo) checkpoint();
-    text = next;
+    text = next; sources = nextSources;
     textRevision++;
   }
   function appendDictation(fragment: string) {
@@ -49,6 +48,7 @@ export function createLiveTextSession({ onChange, send }: Options) {
       return;
     }
     if (!dictationCheckpoint) { checkpoint(); dictationCheckpoint = true; }
+    sources = [];
     text += text.length ? fragment : fragment.trimStart();
     textRevision++;
   }
@@ -56,6 +56,7 @@ export function createLiveTextSession({ onChange, send }: Options) {
     if (local || action === 'hide') { generation++; controlBarrier = lastTranscriptEnd; }
     message = '';
     if (action === 'read') return;
+    pendingSearch = null;
     if (action === 'show') { visible = true; return; }
     if (action === 'hide') { visible = false; writing = false; dictationCheckpoint = false; return; }
     if (action === 'start_dictation') {
@@ -71,7 +72,7 @@ export function createLiveTextSession({ onChange, send }: Options) {
       if (action === 'clear') replace('');
       else if (action === 'undo') {
         const previous = undo.pop();
-        if (previous !== undefined && previous !== text) { text = previous; textRevision++; }
+        if (previous !== undefined) { text = previous.text; sources = previous.sources; textRevision++; }
       } else if (action === 'replace') { visible = true; replace(value); }
       else if (action === 'append') { visible = true; replace(text + value); }
     }
@@ -107,81 +108,56 @@ export function createLiveTextSession({ onChange, send }: Options) {
     emit();
   }
 
-  function continueResponse(response: BackendResponse) {
-    if (!response.completed || response.continued || !response.calls || response.failed || finished) return;
-    response.continued = true;
-    send({ type: 'response.create' });
-  }
-  function result(callId: string, status: string) {
-    send({ type: 'response.item.create', item: { type: 'function_call_output', call_id: callId,
-      output: JSON.stringify({ status, text, writing, visible }) } });
-  }
-  function backend(envelope: Record<string, unknown>) {
-    if (toolsLimited) return;
-    const event = object(envelope.event);
-    if (!event) return;
-    const delegationId = identifier(envelope.delegation_id) ? envelope.delegation_id : null;
-    const responseObject = object(event.response);
-    if (event.type === 'response.created') {
-      if (!identifier(responseObject?.id) || !delegationId || responses.has(responseObject.id)) return;
-      if (responses.size >= 128) { message = 'Text updates reached this conversation’s limit.'; emit(); return; }
-      responses.set(responseObject.id, { generation: delegationGenerations.get(delegationId) ?? generation,
-        calls: 0, continued: false, completed: false, failed: false });
-      delegations.set(delegationId, responseObject.id);
-      return;
-    }
-    const responseId = identifier(event.response_id) ? event.response_id
-      : identifier(responseObject?.id) ? responseObject.id : delegationId ? delegations.get(delegationId) : undefined;
-    const response = responseId ? responses.get(responseId) : undefined;
-    if (!response || !delegationId || delegations.get(delegationId) !== responseId) return;
-    if (event.type === 'response.completed' || event.type === 'response.failed' || event.type === 'response.incomplete') {
-      response.completed = true;
-      response.failed = event.type !== 'response.completed' || ['failed', 'incomplete', 'cancelled'].includes(String(responseObject?.status));
-      continueResponse(response);
-      return;
-    }
-    if (event.type !== 'response.output_item.done' || response.continued) return;
-    const item = object(event.item);
-    if (item?.type !== 'function_call' || !identifier(item.call_id) || calls.has(item.call_id)) return;
-    if (calls.size >= MAX_CALLS) {
-      toolsLimited = true;
-      response.failed = true;
-      message = 'Text updates reached this conversation’s limit. Start a new conversation to continue.';
-      writing = false;
-      result(item.call_id, 'limit_reached');
-      emit();
-      return;
-    }
-    calls.add(item.call_id);
-    response.calls++;
-    let status = 'invalid_action';
-    if (item.status !== undefined && item.status !== 'completed') status = 'not_completed';
-    else if (response.failed || response.generation !== generation
-      || delegationGenerations.has(delegationId) && delegationGenerations.get(delegationId) !== generation) status = 'superseded';
-    else if (item.name === 'update_text_box' && typeof item.arguments === 'string' && item.arguments.length <= 30_000) {
-      let args: Record<string, unknown> | null = null;
-      try { args = object(JSON.parse(item.arguments)); } catch { /* Invalid arguments never modify the panel. */ }
-      if (args && Object.keys(args).length === 2 && Object.keys(args).every(key => ['action', 'text'].includes(key))
-        && actions.includes(args.action as TextAction) && validText(args.text)
-        && (['replace', 'append'].includes(String(args.action)) || args.text === '')) {
-        if (['replace', 'append', 'clear', 'undo'].includes(String(args.action))
-          && readRevisions.has(delegationId) && readRevisions.get(delegationId) !== textRevision) status = 'superseded';
-        else if (args.action === 'append' && text.length + args.text.length > MAX_TEXT) status = 'text_too_long';
-        else {
-          if (args.action === 'read') readRevisions.set(delegationId, textRevision);
-          // Preserve an ordinary final word held as a possible control prefix.
-          if (['hide', 'stop_dictation', 'show'].includes(String(args.action))) appendDictation(transcriptBuffer);
-          if (args.action !== 'read') { transcriptBuffer = ''; bufferBoundary = true; }
-          control(args.action as TextAction, args.text);
-          if (readRevisions.has(delegationId)) readRevisions.set(delegationId, textRevision);
-          status = 'applied';
-          emit();
+  const plugins = createPluginSession({ send, generation: () => generation, barrier: () => controlBarrier,
+    onLimit: () => { writing = false; message = 'Plugin updates reached this conversation’s limit.'; emit(); },
+    executors: {
+      ...(textEnabled ? { update_text_box(input: unknown, context: PluginContext) {
+        const args = object(input), delegationId = context.delegationId;
+        let status = 'invalid_action';
+        if (args && Object.keys(args).length === 2 && Object.keys(args).every(key => ['action', 'text'].includes(key))
+          && actions.includes(args.action as TextAction) && validText(args.text)
+          && (['replace', 'append'].includes(String(args.action)) || args.text === '')) {
+          if (['replace', 'append', 'clear', 'undo'].includes(String(args.action))
+            && readRevisions.has(delegationId) && readRevisions.get(delegationId) !== textRevision) status = 'superseded';
+          else if (args.action === 'append' && text.length + args.text.length > MAX_TEXT) status = 'text_too_long';
+          else {
+            if (args.action === 'read') readRevisions.set(delegationId, textRevision);
+            if (['hide', 'stop_dictation', 'show'].includes(String(args.action))) appendDictation(transcriptBuffer);
+            if (args.action !== 'read') { transcriptBuffer = ''; bufferBoundary = true; }
+            control(args.action as TextAction, args.text);
+            if (readRevisions.has(delegationId)) readRevisions.set(delegationId, textRevision);
+            status = 'applied'; emit();
+          }
         }
-      }
-    }
-    result(item.call_id, status);
-    continueResponse(response);
-  }
+        return { status, text, writing, visible };
+      } } : {}),
+      ...(searchKnowledge ? { async search_waveform_knowledge(input: unknown, context: PluginContext) {
+        const args = object(input);
+        if (!args || Object.keys(args).length !== 2 || typeof args.query !== 'string' || !args.query.trim()
+          || args.query.length > 1000 || typeof args.display !== 'boolean') return { status: 'invalid_action' };
+        const expectedRevision = textRevision;
+        const ticket = {};
+        if (args.display && textEnabled && !writing) { pendingSearch = ticket; visible = true; message = ''; emit(); }
+        let result: unknown;
+        try { result = await searchKnowledge(args.query, context.signal); }
+        catch {
+          if (context.isCurrent() && pendingSearch === ticket) { pendingSearch = null; message = 'Sources could not be loaded. Your existing text is still available.'; emit(); }
+          return { status: 'unavailable' };
+        }
+        if (!context.isCurrent()) return { status: 'superseded' };
+        if (pendingSearch === ticket) pendingSearch = null;
+        if (!validKnowledgeResult(result)) { message = 'Sources could not be verified.'; emit(); return { status: 'unavailable' }; }
+        let displayed = false;
+        if (args.display && textEnabled && result.passages.length && expectedRevision === textRevision && !writing) {
+          replace(result.passages.map((p, i) => `[${i + 1}] “${p.quote}”`).join('\n\n'), true, result.passages);
+          visible = true; writing = false; transcriptBuffer = ''; bufferBoundary = true; message = ''; displayed = true; emit();
+        }
+        if (args.display && textEnabled && !result.passages.length) message = 'No relevant passages found in your selected documents.';
+        emit();
+        return { status: result.passages.length ? 'found' : 'no_matches', ...result, displayed };
+      } } : {}),
+    },
+  });
 
   emit();
   return {
@@ -197,18 +173,8 @@ export function createLiveTextSession({ onChange, send }: Options) {
           }
           events.add(event.event_id);
         }
-        if (event.type === 'response.event') { backend(event); return; }
-        if (event.type === 'session.delegation.created') {
-          const delegation = object(event.delegation);
-          if (delegation?.target !== 'responses' || !identifier(delegation.id) || delegationGenerations.has(delegation.id)
-            || delegationGenerations.size >= 128 || typeof event.offset_ms !== 'number' || !Number.isFinite(event.offset_ms)
-            || event.offset_ms < 0) return;
-          // Provider audio timing rejects old work even when its metadata arrives after a local control.
-          // If all metadata and transcript fragments were delayed past the barrier, their age is unknown;
-          // without a provider acknowledgment, no browser-only clock can establish an exact stop boundary.
-          delegationGenerations.set(delegation.id, event.offset_ms <= controlBarrier ? -1 : generation);
-          return;
-        }
+        if (event.type === 'response.event' || event.type === 'session.delegation.created') { plugins.event(event); return; }
+        if (!textEnabled) return;
         if (event.type !== 'session.input_transcript.delta' || !validText(event.delta)
           || typeof event.start_ms !== 'number' || typeof event.end_ms !== 'number'
           || !Number.isFinite(event.start_ms) || !Number.isFinite(event.end_ms)
@@ -233,9 +199,10 @@ export function createLiveTextSession({ onChange, send }: Options) {
       if (finished) return;
       appendDictation(transcriptBuffer);
       finished = true;
+      pendingSearch = null;
       writing = false;
       transcriptBuffer = '';
-      responses.clear(); delegations.clear(); delegationGenerations.clear(); readRevisions.clear(); events.clear(); calls.clear();
+      plugins.finish(); readRevisions.clear(); events.clear();
       emit();
     },
   };

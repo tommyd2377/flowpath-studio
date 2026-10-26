@@ -15,6 +15,7 @@ type AdminResolver = NonNullable<Parameters<typeof createVoiceServer>[0]>['resol
 type Resolver = NonNullable<Parameters<typeof createVoiceServer>[0]>['resolveWaveform'];
 const shared = globalThis as typeof globalThis & {
   flowpathProductionVoiceServer?: ReturnType<typeof createVoiceServer>;
+  flowpathProductionVoiceConfigVersion?: string;
   flowpathProductionWaveformResolver?: Resolver;
   flowpathProductionAdminResolver?: AdminResolver;
 };
@@ -24,6 +25,12 @@ export function getProductionVoiceServer(resolveWaveform?: Resolver, resolveAdmi
   if (resolveAdmin) shared.flowpathProductionAdminResolver = resolveAdmin;
   if (resolveWaveform) shared.flowpathProductionWaveformResolver = resolveWaveform;
   const local = !!localAppOrigin();
+  // Dev hot reload may change registered tools while keeping the process online.
+  // Old calls keep their sideband/timers; durable cleanup supports either instance.
+  if (process.env.NODE_ENV === 'development' && shared.flowpathProductionVoiceConfigVersion !== 'knowledge-v1') {
+    shared.flowpathProductionVoiceServer = undefined;
+    shared.flowpathProductionVoiceConfigVersion = 'knowledge-v1';
+  }
   return shared.flowpathProductionVoiceServer ??= createVoiceServer({
     publicOrigin: local ? undefined : configuredPublicOrigin(process.env.FLOWPATH_PUBLIC_ORIGIN),
     trustedProxyHost: process.env.FLOWPATH_TRUSTED_PROXY_HOST,

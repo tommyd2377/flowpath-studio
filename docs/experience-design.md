@@ -10,6 +10,8 @@ The News example link belongs on the Studio homepage only, never on private `/w/
 
 The user first requested brainstorming and desktop mockups, then approved the left-portrait design for implementation. It includes an explicit End conversation control. Future multi-plugin arrangements remain proposals.
 
+Knowledge is now a second built-in, nonvisual capability. Its document management is separate from persona settings; it supplies spoken answers without automatically opening Text Box. An explicit request to show passages opens the existing panel and immediately shows a calm “Finding sources…” state while retrieval runs. Exact excerpts/filenames then replace that pending state. Hide remains immediate; a late search cannot reopen the panel or overwrite newer dictation. Source details expand inside the scrolling body, preserving the fixed toolbar and reduced-motion behavior. See [Knowledge](knowledge.md).
+
 ## Recommended desktop layout
 
 The selected desktop layout puts the portrait left of the raised waveform, on the same vertical level, in a compact conversation row. This establishes identity without a separate tall row. The right-side portrait remains a rejected comparison option. The waveform stays dominant and keeps the saved accent, existing dark palette and branding.

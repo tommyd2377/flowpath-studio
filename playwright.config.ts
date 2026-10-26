@@ -15,7 +15,7 @@ export default defineConfig({
   workers: 1,
   use: { baseURL: 'http://127.0.0.1:3225', browserName: 'chromium', launchOptions: { executablePath }, trace: 'retain-on-failure' },
   webServer: {
-    command: 'FLOWPATH_LIVE_ENABLED=0 FLOWPATH_ACCOUNT_MODE=local FLOWPATH_SAFETY_FIXTURES=1 npm run dev -- --port 3225',
+    command: 'FLOWPATH_LIVE_ENABLED=0 FLOWPATH_ACCOUNT_MODE=local FLOWPATH_SAFETY_FIXTURES=1 FLOWPATH_KNOWLEDGE_FIXTURES=1 npm run dev -- --port 3225',
     env: { FLOWPATH_ACCOUNT_FIXTURE_DIRECTORY: accountFixtures },
     url: 'http://127.0.0.1:3225',
     reuseExistingServer: false,

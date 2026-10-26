@@ -193,27 +193,27 @@ test('an invalid photo keeps the previous preview and settings available', async
   await expect(page.getByLabel('Waveform name', { exact: true })).toHaveValue('Photo validation');
 });
 
-test('long prompt drafts stay intact past 8,000 characters and saving the full allowed prompt preserves its ending', async ({ page }) => {
+test('long prompt drafts stay intact past 15,000 characters and saving the full allowed prompt preserves its ending', async ({ page }) => {
   const address = await saveWaveform(page, 'A', 'Long prompt fixture', 'L'.repeat(4000));
   await page.reload();
   const prompt = page.getByLabel('What should your voice know about itself?', { exact: true });
   await expect(page.getByText('This saved prompt reaches the previous 4,000-character limit.', { exact: false })).toBeVisible();
   await expect(prompt).not.toHaveAttribute('maxlength', /.+/);
-  const tooLong = `${'x'.repeat(8493)}THE END`;
+  const tooLong = `${'x'.repeat(15493)}THE END`;
   await prompt.fill(tooLong);
   await expect(prompt).toHaveValue(tooLong);
   await expect(prompt).toHaveAttribute('aria-invalid', 'true');
-  await expect(page.locator('#prompt-count')).toHaveText('8,500 / 8,000 characters');
+  await expect(page.locator('#prompt-count')).toHaveText('15,500 / 15,000 characters');
   await expect(page.getByRole('main').getByRole('alert')).toContainText('Your full text is preserved');
   await expect(page.getByRole('button', { name: 'Save waveform', exact: true })).toBeDisabled();
-  const complete = `${'y'.repeat(7993)}THE END`;
+  const complete = `${'y'.repeat(14993)}THE END`;
   await prompt.fill(complete);
   await expect(page.getByRole('button', { name: 'Save waveform', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
   await expect(page.locator('.account-status')).toContainText('Saved.');
   await page.reload();
   await expect(prompt).toHaveValue(complete);
-  await expect(page.locator('#prompt-count')).toHaveText('8,000 / 8,000 characters');
+  await expect(page.locator('#prompt-count')).toHaveText('15,000 / 15,000 characters');
   await expect(page.getByRole('link', { name: 'Open waveform', exact: true })).toHaveAttribute('href', address);
   await expect(page.getByText('This saved prompt reaches the previous 4,000-character limit.', { exact: false })).toHaveCount(0);
 });

@@ -50,7 +50,7 @@ test('transcript and handoff events require an explicit per-session diagnostic o
 
 
 test('managed delegation defaults to GPT-6 Luna with bounded output and no reasoning or search tools', () => {
-  const config = voiceSessionConfig({ name: 'Historical persona', initialPrompt: 'P'.repeat(8000) });
+  const config = voiceSessionConfig({ name: 'Historical persona', initialPrompt: 'P'.repeat(15000) });
   assert.equal(config.delegation.type, 'responses');
   assert.equal(VOICE_BACKEND_MODEL, 'gpt-6-luna');
   const backend = config.delegation.responses;
@@ -60,8 +60,8 @@ test('managed delegation defaults to GPT-6 Luna with bounded output and no reaso
   assert.equal(backend.service_tier, 'default');
   assert.deepEqual(backend.tools, []); assert.equal(backend.tool_choice, 'none');
   assert.equal(backend.parallel_tool_calls, false);
-  assert.ok(config.instructions.includes('P'.repeat(8000)));
-  assert.ok(backend.instructions.includes('P'.repeat(8000)));
+  assert.ok(config.instructions.includes('P'.repeat(15000)));
+  assert.ok(backend.instructions.includes('P'.repeat(15000)));
   assert.match(config.instructions, /Generate <\|SpawnThinking\|>/);
   assert.match(config.instructions, /dates and biographical facts/);
   assert.match(config.instructions, /Let me think about that for a moment/);
@@ -89,8 +89,9 @@ test('only an explicitly enabled Text Box grants its local tools and transcript 
   ]);
   assert.match(config.instructions, /Stop writing pauses capture and leaves the panel visible/);
   assert.match(config.instructions, /starts closed/);
-  assert.ok(config.delegation.responses.tools[0].parameters.properties.action.enum.includes('show'));
-  assert.ok(config.delegation.responses.tools[0].parameters.properties.action.enum.includes('hide'));
+  const properties = config.delegation.responses.tools[0].parameters.properties;
+  assert.ok('action' in properties && properties.action.enum.includes('show'));
+  assert.ok('action' in properties && properties.action.enum.includes('hide'));
   assert.match(config.delegation.responses.instructions, /first call action read/);
   assert.equal(config.store, false);
   const diagnosed = voiceSessionConfig({ ...waveform, textPanel: { type: 'text', version: 2 } }, true);

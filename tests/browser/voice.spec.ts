@@ -120,6 +120,42 @@ async function emit(page: Page, event: object) {
   await page.evaluate(event => (window as unknown as { voiceTest: MediaTracker }).voiceTest.emit(event), event);
 }
 
+test('Knowledge shows sourced passages on request and hiding it leaves voice connected', async ({ page }) => {
+  const waveformId = '00000000-0000-4000-8000-000000000099';
+  await fakeMedia(page); await mockSession(page);
+  await page.route('**/api/waveform*', route => route.fulfill({ json: { waveform: { id: waveformId, name: 'Knowledge guide', textPanel: { type: 'text', version: 2 } } } }));
+  let searches = 0;
+  await page.route('**/api/knowledge/search', route => {
+    searches++; expect(route.request().postDataJSON().waveformId).toBe(waveformId);
+    return route.fulfill({ json: { revision: 1, passages: [{ id: 'source_1', documentId: waveformId,
+      filename: 'museum.txt', quote: 'The museum opens at nine.' }] } });
+  });
+  await page.goto(`/w/${waveformId}`);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  const panel = page.getByRole('region', { name: 'Text Box content', exact: true });
+  await expect(panel).toHaveCount(0);
+  const backend = (event: object) => emit(page, { type: 'response.event', delegation_id: 'knowledge_1', event });
+  await backend({ type: 'response.created', response: { id: 'knowledge_response' } });
+  await backend({ type: 'response.output_item.done', response_id: 'knowledge_response', item: {
+    type: 'function_call', name: 'search_waveform_knowledge', call_id: 'knowledge_call',
+    arguments: JSON.stringify({ query: 'Opening hours', display: true }),
+  } });
+  await backend({ type: 'response.completed', response: { id: 'knowledge_response', status: 'completed' } });
+  await expect(panel).toContainText('museum opens at nine');
+  await expect(page.getByRole('complementary', { name: 'Sources', exact: true })).toContainText('museum.txt');
+  await page.getByText('1. museum.txt', { exact: true }).click();
+  await expect(page.locator('.knowledge-sources blockquote')).toBeVisible();
+  expect(searches).toBe(1);
+  await page.getByRole('button', { name: 'Hide', exact: true }).click();
+  await expect(panel).toHaveCount(0); await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  expect((await tracker(page)).stoppedTracks).toBe(0);
+  const events = (await tracker(page)).sentEvents.map(e => JSON.parse(e).type);
+  expect(events.filter(type => type === 'response.item.create')).toHaveLength(1);
+  expect(events.filter(type => type === 'response.create')).toHaveLength(1);
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+});
+
 async function syntheticProfilePhoto(page: Page) {
   return page.evaluate(() => {
     const canvas = document.createElement('canvas');

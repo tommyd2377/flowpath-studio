@@ -75,7 +75,7 @@ test('canonical name/prompt match saved trim rules; text is exact, bounded and n
   assert.equal(creationContentDigest(candidate), creationContentDigest({ ...candidate, name: ' Example ' }));
   assert.notEqual(creationContentDigest(candidate), creationContentDigest({ ...candidate, textPanel: { type: 'text', version: 1, text: '' } }));
   for (const input of [
-    { ...candidate, name: 'a'.repeat(81) }, { ...candidate, initialPrompt: 'a'.repeat(8001) },
+    { ...candidate, name: 'a'.repeat(81) }, { ...candidate, initialPrompt: 'a'.repeat(15001) },
     { ...candidate, name: 'bad\nname' }, { ...candidate, initialPrompt: '\u0000' },
     { ...candidate, textPanel: { type: 'text', version: 1, text: 'a'.repeat(4001) } },
     { ...candidate, textPanel: { type: 'html', version: 1, text: 'x' } },
