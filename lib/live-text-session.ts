@@ -15,11 +15,13 @@ const validText = (value: unknown): value is string => typeof value === 'string'
 /** One conversation's ephemeral text. No storage, logging, extra model or financial authority. */
 export function createLiveTextSession({ onChange, send }: Options) {
   let text = '', writing = false, message = '', finished = false, generation = 0, toolsLimited = false;
-  let transcriptBuffer = '', lastTranscriptEnd = -1, dictationCheckpoint = false;
+  let transcriptBuffer = '', lastTranscriptEnd = -1, dictationCheckpoint = false, bufferBoundary = true;
+  let controlBarrier = -1;
   const undo: string[] = [];
   const events = new Set<string>(), calls = new Set<string>();
   const responses = new Map<string, BackendResponse>();
   const delegations = new Map<string, string>();
+  const delegationGenerations = new Map<string, number>();
   const emit = () => onChange({ text, writing, canUndo: undo.length > 0, message });
   function checkpoint() {
     if (undo.at(-1) !== text) undo.push(text);
@@ -42,7 +44,7 @@ export function createLiveTextSession({ onChange, send }: Options) {
     text += text.length ? fragment : fragment.trimStart();
   }
   function control(action: TextAction, value = '', local = false) {
-    if (local) generation++;
+    if (local) { generation++; controlBarrier = lastTranscriptEnd; }
     message = '';
     if (action === 'read') return;
     if (action === 'start_dictation') {
@@ -68,23 +70,27 @@ export function createLiveTextSession({ onChange, send }: Options) {
   // Literal quotations containing these phrases need delegated replace/append instead.
   function consumeTranscript(delta: string) {
     transcriptBuffer += delta;
-    const pattern = /\b(start|stop)\s+(writing|dictation)\b/i;
+    const pattern = /\b(start|stop)\s+(writing|dictation)\b/ig;
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(transcriptBuffer))) {
+      if (!match.index && !bufferBoundary) continue;
       appendDictation(transcriptBuffer.slice(0, match.index));
       control(match[1].toLowerCase() === 'start' ? 'start_dictation' : 'stop_dictation', '', true);
       transcriptBuffer = transcriptBuffer.slice(match.index + match[0].length).replace(/^[\s,.:;!?]+/, '');
+      bufferBoundary = true;
+      pattern.lastIndex = 0;
     }
     let held = 0;
     const lower = transcriptBuffer.toLowerCase();
     for (let length = 1; length <= Math.min(lower.length, 24); length++) {
       const start = lower.length - length;
-      if (start && /[a-z]/i.test(lower[start - 1])) continue;
+      if (start ? /[a-z0-9_]/i.test(lower[start - 1]) : !bufferBoundary) continue;
       const suffix = lower.slice(start).replace(/\s+/g, ' ');
       if (commands.some(command => command.startsWith(suffix))) held = length;
     }
     const ready = transcriptBuffer.slice(0, transcriptBuffer.length - held);
     appendDictation(ready);
+    if (ready) bufferBoundary = !/[a-z0-9_]/i.test(ready.at(-1)!);
     transcriptBuffer = held ? transcriptBuffer.slice(-held) : '';
     emit();
   }
@@ -107,7 +113,8 @@ export function createLiveTextSession({ onChange, send }: Options) {
     if (event.type === 'response.created') {
       if (!identifier(responseObject?.id) || !delegationId || responses.has(responseObject.id)) return;
       if (responses.size >= 128) { message = 'Text updates reached this conversation’s limit.'; emit(); return; }
-      responses.set(responseObject.id, { generation, calls: 0, continued: false, completed: false, failed: false });
+      responses.set(responseObject.id, { generation: delegationGenerations.get(delegationId) ?? generation,
+        calls: 0, continued: false, completed: false, failed: false });
       delegations.set(delegationId, responseObject.id);
       return;
     }
@@ -136,7 +143,9 @@ export function createLiveTextSession({ onChange, send }: Options) {
     calls.add(item.call_id);
     response.calls++;
     let status = 'invalid_action';
-    if (response.generation !== generation) status = 'superseded';
+    if (item.status !== undefined && item.status !== 'completed') status = 'not_completed';
+    else if (response.failed || response.generation !== generation
+      || delegationGenerations.has(delegationId) && delegationGenerations.get(delegationId) !== generation) status = 'superseded';
     else if (item.name === 'update_text_box' && typeof item.arguments === 'string' && item.arguments.length <= 30_000) {
       let args: Record<string, unknown> | null = null;
       try { args = object(JSON.parse(item.arguments)); } catch { /* Invalid arguments never modify the panel. */ }
@@ -145,7 +154,7 @@ export function createLiveTextSession({ onChange, send }: Options) {
         && (['replace', 'append'].includes(String(args.action)) || args.text === '')) {
         if (args.action === 'append' && text.length + args.text.length > MAX_TEXT) status = 'text_too_long';
         else {
-          transcriptBuffer = '';
+          if (args.action !== 'read') { transcriptBuffer = ''; bufferBoundary = true; }
           control(args.action as TextAction, args.text);
           status = 'applied';
           emit();
@@ -171,6 +180,17 @@ export function createLiveTextSession({ onChange, send }: Options) {
           events.add(event.event_id);
         }
         if (event.type === 'response.event') { backend(event); return; }
+        if (event.type === 'session.delegation.created') {
+          const delegation = object(event.delegation);
+          if (delegation?.target !== 'responses' || !identifier(delegation.id) || delegationGenerations.has(delegation.id)
+            || delegationGenerations.size >= 128 || typeof event.offset_ms !== 'number' || !Number.isFinite(event.offset_ms)
+            || event.offset_ms < 0) return;
+          // Provider audio timing rejects old work even when its metadata arrives after a local control.
+          // If all metadata and transcript fragments were delayed past the barrier, their age is unknown;
+          // without a provider acknowledgment, no browser-only clock can establish an exact stop boundary.
+          delegationGenerations.set(delegation.id, event.offset_ms <= controlBarrier ? -1 : generation);
+          return;
+        }
         if (event.type !== 'session.input_transcript.delta' || !validText(event.delta)
           || typeof event.start_ms !== 'number' || typeof event.end_ms !== 'number'
           || !Number.isFinite(event.start_ms) || !Number.isFinite(event.end_ms)
@@ -185,16 +205,19 @@ export function createLiveTextSession({ onChange, send }: Options) {
     },
     action(action: 'stop' | 'clear' | 'undo') {
       if (!['stop', 'clear', 'undo'].includes(action)) return;
+      if (action === 'stop') appendDictation(transcriptBuffer);
       transcriptBuffer = '';
+      bufferBoundary = true;
       control(action === 'stop' ? 'stop_dictation' : action, '', true);
       emit();
     },
     finish() {
       if (finished) return;
+      appendDictation(transcriptBuffer);
       finished = true;
       writing = false;
       transcriptBuffer = '';
-      responses.clear(); delegations.clear(); events.clear(); calls.clear();
+      responses.clear(); delegations.clear(); delegationGenerations.clear(); events.clear(); calls.clear();
       emit();
     },
   };

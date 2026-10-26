@@ -51,6 +51,34 @@ test('ordinary words ending in control-prefix letters are streamed normally', ()
   assert.equal(h.state().text, 'First frost tests.');
 });
 
+test('command recognition respects a word boundary split across transcript fragments', () => {
+  const h = setup(); h.transcript('start writing');
+  h.transcript('egg'); h.transcript('s');
+  assert.equal(h.state().text, 'eggs');
+  h.transcript(' re'); h.transcript('start writing');
+  assert.equal(h.state().text, 'eggs restart writing');
+  h.transcript(' '); h.transcript('stop writing');
+  assert.equal(h.state().writing, false);
+  assert.equal(h.state().text, 'eggs restart writing ');
+});
+
+test('local Stop and finish preserve a final ordinary word that resembles a command prefix', () => {
+  for (const finish of [false, true]) {
+    const h = setup(); h.transcript('start writing'); h.transcript('A fresh start');
+    if (finish) h.session.finish(); else h.session.action('stop');
+    assert.equal(h.state().text, 'A fresh start');
+    assert.equal(h.state().writing, false);
+  }
+});
+
+test('read does not discard a buffered fragmented stop command', () => {
+  const h = setup(); h.transcript('start writing. Eggs '); h.transcript('stop writ');
+  h.created(); h.call('read');
+  h.transcript('ing');
+  assert.equal(h.state().writing, false);
+  assert.equal(h.state().text, 'Eggs ');
+});
+
 test('duplicate, overlapping and out-of-order input is not appended twice', () => {
   const h = setup();
   h.transcript('start writing');
@@ -136,6 +164,29 @@ test('spoken stop supersedes pending start and generated writes', () => {
   assert.equal(h.state().text, 'Original. ');
 });
 
+test('a known delegation keeps its old generation when its response arrives after Stop', () => {
+  const h = setup(); h.transcript('start writing. Existing');
+  h.session.event({ type: 'session.delegation.created', offset_ms: 101, delegation: { id: 'delegation_1', target: 'responses' } });
+  h.session.action('stop'); h.created(); h.call('start_dictation');
+  assert.equal(h.result().status, 'superseded');
+  assert.equal(h.state().writing, false);
+});
+
+test('late delegation metadata at or before the transcript barrier rejects stale updates', () => {
+  const h = setup(); h.transcript('start writing. Existing');
+  h.session.action('stop'); h.created();
+  h.session.event({ type: 'session.delegation.created', offset_ms: 50, delegation: { id: 'delegation_1', target: 'responses' } });
+  h.call('replace', 'Stale');
+  assert.equal(h.result().status, 'superseded');
+  assert.equal(h.state().text, 'Existing');
+  h.transcript('Put a new answer in the box.');
+  h.session.event({ type: 'session.delegation.created', offset_ms: 200, delegation: { id: 'delegation_2', target: 'responses' } });
+  h.created('response_2', 'delegation_2');
+  h.call('replace', 'New answer', 'call_2', 'response_2', 'delegation_2');
+  assert.equal(h.result().status, 'applied');
+  assert.equal(h.state().text, 'New answer');
+});
+
 test('read returns the current panel and delegated editing uses the same undo stack', () => {
   const h = setup();
   h.transcript('start writing. Original.');
@@ -166,6 +217,19 @@ test('invalid tools and arguments get rejected without executing anything else',
   assert.equal(h.state().text, '');
   assert.equal(h.sent.length, invalid.length);
   for (const event of h.sent) assert.equal(JSON.parse((event.item as { output: string }).output).status, 'invalid_action');
+});
+
+test('incomplete function items and items received after a failed response cannot modify text', () => {
+  const h = setup(); h.created();
+  for (const status of ['incomplete', 'in_progress', null]) {
+    h.backend({ type: 'response.output_item.done', response_id: 'response_1', item: { type: 'function_call', status,
+      name: 'update_text_box', call_id: `call_${String(status)}`, arguments: '{"action":"replace","text":"Bad"}' } });
+    assert.equal(h.result().status, 'not_completed');
+  }
+  h.backend({ type: 'response.failed', response: { id: 'response_1', status: 'failed' } });
+  h.call('replace', 'Late failed item', 'late_failed');
+  assert.equal(h.result().status, 'superseded');
+  assert.equal(h.state().text, '');
 });
 
 test('size limits reject oversized append and pause dictation without silently truncating', () => {
