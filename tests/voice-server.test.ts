@@ -45,6 +45,13 @@ function harness(extra: Parameters<typeof createVoiceServer>[0] = {}) {
     requestProvider: (async (url, options = {}) => {
       calls.push({ url: String(url), options });
       if (String(url).endsWith('/hangup')) return new Response(null, { status: 200 });
+      const selectors = JSON.parse(String(options.body)).session.client.data_channel.allowed_server_events;
+      // Independent provider contract: response.event requires a nested event selector.
+      const responseEvents = new Set(['response.created', 'response.output_item.done', 'response.completed', 'response.failed', 'response.incomplete']);
+      if (selectors.some((selector: { type: string; response_event?: string }) => selector.type === 'response.event'
+        ? !responseEvents.has(selector.response_event ?? '') : selector.response_event !== undefined)) {
+        return Response.json({ error: { code: 'invalid_value', type: 'invalid_request_error', param: 'session.client.data_channel.allowed_server_events.response_event' } }, { status: 400 });
+      }
       return Response.json({ session: { id: `live_synthetic_${calls.length}` }, transport: { type: 'webrtc', sdp } }, { status: 201 });
     }) as typeof fetch,
     socketFactory: url => {
@@ -98,12 +105,14 @@ test('text tools come from the owner-checked saved waveform, never a browser act
     ? { ownerUid: 'owner-a', waveform: { name: 'Text assistant', initialPrompt: 'Friendly.', textPanel: { type: 'text', version: 2 } }, isCurrent: () => true } : null });
   assert.equal((await server.POST(request('POST', { sessionId: randomUUID(), sdp, textPanel: { type: 'text', version: 2 } }))).status, 400);
   assert.equal(calls.length, 0);
-  const sessionId = randomUUID();
-  assert.equal((await server.POST(privateRequest('POST', waveformId, { sessionId, sdp }))).status, 201);
-  const config = JSON.parse(String(calls[0].options.body)).session;
-  assert.equal(config.delegation.responses.model, 'gpt-6-luna');
-  assert.equal(config.delegation.responses.tools[0].name, 'update_text_box');
-  assert.equal((await server.DELETE(privateRequest('DELETE', waveformId, { sessionId }))).status, 200);
+  for (const diagnostics of [false, true]) {
+    const sessionId = randomUUID();
+    assert.equal((await server.POST(privateRequest('POST', waveformId, { sessionId, sdp, diagnostics }))).status, 201);
+    const config = JSON.parse(String(calls.at(-1)!.options.body)).session;
+    assert.equal(config.delegation.responses.model, 'gpt-6-luna');
+    assert.equal(config.delegation.responses.tools[0].name, 'update_text_box');
+    assert.equal((await server.DELETE(privateRequest('DELETE', waveformId, { sessionId }))).status, 200);
+  }
 });
 
 test('saved instructions are loaded server-side per conversation and the personal greeting follows that identity', async () => {

@@ -84,7 +84,8 @@ test('only an explicitly enabled Text Box grants its local tools and transcript 
   assert.equal(config.delegation.responses.parallel_tool_calls, false);
   assert.deepEqual(config.client.data_channel.allowed_client_events, ['session.close', 'response.item.create', 'response.create']);
   assert.deepEqual(config.client.data_channel.allowed_server_events.map(event => event.type), [
-    'session.started', 'session.closed', 'error', 'session.input_transcript.delta', 'response.event', 'session.delegation.created',
+    'session.started', 'session.closed', 'error', 'session.input_transcript.delta',
+    'response.event', 'response.event', 'response.event', 'response.event', 'response.event', 'session.delegation.created',
   ]);
   assert.match(config.instructions, /Stop writing pauses text capture, not the voice conversation/);
   assert.match(config.delegation.responses.instructions, /first call action read/);
@@ -92,4 +93,14 @@ test('only an explicitly enabled Text Box grants its local tools and transcript 
   const diagnosed = voiceSessionConfig({ ...waveform, textPanel: { type: 'text', version: 2 } }, true);
   const events = diagnosed.client.data_channel.allowed_server_events.map(event => event.type);
   assert.equal(events.filter(event => event === 'session.input_transcript.delta').length, 1);
+  // Required by Live ServerEventSelector; checking only outer type hid a real provider 400.
+  for (const candidate of [config, diagnosed]) {
+    assert.deepEqual(candidate.client.data_channel.allowed_server_events.filter(event => event.type === 'response.event'), [
+      { type: 'response.event', response_event: 'response.created' },
+      { type: 'response.event', response_event: 'response.output_item.done' },
+      { type: 'response.event', response_event: 'response.completed' },
+      { type: 'response.event', response_event: 'response.failed' },
+      { type: 'response.event', response_event: 'response.incomplete' },
+    ]);
+  }
 });

@@ -73,7 +73,12 @@ export function voiceSessionConfig(waveform?: WaveformPrompt, diagnostics = fals
       allowed_server_events: [
         { type: 'session.started' }, { type: 'session.closed' }, { type: 'error' },
         ...(textBox || diagnostics ? [{ type: 'session.input_transcript.delta' }] : []),
-        ...(textBox ? [{ type: 'response.event' }, { type: 'session.delegation.created' }] : []),
+        ...(textBox ? [
+          // Live requires an explicit nested selector for every response.event subscription.
+          ...['response.created', 'response.output_item.done', 'response.completed', 'response.failed', 'response.incomplete']
+            .map(response_event => ({ type: 'response.event', response_event })),
+          { type: 'session.delegation.created' },
+        ] : []),
         ...(diagnostics ? [
           { type: 'session.output_transcript.delta' },
           ...(!textBox ? [{ type: 'session.delegation.created' }] : []), { type: 'session.usage.updated' },

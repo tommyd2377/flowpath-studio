@@ -36,4 +36,10 @@ October 26 local verification: `npm run check` passed lint, typecheck, all 288 u
 
 Hundreds of milliseconds is a first-visible-text goal, not a measured guarantee. Transcript arrival and delegated model time must be measured separately. No model fallback or automatic paid retry is installed.
 
+### Live startup correction, October 26
+
+The first real Text Box start returned HTTP 400: `session.client.data_channel.allowed_server_events[4].response_event` was missing. A bare `response.event` selector is invalid. The configuration now explicitly selects nested `response.created`, `response.output_item.done`, `response.completed`, `response.failed` and `response.incomplete`, as required by the [Live create-session schema](https://developers.openai.com/api/reference/resources/live/methods/create). Regression tests failed against the old request and pass with the correction; the provider mock validates selector fields independently of the configuration builder. Both diagnostic modes are covered. `npm run check` (288 unit tests) and all 52 standard browser tests passed after this correction.
+
+With the user's explicit Brave/localhost testing authorization, the coordinator clicked Start once in the actual signed-in Google-account waveform with Text Box enabled. The live POST returned 201 and the UI reached Conversation connected; End completed with a successful DELETE. Subsequent user-triggered starts also returned 201. Text appeared and remained after one call ended, but full dictation and delegated-edit correctness were not established: coordinator End/Escape actions overlapped the user's speech. The user's report that Start writing ended voice therefore remains unconfirmed independently of those actions. No automatic restarts or retries were added. Do not treat mocked coverage or successful connection as proof of all spoken operations or latency.
+
 Official references: [transcript deltas](https://developers.openai.com/api/docs/guides/live-conversations#transcript-deltas), [delegation and function continuation](https://developers.openai.com/api/docs/guides/live-delegation), [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna).
