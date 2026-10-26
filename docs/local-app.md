@@ -1,5 +1,9 @@
 # Full app on localhost
 
+**October 26 current mode:** the user explicitly removed usage limits for manual local founder testing after the reservation budget repeatedly blocked restarts. In the validated full localhost runtime, a verified founder using their own waveform with saved Admin testing enabled has no daily quota, restart throttle, silence timeout or app-imposed elapsed-time cutoff. This is selected by `localTestingVoicePolicy`, not a giant numeric quota or a reset of consumed reservations. The earlier temporary 135-minute process override was removed; private environment files were not edited. Hosted runtime, other accounts, public demos and paid visitor paths retain their normal rules. Turn Admin testing off to exercise regular-user limits. Account/ownership checks, one active owner conversation and confirmed provider cleanup remain. Provider-imposed limits can still end a call. This manual-testing choice does not authorize Codex to make unbounded automatic paid calls.
+
+The following October 25 shutdown/network/budget notes are historical. The current loopback app is running on port 3220; Wi-Fi adapters and Stripe CLI were not started by this follow-up.
+
 **Stopped after October 25 testing:** the app (3220), Wi-Fi HTTPS adapter (3230), public-certificate server (3231), Stripe CLI forwarding and remaining idle deadline workers were shut down after confirming zero active conversations. App/network ports were verified closed. Only the temporary `thomass-macbook-air.local` sign-in domain was removed; localhost and all other auth settings were preserved. The previously approved 120-minute local daily budget and saved admin preference remain for a later explicitly requested restart. No production setting or provider credential was changed. The iPhone's manually installed test certificate profile remains on the phone until its owner removes it.
 
 ## Temporary iPhone Wi-Fi access (October 25)

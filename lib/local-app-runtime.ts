@@ -1,5 +1,5 @@
 import { configuredFirebaseProjectId, getFirebaseAccountServices } from './firebase-accounts';
-import { firestoreVoiceDatabase, type VoiceDatabase } from './production-voice-store';
+import { firestoreVoiceDatabase, productionVoicePolicy, type VoiceDatabase } from './production-voice-store';
 
 /** Explicit full-app development mode; synthetic fixtures and public hosting cannot select it. */
 export function localAppOrigin(env: Record<string, string | undefined> = process.env): string | undefined {
@@ -11,6 +11,12 @@ export function localAppOrigin(env: Record<string, string | undefined> = process
     if (url.protocol === 'http:' && url.hostname === 'localhost' && url.port && !url.username && !url.password
       && url.pathname === '/' && !url.search && !url.hash) return url.origin;
   } catch { /* Incomplete configuration stays disabled. */ }
+}
+
+/** The user's local founder-testing choice cannot be selected on a hosted/fixture runtime. */
+export function localTestingVoicePolicy(env: Record<string, string | undefined> = process.env) {
+  const policy = productionVoicePolicy(env);
+  return policy && localAppOrigin(env) ? { ...policy, unmeteredAdminTesting: true } : policy;
 }
 
 /** Accounts/waveforms are real; local voice holds and test ledgers cannot occupy production slots. */

@@ -1,10 +1,10 @@
 import { createVoiceServer } from './voice-server';
 import { configuredFirebaseProjectId, getFirebaseAccountServices } from './firebase-accounts';
 import { configuredPublicOrigin } from './request-origin';
-import { createProductionVoiceStore, firestoreVoiceDatabase, productionVoicePolicy } from './production-voice-store';
+import { createProductionVoiceStore, firestoreVoiceDatabase } from './production-voice-store';
 import { productionVoiceDeadlineConfigured, scheduleProductionVoiceDeadline } from './voice-deadline';
 import { activePaidAdminCall, previousPaidAdminCall } from './paid-voice-store';
-import { localAppOrigin, localFirebaseDatabase } from './local-app-runtime';
+import { localAppOrigin, localFirebaseDatabase, localTestingVoicePolicy } from './local-app-runtime';
 import { scheduleLocalVoiceDeadline } from './local-voice-deadline';
 import { publicVoiceOwner } from './public-voice-identity';
 import { creationReviewStore, creationSafetyEnabled } from './creation-runtime';
@@ -30,7 +30,7 @@ export function getProductionVoiceServer(resolveWaveform?: Resolver, resolveAdmi
     enabled: () => (local || process.env.NODE_ENV === 'production')
       && process.env.FLOWPATH_ACCOUNT_MODE === 'firebase' && process.env.FLOWPATH_FIRESTORE_EDITION === 'standard'
       && Boolean(configuredFirebaseProjectId()) && (local || Boolean(configuredPublicOrigin(process.env.FLOWPATH_PUBLIC_ORIGIN)))
-      && (local || productionVoiceDeadlineConfigured()) && Boolean(productionVoicePolicy(process.env)),
+      && (local || productionVoiceDeadlineConfigured()) && Boolean(localTestingVoicePolicy()),
     resolveWaveform: (request, id) => shared.flowpathProductionWaveformResolver?.(request, id) ?? Promise.resolve(null),
     resolvePublicVisitor: publicVoiceOwner,
     resolveAdmin: request => shared.flowpathProductionAdminResolver?.(request) ?? Promise.resolve(null),
@@ -45,7 +45,7 @@ export function getProductionVoiceServer(resolveWaveform?: Resolver, resolveAdmi
         if (!waveform || waveform.id !== owner.waveformId || creationContentDigest(waveform) !== owner.contentDigest) throw new CreationSafetyError('Waveform content changed. Start again after its review.');
         await creationReviewStore().requireAllowed(tx, owner.ownerUid, waveform);
       }),
-      policy: () => productionVoicePolicy(process.env),
+      policy: () => localTestingVoicePolicy(),
       scheduleDeadline: local ? scheduleLocalVoiceDeadline : scheduleProductionVoiceDeadline,
     },
   });

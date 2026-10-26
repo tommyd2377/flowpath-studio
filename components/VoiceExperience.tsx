@@ -13,6 +13,7 @@ import TextPanel from './TextPanel';
 import LiveTextPanel from './LiveTextPanel';
 import { liveTextPanelEnabled, type TextPanelConfiguration } from '@/lib/text-panel';
 import { clientAnalytics, observeVisit } from '@/lib/analytics-runtime';
+import { Square } from 'lucide-react';
 
 export default function VoiceExperience({ waveformId, name, accentColor = WAVEFORM_DEFAULT_COLOR, profilePhoto = null, paidPayer, onSettled, textPanel = null, analyticsSurface, nextConversation }: {
   waveformId?: string; name?: string; accentColor?: string; profilePhoto?: string | null; paidPayer?: 'creator' | 'self'; onSettled?: () => void; textPanel?: TextPanelConfiguration | null; analyticsSurface?: 'private' | 'public'; nextConversation?: () => void;
@@ -25,6 +26,15 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
   const [recordNext, setRecordNext] = useState(false);
   const { active, stop } = voice;
   const connected = voice.phase === 'listening' || voice.phase === 'speaking';
+  const textVisible = textBoxEnabled && voice.textState.visible;
+  const docked = Boolean(waveformId && (connected || textVisible));
+  const waveControl = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const hideText = () => {
+    const restoreFocus = panel.current?.contains(document.activeElement);
+    voice.hideText();
+    if (restoreFocus) waveControl.current?.focus({ preventScroll: true });
+  };
   const surface = analyticsSurface ?? (waveformId ? 'private' : 'home');
   const wasConnected = useRef(false);
   useEffect(() => { observeVisit(surface); }, [surface]);
@@ -55,12 +65,13 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
   }, [active, stop]);
 
   return <div className="voice-experience" data-active={voice.active} data-connected={connected}
-    data-personal={Boolean(waveformId)} data-profile-photo={hasPortrait}
+    data-personal={Boolean(waveformId)} data-profile-photo={hasPortrait} data-docked={docked} data-text-visible={textVisible}
     style={waveformId ? appearanceTheme(accentColor) : undefined}>
     <nav className="voice-navigation" aria-label="FlowPath navigation" hidden={Boolean(waveformId) && voice.active}>
-      <a className="news-example-link" href="https://flowpathapp.com" onClick={() => clientAnalytics.record({ eventName: 'navigation_selected', properties: { destination: 'news' } })}>FlowPath News example</a>
+      {!waveformId && <a className="news-example-link" href="https://flowpathapp.com" onClick={() => clientAnalytics.record({ eventName: 'navigation_selected', properties: { destination: 'news' } })}>FlowPath News example</a>}
+      {waveformId && !voice.active && !textVisible && voice.textState.text && <button className="secondary-button text-reopen" type="button" onClick={voice.showText}>Show text</button>}
       <div className="voice-account-links">
-        {name && <span>{name}</span>}
+        {name && !docked && <span>{name}</span>}
         <Link href="/account" onClick={() => clientAnalytics.record({ eventName: 'navigation_selected', properties: { destination: 'account' } })}>{waveformId ? 'My waveform' : 'Create your waveform'}</Link>
       </div>
     </nav>
@@ -73,8 +84,13 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
           : <Image src="/brand/flowpath-logo-full.png" alt="FlowPath" width={1536} height={1024} priority />}
         {!waveformId && <span className="wordmark-studio">Studio</span>}
       </header>
-      <button className="wave-control" type="button" aria-label={label} aria-pressed={voice.active}
-        aria-describedby={showStatus && status ? 'voice-status' : !connected ? 'voice-hint' : undefined}
+      {waveformId && docked && <div className="conversation-identity">
+        <span className="conversation-name">{name ?? 'Your waveform'}</span>
+        <span className="conversation-state">{voice.active ? connected ? voice.phase === 'speaking' ? 'Speaking' : 'Listening' : 'Connecting' : 'Conversation ended'}</span>
+      </div>}
+      {waveformId && docked && voice.active && <button type="button" className="secondary-button conversation-end" onClick={() => void voice.stop()}><Square aria-hidden="true" />End conversation</button>}
+      <button ref={waveControl} className="wave-control" type="button" aria-label={waveformId && docked && voice.active && !voice.needsAudioResume ? 'Voice waveform' : label} aria-pressed={voice.active}
+        aria-describedby={showStatus && status ? 'voice-status' : !connected && !docked ? 'voice-hint' : undefined}
         onClick={() => {
           if (nextConversation) nextConversation();
           else if (voice.needsAudioResume) void voice.start();
@@ -83,18 +99,18 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
         }}>
         <Waveform phase={voice.phase} inputAnalyser={voice.inputAnalyser} outputAnalyser={voice.outputAnalyser} accentColor={waveformId ? accentColor : undefined} />
       </button>
-      <p className="voice-hint" id="voice-hint" aria-hidden={connected}>{nextConversation ? 'Copy your text, then tap the wave to choose your next conversation' : 'Tap the wave whenever you’re ready'}</p>
+      <p className="voice-hint" id="voice-hint" aria-hidden={connected || docked}>{nextConversation ? 'Copy your text, then tap the wave to choose your next conversation' : 'Tap the wave whenever you’re ready'}</p>
       <p className="voice-status" id="voice-status" role="status" aria-live="polite" aria-atomic="true">{showStatus ? status : ''}</p>
       {paidPayer && <p className="paid-session-meter" aria-live="polite">{paidPayer === 'creator' ? 'Creator pays' : 'You pay from your prepaid balance'}{voice.remainingSeconds !== null ? ` · ${voice.remainingSeconds} seconds remaining${voice.remainingSeconds <= 30 ? ' — ending soon' : ''}` : ''}</p>}
       <span className="sr-only">{connected ? 'Conversation connected. Tap the waveform or press Escape to end.' : ''}</span>
-      {textBoxEnabled ? <div className="voice-text-panel"><LiveTextPanel {...voice.textState}
-        onStop={voice.stopWriting} onClear={voice.clearText} onUndo={voice.undoText} />
+      {textVisible ? <div ref={panel} className="voice-text-panel voice-text-panel--live"><LiveTextPanel {...voice.textState}
+        onStop={voice.stopWriting} onClear={voice.clearText} onUndo={voice.undoText} onHide={hideText} />
         {voice.textState.message && <p role="status">{voice.textState.message}</p>}
-      </div> : textPanel && <div className="voice-text-panel"><TextPanel configuration={textPanel} scopeKey={waveformId ?? 'home'} /></div>}
+      </div> : !textBoxEnabled && textPanel && <div className="voice-text-panel"><TextPanel configuration={textPanel} scopeKey={waveformId ?? 'home'} /></div>}
     </main>
     {diagnosticsMode && <VoiceDiagnostics key={voice.diagnosticVersion} active={voice.active} recordNext={recordNext} onRecordNext={setRecordNext}
       recording={voice.diagnosticRecording} hasReport={voice.hasDiagnostic} version={voice.diagnosticVersion}
       getReport={voice.getDiagnostic} mark={voice.markDiagnostic} stopRecording={voice.stopDiagnostic} clear={voice.clearDiagnostic} />}
-    <div className="footer-position" hidden={voice.active}><PersonalFooter /></div>
+    <div className="footer-position" hidden={voice.active || textVisible}><PersonalFooter /></div>
   </div>;
 }

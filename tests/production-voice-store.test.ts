@@ -3,7 +3,7 @@ import test from 'node:test';
 import { ACCOUNT_SESSION_COLLECTION } from '../lib/production-account-session';
 import {
   createProductionVoiceStore, productionVoicePolicy, VoiceAdmissionError,
-  voiceReservationSeconds, type VoiceDatabase, type VoiceOwner, type VoicePolicy, type VoiceTransaction,
+  voiceReservationSeconds, UNMETERED_LOCAL_DEADLINE, type VoiceDatabase, type VoiceOwner, type VoicePolicy, type VoiceTransaction,
 } from '../lib/production-voice-store';
 import { VOICE_SESSION_SECONDS } from '../lib/voice-config';
 import { PUBLIC_VOICE_SECONDS, PUBLIC_WAVEFORM_ID } from '../lib/public-voice-identity';
@@ -654,6 +654,26 @@ test('admin continuation remains bound to its account, waveform and confirmed cl
   await assert.rejects(store.reserve({ ...owner('b'), admin: { ...admin.admin, uid: owner('b').ownerUid, accountSessionId: owner('b').accountSessionId } }, 'other-account', policy), /previous conversation/);
   await assert.rejects(store.reserve(admin, 'global-cap', { ...policy, globalDailySeconds: 900 }), /shared test limit.*15-minute block/);
   await assert.rejects(store.reserve({ ...admin, admin: { ...admin.admin, accountSessionId: 'revoked' } }, 'revoked-admin', policy), /Sign in again/);
+});
+
+test('local founder testing bypasses exhausted quotas and elapsed time while preserving account and cleanup authority', async () => {
+  const a = owner('admin'), regular = owner('regular');
+  const admin = { ...a, admin: { uid: a.ownerUid, accountSessionId: a.accountSessionId, override: true } };
+  const db = database(a, regular);
+  await db.transaction(async tx => { tx.set('voiceAdmission/global', { day: new Date(start).toISOString().slice(0, 10), reservedSeconds: 7200, active: {} }); });
+  const store = createProductionVoiceStore(db, () => start);
+  const testing = { ...policy, globalDailySeconds: 7200, unmeteredAdminTesting: true };
+  await assert.rejects(store.available(regular, testing), admissionError(429));
+  await assert.rejects(store.available({ ...admin, admin: { ...admin.admin, override: false } }, testing), admissionError(429));
+  const call = await store.reserve(admin, 'local-unmetered', testing);
+  assert.equal(call.expiresAt, UNMETERED_LOCAL_DEADLINE);
+  assert.equal(call.admin?.unmeteredLocal, true);
+  await store.created(call.id, 'synthetic_local', call.expiresAt);
+  await assert.rejects(store.reserve(admin, 'duplicate', testing), /previous conversation/);
+  await store.finish(call.id, { finalized: true, seconds: 901 });
+  await assert.rejects(store.available({ ...admin, admin: { ...admin.admin, accountSessionId: 'revoked' } }, testing), /Sign in again/);
+  await store.available(admin, testing);
+  await assert.rejects(store.available(admin, { ...testing, unmeteredAdminTesting: false }), admissionError(429));
 });
 
 test('admin budget messages explain a partial block without refunding or resetting reservations', async () => {

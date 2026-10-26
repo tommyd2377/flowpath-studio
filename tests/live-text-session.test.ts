@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createLiveTextSession, type LiveTextState } from '../lib/live-text-session';
 
 function setup() {
-  let state: LiveTextState = { text: '', writing: false, canUndo: false, message: '' };
+  let state: LiveTextState = { text: '', writing: false, visible: false, canUndo: false, message: '' };
   const sent: Record<string, unknown>[] = [];
   const session = createLiveTextSession({ onChange: next => { state = next; }, send: event => { sent.push(event); } });
   let time = 0, serial = 0;
@@ -27,16 +27,19 @@ test('dictation starts empty and exact fragmented controls never enter the panel
   const h = setup();
   h.transcript('Ordinary conversation. ');
   assert.equal(h.state().text, '');
+  assert.equal(h.state().visible, false);
   h.transcript('Start writ');
   assert.equal(h.state().writing, false);
   h.transcript('ing. Apples');
   assert.equal(h.state().writing, true);
+  assert.equal(h.state().visible, true);
   assert.equal(h.state().text, 'Apples');
   h.transcript(', pears and ');
   h.transcript('oranges. Sto');
   assert.equal(h.state().text, 'Apples, pears and oranges. ');
   h.transcript('p dictation. Please tell me a story.');
   assert.equal(h.state().writing, false);
+  assert.equal(h.state().visible, true);
   assert.equal(h.state().text, 'Apples, pears and oranges. ');
   h.session.event({ type: 'session.output_transcript.delta', delta: 'A story', start_ms: 0, end_ms: 20 });
   assert.equal(h.state().text, 'Apples, pears and oranges. ');
@@ -49,6 +52,60 @@ test('ordinary words ending in control-prefix letters are streamed normally', ()
   h.transcript('start writing');
   for (const word of ['First', ' frost', ' tests', '.']) h.transcript(word);
   assert.equal(h.state().text, 'First frost tests.');
+});
+
+test('ordinary speech, internal reads and cleanup do not reveal an unused panel', () => {
+  const h = setup(); h.transcript('Hello, tell me a story.');
+  h.created(); h.call('read'); h.call('clear', '', 'clear_1'); h.call('undo', '', 'undo_1');
+  assert.equal(h.state().visible, false);
+  h.session.finish();
+  assert.equal(h.state().visible, false);
+});
+
+test('fragmented show and hide controls preserve text without capturing ordinary speech', () => {
+  const h = setup();
+  h.transcript('Start writing. Keep this. ');
+  h.transcript('Hide the text '); h.transcript('box. Ignore this.');
+  assert.equal(h.state().visible, false); assert.equal(h.state().writing, false);
+  assert.equal(h.state().text, 'Keep this. ');
+  h.transcript('Show text'); h.transcript(' box. Do not dictate this.');
+  assert.equal(h.state().visible, true); assert.equal(h.state().writing, false);
+  assert.equal(h.state().text, 'Keep this. ');
+  h.transcript('Close text box');
+  assert.equal(h.state().visible, false);
+  assert.equal(h.sent.length, 0, 'presentation controls never request a new provider response or close voice');
+});
+
+test('local Hide flushes buffered text and prevents late operations from reopening it', () => {
+  const h = setup(); h.transcript('Start writing. A fresh start'); h.created();
+  h.session.action('hide'); h.call('replace', 'Late answer');
+  assert.equal(h.state().text, 'A fresh start');
+  assert.equal(h.state().visible, false); assert.equal(h.state().writing, false);
+  assert.equal(h.result().status, 'superseded');
+  h.session.finish(); h.session.action('show');
+  assert.equal(h.state().visible, true); assert.equal(h.state().writing, false);
+});
+
+test('delegated display opens only on explicit display operations, while Hide retains data', () => {
+  const h = setup(); h.created(); h.call('show');
+  assert.equal(h.state().visible, true); assert.equal(h.state().writing, false);
+  h.call('replace', 'Written answer.', 'replace_1');
+  h.call('hide', '', 'hide_1');
+  assert.equal(h.state().text, 'Written answer.'); assert.equal(h.state().visible, false);
+  assert.equal(h.result().visible, false);
+  h.created('response_2', 'delegation_2');
+  h.call('read', '', 'read_1', 'response_2', 'delegation_2');
+  assert.equal(h.state().visible, false);
+  h.call('append', ' More.', 'append_1', 'response_2', 'delegation_2');
+  assert.equal(h.state().visible, true); assert.equal(h.state().text, 'Written answer. More.');
+});
+
+test('a delegated Hide also supersedes older pending writes', () => {
+  const h = setup(); h.created('response_old', 'delegation_old'); h.created();
+  h.call('hide');
+  h.call('replace', 'Do not reopen.', 'old_write', 'response_old', 'delegation_old');
+  assert.equal(h.result().status, 'superseded');
+  assert.equal(h.state().visible, false); assert.equal(h.state().text, '');
 });
 
 test('command recognition respects a word boundary split across transcript fragments', () => {

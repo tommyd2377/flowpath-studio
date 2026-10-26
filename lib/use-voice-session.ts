@@ -116,7 +116,7 @@ function dispose(session: VoiceSession, leaving = false): Promise<boolean> {
   return session.closePromise;
 }
 
-const emptyTextState = (): LiveTextState => ({ text: '', writing: false, canUndo: false, message: '' });
+const emptyTextState = (): LiveTextState => ({ text: '', writing: false, visible: false, canUndo: false, message: '' });
 
 export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'self', textBoxEnabled = false) {
   const [phase, setPhase] = useState<VoicePhase>('idle');
@@ -444,6 +444,8 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
   const stopWriting = useCallback(() => textController.current?.action('stop'), []);
   const clearText = useCallback(() => textController.current?.action('clear'), []);
   const undoText = useCallback(() => textController.current?.action('undo'), []);
+  const hideText = useCallback(() => textController.current?.action('hide'), []);
+  const showText = useCallback(() => textController.current?.action('show'), []);
   const markDiagnostic = useCallback(() => diagnostic.current?.mark() ?? false, []);
   const stopDiagnostic = useCallback(() => {
     diagnostic.current?.finish('capture_stopped');
@@ -458,6 +460,6 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
   }, []);
 
   return { phase, active, status, remainingSeconds, inputAnalyser, outputAnalyser, needsAudioResume, start, stop, settledVersion,
-    textState, stopWriting, clearText, undoText,
+    textState, stopWriting, clearText, undoText, hideText, showText,
     hasDiagnostic, diagnosticRecording, diagnosticVersion, getDiagnostic, markDiagnostic, stopDiagnostic, clearDiagnostic };
 }

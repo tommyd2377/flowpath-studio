@@ -1,11 +1,21 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { localAppOrigin, localAppDatabase } from '../lib/local-app-runtime';
+import { localAppOrigin, localAppDatabase, localTestingVoicePolicy } from '../lib/local-app-runtime';
 import { localStripeSandboxOrigin } from '../lib/paid-local-sandbox';
 import { PaidMemoryDatabase } from './paid-fixture';
 
 const env = { NODE_ENV: 'development', FLOWPATH_LOCAL_APP: '1', FLOWPATH_LOCAL_APP_ORIGIN: 'http://localhost:3220',
   FLOWPATH_ACCOUNT_MODE: 'firebase', FLOWPATH_FIRESTORE_EDITION: 'standard', FLOWPATH_FIREBASE_PROJECT_ID: 'flowpath-studio' };
+
+test('unmetered founder testing is selected only by the validated full localhost runtime', () => {
+  const configured = { ...env, FLOWPATH_LIVE_ENABLED: '1', FLOWPATH_VOICE_OWNER_DAILY_SECONDS: '900',
+    FLOWPATH_VOICE_GLOBAL_DAILY_SECONDS: '7200', FLOWPATH_VOICE_GLOBAL_CONCURRENCY: '2', FLOWPATH_VOICE_ACCESS: 'signed-in' };
+  assert.equal(localTestingVoicePolicy(configured)?.unmeteredAdminTesting, true);
+  for (const override of [{ NODE_ENV: 'production' }, { FLOWPATH_LOCAL_APP: '0' }, { FLOWPATH_ACCOUNT_MODE: 'local' },
+    { FLOWPATH_PUBLIC_ORIGIN: 'https://flowpath.studio' }, { FLOWPATH_LOCAL_APP_ORIGIN: 'http://other.example:3220' }]) {
+    assert.notEqual(localTestingVoicePolicy({ ...configured, ...override })?.unmeteredAdminTesting, true);
+  }
+});
 
 test('full local app requires explicit real-account configuration and localhost, never selects production or fixtures', () => {
   assert.equal(localAppOrigin(env), 'http://localhost:3220');

@@ -15,7 +15,7 @@ import CreationReviewQueue from './CreationReviewQueue';
 import { clientAnalytics, observeVisit } from '@/lib/analytics-runtime';
 import type { TextPanelConfiguration } from '@/lib/text-panel';
 
-type Account = { mode: AccountMode; user: AccountUser | null; openRegistration?: boolean; creationSafetyEnabled?: boolean; safetyAdminFixture?: boolean };
+type Account = { mode: AccountMode; user: AccountUser | null; openRegistration?: boolean; creationSafetyEnabled?: boolean; safetyAdminFixture?: boolean; localUnmeteredTesting?: boolean };
 
 function normalizedColor(value: string): string | null {
   const match = /^#?([0-9a-f]{6})$/i.exec(value.trim());
@@ -246,7 +246,9 @@ export default function AccountSettings() {
         {account.safetyAdminFixture && <p className="local-account-note">Safety decisions in this local preview are synthetic.</p>}
         {account.user.role === 'admin' && <div>
           <label className="admin-testing-toggle" htmlFor="admin-testing"><input id="admin-testing" type="checkbox" role="switch" checked={adminTesting} disabled={busy} onChange={event => setAdminTesting(event.target.checked)} aria-describedby="admin-testing-help" /> Admin testing</label>
-          <p id="admin-testing-help" className="field-help">Skip your prepaid, personal time and silence limits. Conversations end at 15 minutes. Each start uses a 15-minute block from the shared daily testing budget, even if you end early. Shared capacity limits still apply. Turn off to experience regular-user limits. Save to apply on your next conversation.</p>
+          <p id="admin-testing-help" className="field-help">{account.localUnmeteredTesting
+            ? 'Local founder testing has no daily, start-count, elapsed-time or silence quota. End conversations when finished. Turn off to experience regular-user limits. Save to apply on your next conversation.'
+            : 'Skip your prepaid, personal time and silence limits. Conversations end at 15 minutes. Each start uses a 15-minute block from the shared daily testing budget, even if you end early. Shared capacity limits still apply. Turn off to experience regular-user limits. Save to apply on your next conversation.'}</p>
         </div>}
         <div className="account-actions"><button className="primary-button" type="submit" disabled={busy || preparingPhoto || promptTooLong || !safety.canSave}>{busy ? 'Saving…' : 'Save waveform'}</button>{waveform && <Link className="secondary-button" href={`/w/${encodeURIComponent(waveform.id)}`}>Open waveform</Link>}</div>
       </form>

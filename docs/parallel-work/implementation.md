@@ -2,6 +2,10 @@
 
 **Later October 26 update:** interactive Text Box, Luna delegation and the real-startup selector correction are implemented through application commit `bd24198`. The latest check passed 288 unit tests and 52 standard browser checks; the initial plugin integration also passed six paid browser tests. Real Brave/Google-account startup was verified, and the user reports basic dictation works. [Experience direction](../experience-design.md) records the requested on-demand display, compact layout and homepage-only News link as next UX work. The original MVP snapshot/results below are historical, not the latest text-plugin feature list.
 
+**Selected desktop follow-up:** after reviewing the mockups in `28be2a6`, the user approved the left-portrait layout and actual Brave acceptance. The candidate now implements the compact row, viewport-fit panel with persistent actions, hidden-until-requested UI, show/hide commands, after-call reopening and homepage-only News. See [Text Box](../text-panel.md) for final verification and live-test status. The 288/52 results above describe the earlier application snapshot, not this follow-up.
+
+During live acceptance, the user explicitly removed all local founder-testing quotas after the shared reservation limit blocked restarts. Validated localhost + verified founder + saved Admin testing now bypasses daily/start/silence/elapsed-time gates and local expiry tasks. This is a local runtime exception; no live Stripe/provider setting, private environment file or hosted policy was edited. The earlier one-call temporary numeric override was removed. See [local app](../local-app.md).
+
 October 26, 2026. Candidate branch: `codex/mvp-integration`, based on complete baseline `599b5920d5aee767397d654417ce3afd74befef7`. Shared `main` remains at that baseline. This is local implementation with synthetic verification, not deployment or live acceptance. Resolve the candidate's final SHA from Git or the coordinator handoff before review.
 
 ## Implemented in the candidate

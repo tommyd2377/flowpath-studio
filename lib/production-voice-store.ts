@@ -10,8 +10,14 @@ export type VoicePolicy = {
   access: 'signed-in' | 'invite-only'; allowedUids: string[];
   publicDemoSeconds?: number;
   demoBudgets?: DemoBudgets;
+  /** Set only by the validated full localhost runtime, never by browser input. */
+  unmeteredAdminTesting?: boolean;
 };
-export type AdminVoice = { uid: string; accountSessionId: string; override: boolean; previousSessionId?: string; deadline?: number };
+export type AdminVoice = { uid: string; accountSessionId: string; override: boolean; previousSessionId?: string; deadline?: number; unmeteredLocal?: true };
+// Wire/storage compatibility marker; no timer or independent task is scheduled for these local calls.
+export const UNMETERED_LOCAL_DEADLINE = Number.MAX_SAFE_INTEGER;
+export const isUnmeteredLocalTest = (owner: VoiceOwner, policy: VoicePolicy) => policy.unmeteredAdminTesting === true
+  && owner.kind === undefined && owner.admin?.override === true && owner.admin.uid === owner.ownerUid;
 export type VoiceOwner = { ownerUid: string; waveformId: string; accountSessionId: string; kind?: 'visitor'; admin?: AdminVoice;
   demoVisitorId?: string; contentDigest?: string;
   paid?: { actor: { visitorId: string; uid?: string; accountSessionId?: string }; choice: 'creator' | 'self'; expectedContentDigest?: string } };
@@ -58,7 +64,9 @@ function stored(row: Record<string, unknown> | null): StoredVoice | null {
     const admin = object(row.admin);
     if (typeof admin.uid !== 'string' || !admin.uid || typeof admin.accountSessionId !== 'string' || !admin.accountSessionId
       || typeof admin.override !== 'boolean' || typeof admin.deadline !== 'number' || !Number.isFinite(admin.deadline)
-      || admin.deadline < row.expiresAt || admin.deadline > row.createdAt + VOICE_SESSION_SECONDS * 1000) throw new Error('Invalid durable admin record');
+      || admin.deadline < row.expiresAt || (admin.unmeteredLocal === true
+        ? admin.override !== true || admin.deadline !== UNMETERED_LOCAL_DEADLINE || row.expiresAt !== UNMETERED_LOCAL_DEADLINE
+        : admin.unmeteredLocal !== undefined || admin.deadline > row.createdAt + VOICE_SESSION_SECONDS * 1000)) throw new Error('Invalid durable admin record');
   }
   if (row.kind !== undefined && !isPublicVoiceOwner(row)) throw new Error('Invalid durable voice record');
   return row as StoredVoice;
@@ -117,8 +125,9 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
     }
     if (Object.values(active(global)).includes('uncertain')) throw new VoiceAdmissionError('A previous voice connection needs confirmed cleanup.', 503);
     if (own.active) throw new VoiceAdmissionError('Your previous conversation must close before starting another.');
-    if (Object.keys(active(global)).length >= policy.globalConcurrency) throw new VoiceAdmissionError('All available voice connections are in use.');
-    if (reserved(global, now()) + seconds > policy.globalDailySeconds) {
+    const unmetered = isUnmeteredLocalTest(owner, policy);
+    if (!unmetered && Object.keys(active(global)).length >= policy.globalConcurrency) throw new VoiceAdmissionError('All available voice connections are in use.');
+    if (!unmetered && reserved(global, now()) + seconds > policy.globalDailySeconds) {
       const remainingMinutes = Math.floor(Math.max(0, policy.globalDailySeconds - reserved(global, now())) / 60);
       throw new VoiceAdmissionError(owner.admin?.override
         ? `Today's shared test limit has ${remainingMinutes} minutes left. Starting this conversation needs a ${Math.ceil(seconds / 60)}-minute block, even if you end early.`
@@ -145,17 +154,18 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
     if (owner.admin) {
       if (adminOwner?.active || paidActive) throw new VoiceAdmissionError('Your previous conversation must close before starting another.');
       if (!activeAccountSession(adminAuth, owner.admin.uid, now())) throw new VoiceAdmissionError('Sign in again to continue as admin.', 403);
-      let deadline = now() + VOICE_SESSION_SECONDS * 1000;
+      const unmetered = isUnmeteredLocalTest(owner, policy);
+      let deadline = unmetered ? UNMETERED_LOCAL_DEADLINE : now() + VOICE_SESSION_SECONDS * 1000;
       if (owner.admin.previousSessionId) {
         const previous = stored(previousRow);
         if (!owner.admin.override || !previous || previous.state !== 'closed'
           || previous.admin?.uid !== owner.admin.uid || previous.admin.accountSessionId !== owner.admin.accountSessionId
           || previous.ownerUid !== owner.ownerUid || previous.waveformId !== owner.waveformId
           || !Number.isFinite(previous.admin.deadline)) throw new VoiceAdmissionError('The previous conversation must close before continuing as admin.', 409);
-        deadline = previous.admin.deadline!;
+        deadline = unmetered ? UNMETERED_LOCAL_DEADLINE : Math.min(previous.admin.deadline!, deadline);
       }
       if (deadline <= now()) throw new VoiceAdmissionError('The overall 15-minute conversation limit has been reached.', 429);
-      admin = { ...owner.admin, deadline };
+      admin = { ...owner.admin, deadline, ...(unmetered ? { unmeteredLocal: true as const } : {}) };
       if (admin.override) seconds = Math.min(VOICE_SESSION_SECONDS, Math.ceil((deadline - now()) / 1000));
     }
     validateGuards(global, own);
@@ -219,7 +229,7 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
         const { global, own, seconds, admin, demo, demoGlobal, demoVisitor } = await admission(tx, owner, policy);
         const call: StoredVoice = {
           ...owner, ...(admin ? { admin } : {}), id, state: 'creating', createdAt: now(),
-          expiresAt: Math.min(now() + seconds * 1000, admin?.deadline ?? Infinity), canceled: false,
+          expiresAt: admin?.unmeteredLocal ? UNMETERED_LOCAL_DEADLINE : Math.min(now() + seconds * 1000, admin?.deadline ?? Infinity), canceled: false,
         };
         tx.set(callPath(id), call);
         if (admin) tx.set(adminPath(admin.uid), { active: id });

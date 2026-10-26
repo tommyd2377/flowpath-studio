@@ -37,6 +37,7 @@ type Options = {
   checkWaveform?: (request: Request, waveform: Waveform) => Promise<void>;
   creationSafetyEnabled?: () => boolean;
   safetyAdminFixture?: boolean;
+  localUnmeteredTesting?: () => boolean;
   localDirectory?: string;
   development?: () => boolean;
   publicOrigin?: () => string | undefined;
@@ -291,6 +292,7 @@ export function createAccountServer(options: Options = {}) {
       const firebaseConfig = currentMode === 'firebase' ? options.firebaseConfig?.() : undefined;
       const autoFirebaseConfig = currentMode === 'firebase' && options.firebaseAutoConfig?.();
       return json({ mode: currentMode, user: await resolveOwner(request),
+        ...(options.localUnmeteredTesting?.() ? { localUnmeteredTesting: true } : {}),
         ...(options.creationSafetyEnabled?.() ? { creationSafetyEnabled: true } : {}),
         ...(currentMode === 'local' && options.safetyAdminFixture ? { safetyAdminFixture: true } : {}),
         ...(options.openRegistration?.() ? { openRegistration: true } : {}),

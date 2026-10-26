@@ -1,18 +1,18 @@
 # Waveform experience: desktop design direction
 
-October 26, 2026. Design exploration following the user's confirmation that basic dictation works. Current application baseline: `bd24198` on `codex/mvp-integration`. This brief records requirements and proposed designs; it does not implement them or authorize deployment.
+October 26, 2026. Initial design baseline: `bd24198` on `codex/mvp-integration`; concepts were saved in `28be2a6`. The user then selected the first mockup (portrait left) and authorized implementation plus actual-local-app acceptance in Brave. The compact row and on-demand Text Box are now implemented locally. Verification is recorded in [Text Box](text-panel.md). No deployment is authorized.
 
 ## Product direction
 
 Studio is the place to create/configure a waveform. An individual waveform is a focused voice experience with a visual display used when needed. Creators apply curated, quality-tested capabilities from the Plugins dropdown. Applying a plugin grants availability; it does not open its interface for every visitor. The first capability is the safe Text Box. Future developer contributions do not imply executable uploads or an open marketplace.
 
-The News example link belongs on the Studio homepage only, never on private `/w/` or public `/p/` waveform experiences. Remove the individual-waveform rendering path for that link in the next approved UI implementation; retain the homepage link and do not touch News source.
+The News example link belongs on the Studio homepage only, never on private `/w/` or public `/p/` waveform experiences. The individual-waveform link is removed; the homepage retains it. News source is untouched.
 
-The user requested brainstorming and desktop mockups before application changes. On-demand display, full visible controls and homepage-only News are requirements. Portrait placement, final dimensions, explicit End control and future multi-plugin arrangement below are proposals awaiting selection.
+The user first requested brainstorming and desktop mockups, then approved the left-portrait design for implementation. It includes an explicit End conversation control. Future multi-plugin arrangements remain proposals.
 
 ## Recommended desktop layout
 
-Recommend the portrait on the left of the raised waveform, on the same vertical level, in a compact conversation row. This establishes identity without consuming a separate tall row. A right-side portrait is the comparison option. Keep the waveform dominant and preserve the saved accent, existing dark palette and branding.
+The selected desktop layout puts the portrait left of the raised waveform, on the same vertical level, in a compact conversation row. This establishes identity without a separate tall row. The right-side portrait remains a rejected comparison option. The waveform stays dominant and keeps the saved accent, existing dark palette and branding.
 
 Compare the [left portrait](design/desktop-portrait-left.png) and [right portrait](design/desktop-portrait-right.png) concepts. These generated images illustrate open-panel layouts; they are not screenshots of implemented behavior. [Generation brief](design/README.md).
 
@@ -32,9 +32,9 @@ Reserve the display space through the compact connected layout: opening a plugin
 
 ## Availability and presentation are separate
 
-Proposed host state: available capability with presentation closed → opening → open → closing → closed. This visitor/conversation state is distinct from saved v2 plugin configuration, voice connection state and Writing/Paused. Presentation alone does not require a saved-data migration.
+Implemented host state: available capability with presentation closed → opening (800 ms CSS reveal) → open. Hide immediately unmounts it and pauses capture; there is no interactive invisible closing state. This visitor/conversation state is distinct from saved v2 configuration, voice connection and Writing/Paused. No saved-data migration is required.
 
-| Trigger | Proposed behavior |
+| Trigger | Implemented behavior |
 | --- | --- |
 | Creator applies/saves Text Box | Capability is available; visitor presentation remains closed. |
 | New conversation / ordinary speech | No panel, placeholder, invisible controls or reserved blank card. |
@@ -47,9 +47,9 @@ Proposed host state: available capability with presentation closed → opening �
 | End voice | Preserve already revealed text for copying. Do not reveal a panel that was never requested. |
 | New conversation / navigate away | Preserve the current ephemeral-data lifecycle; no cross-session storage. |
 
-Closed means absent from the rendered UI and accessibility tree: no opacity-only hiding, invisible pointer targets or focusable controls. While closing, disable interaction immediately and unmount after the exit transition. Opening must not steal keyboard focus. Respect reduced motion and announce state changes without announcing every transcript fragment. Restore focus sensibly after a keyboard dismissal.
+Closed means absent from the rendered UI and accessibility tree: no opacity-only hiding, invisible pointer targets or focusable controls. Hide immediately pauses and unmounts. Opening does not steal focus; button dismissal returns focus to the waveform. Reduced motion disables glides/reveal. Only state changes are announced, not every fragment. After ending, an explicit Show text control can reopen previously requested, retained text without starting another call; it is absent before any text exists.
 
-The current `update_text_box` function has no show/hide actions. A presentation state and those spoken actions are proposed interfaces, not implemented ones. An internal tool read must not reveal UI. Plugin display actions must not end voice, start a new session, change payer consent, grant capability authority or affect usage accounting. Keep the existing bounded local executor; no extra model call per transcript fragment.
+The strict `update_text_box` function now includes show/hide actions. The transcript handler recognizes exact dictation and show/hide/close controls locally; other requested operations use the existing delegation path. An internal read does not reveal UI. Display actions never end voice, start a new session, change payer consent, grant capability authority or affect usage accounting. The existing bounded executor remains, without an extra model call per fragment.
 
 Future display-open/closed observations may enter the existing provider-neutral analytics boundary only after event/consent decisions. Such observations never grant credits or determine charges; conversation text remains excluded.
 
@@ -76,10 +76,10 @@ Create a reusable checklist/example fixture when a second plugin is developed; n
 ## Today's state and evidence
 
 - Settings now use Plugins → Text Box → Apply plugin → Save waveform. Legacy v1 static records remain compatible; v2 saves capability only.
-- Text Box supports user dictation and delegated local text operations, Stop/Clear/Undo/Copy, bounded history, stale-edit protection and after-call retention. It currently renders immediately; the on-demand layout above is next work.
+- Text Box supports user dictation and delegated local operations, Stop/Clear/Undo/Copy/Hide, bounded history, stale-edit protection, on-demand mounting and after-call retention. The selected compact desktop row and viewport-fit panel are implemented.
 - GPT-6 Luna replaced GPT-5 nano as Studio's delegation default, with no fallback or automatic paid retries. GPT-Live handles speech. News source was not changed.
 - Real startup exposed a missing nested `response_event` selector. `bd24198` corrected it, with regressions that failed against the old request and passed after correction.
 - The correction passed lint/types/build, 288 unit tests and 52 standard browser tests. Six paid browser regressions passed for the initial plugin integration. An actual coordinator-started Brave/Google-account call connected; user starts also connected. Full delegated-edit correctness and latency remain unmeasured.
 - The user subsequently confirmed basic dictation works: user-reported live evidence, distinct from automated checks. Earlier coordinator End/Escape clicks overlapped user speech, so they do not establish a separate Start-writing shutdown defect.
 
-This design step changes documentation/mockups only. No application change, push, deployment or main merge is included.
+The initial concept step changed documentation/mockups only. The subsequent user-approved implementation changes the host, Text Box lifecycle/layout and focused tests. No push, deployment or main merge is included.

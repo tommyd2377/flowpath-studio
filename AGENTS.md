@@ -10,7 +10,9 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 # FlowPath waveform contributor instructions
 
-October 26 follow-up: interactive Text Box and GPT-6 Luna delegation are implemented locally; see docs/text-panel.md for current evidence. The user reports basic dictation works. Read docs/experience-design.md for the latest proposed desktop/on-demand-plugin UX: applying a capability must be separate from showing it, individual waveforms must omit the News example link, and all display controls must fit. Those presentation changes remain design work. Do not treat older future-milestone wording below as the latest text-plugin feature list. Existing safety, privacy, cost and deployment guardrails still apply.
+October 26 follow-up: interactive Text Box, GPT-6 Luna delegation and the selected left-portrait desktop layout are implemented locally; see docs/text-panel.md for current evidence. Read docs/experience-design.md: applied capability is separate from visitor-requested display, individual waveforms omit the News example link, and the panel/toolbar fit the viewport. Show/hide never ends voice; closed panels are unmounted. Do not treat older future-milestone wording below as the latest text-plugin feature list. Existing safety, privacy, cost and deployment guardrails still apply.
+
+The user explicitly removed local founder manual-testing quotas on October 26. The validated full localhost runtime with saved Admin testing now has no daily/start/silence/app-duration limit for that founder's own waveform. Do not reintroduce daily reservation lockouts or temporary minute packs for that local mode. Hosted/public/other-account limits remain; preserve auth and confirmed cleanup. This preference does not authorize automatic paid calls by Codex without the required app/host/task/call-budget approval. See docs/local-app.md.
 
 Read README.md and docs/architecture.md before changing behavior. Use Node.js 24.
 

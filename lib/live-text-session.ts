@@ -1,11 +1,17 @@
-export type LiveTextState = { text: string; writing: boolean; canUndo: boolean; message: string };
+export type LiveTextState = { text: string; writing: boolean; visible: boolean; canUndo: boolean; message: string };
 type Options = { onChange: (state: LiveTextState) => void; send: (event: Record<string, unknown>) => void };
-type TextAction = 'start_dictation' | 'stop_dictation' | 'replace' | 'append' | 'clear' | 'undo' | 'read';
+type TextAction = 'start_dictation' | 'stop_dictation' | 'show' | 'hide' | 'replace' | 'append' | 'clear' | 'undo' | 'read';
 type BackendResponse = { generation: number; calls: number; continued: boolean; completed: boolean; failed: boolean };
 
 const MAX_TEXT = 4_000, MAX_CALLS = 64, MAX_EVENTS = 8_000;
-const commands = ['start writing', 'start dictation', 'stop writing', 'stop dictation'];
-const actions: TextAction[] = ['start_dictation', 'stop_dictation', 'replace', 'append', 'clear', 'undo', 'read'];
+const commands: Record<string, TextAction> = {
+  'start writing': 'start_dictation', 'start dictation': 'start_dictation',
+  'stop writing': 'stop_dictation', 'stop dictation': 'stop_dictation',
+  'show the text box': 'show', 'show text box': 'show',
+  'hide the text box': 'hide', 'hide text box': 'hide',
+  'close the text box': 'hide', 'close text box': 'hide',
+};
+const actions: TextAction[] = ['start_dictation', 'stop_dictation', 'show', 'hide', 'replace', 'append', 'clear', 'undo', 'read'];
 const object = (value: unknown): Record<string, unknown> | null => value && typeof value === 'object'
   && !Array.isArray(value) ? value as Record<string, unknown> : null;
 const identifier = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(value);
@@ -14,7 +20,7 @@ const validText = (value: unknown): value is string => typeof value === 'string'
 
 /** One conversation's ephemeral text. No storage, logging, extra model or financial authority. */
 export function createLiveTextSession({ onChange, send }: Options) {
-  let text = '', writing = false, message = '', finished = false, generation = 0, toolsLimited = false;
+  let text = '', writing = false, visible = false, message = '', finished = false, generation = 0, toolsLimited = false;
   let transcriptBuffer = '', lastTranscriptEnd = -1, dictationCheckpoint = false, bufferBoundary = true;
   let controlBarrier = -1, textRevision = 0;
   const undo: string[] = [];
@@ -23,7 +29,7 @@ export function createLiveTextSession({ onChange, send }: Options) {
   const delegations = new Map<string, string>();
   const delegationGenerations = new Map<string, number>();
   const readRevisions = new Map<string, number>();
-  const emit = () => onChange({ text, writing, canUndo: undo.length > 0, message });
+  const emit = () => onChange({ text, writing, visible, canUndo: undo.length > 0, message });
   function checkpoint() {
     if (undo.at(-1) !== text) undo.push(text);
     if (undo.length > 10) undo.shift();
@@ -47,10 +53,13 @@ export function createLiveTextSession({ onChange, send }: Options) {
     textRevision++;
   }
   function control(action: TextAction, value = '', local = false) {
-    if (local) { generation++; controlBarrier = lastTranscriptEnd; }
+    if (local || action === 'hide') { generation++; controlBarrier = lastTranscriptEnd; }
     message = '';
     if (action === 'read') return;
+    if (action === 'show') { visible = true; return; }
+    if (action === 'hide') { visible = false; writing = false; dictationCheckpoint = false; return; }
     if (action === 'start_dictation') {
+      visible = true;
       if (!writing) dictationCheckpoint = false;
       writing = true;
     } else if (action === 'stop_dictation') {
@@ -63,22 +72,22 @@ export function createLiveTextSession({ onChange, send }: Options) {
       else if (action === 'undo') {
         const previous = undo.pop();
         if (previous !== undefined && previous !== text) { text = previous; textRevision++; }
-      } else if (action === 'replace') replace(value);
-      else if (action === 'append') replace(text + value);
+      } else if (action === 'replace') { visible = true; replace(value); }
+      else if (action === 'append') { visible = true; replace(text + value); }
     }
   }
 
-  // These four exact phrases are reserved voice controls, including within dictation.
+  // Exact dictation/display phrases are reserved controls, including within dictation.
   // Keep a possible command prefix until its next fragment, so "stop writ" is never displayed.
   // Literal quotations containing these phrases need delegated replace/append instead.
   function consumeTranscript(delta: string) {
     transcriptBuffer += delta;
-    const pattern = /\b(start|stop)\s+(writing|dictation)\b/ig;
+    const pattern = /\b(?:(?:start|stop)\s+(?:writing|dictation)|(?:show|hide|close)\s+(?:the\s+)?text\s+box)\b/ig;
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(transcriptBuffer))) {
       if (!match.index && !bufferBoundary) continue;
       appendDictation(transcriptBuffer.slice(0, match.index));
-      control(match[1].toLowerCase() === 'start' ? 'start_dictation' : 'stop_dictation', '', true);
+      control(commands[match[0].toLowerCase().replace(/\s+/g, ' ')], '', true);
       transcriptBuffer = transcriptBuffer.slice(match.index + match[0].length).replace(/^[\s,.:;!?]+/, '');
       bufferBoundary = true;
       pattern.lastIndex = 0;
@@ -89,7 +98,7 @@ export function createLiveTextSession({ onChange, send }: Options) {
       const start = lower.length - length;
       if (start ? /[a-z0-9_]/i.test(lower[start - 1]) : !bufferBoundary) continue;
       const suffix = lower.slice(start).replace(/\s+/g, ' ');
-      if (commands.some(command => command.startsWith(suffix))) held = length;
+      if (Object.keys(commands).some(command => command.startsWith(suffix))) held = length;
     }
     const ready = transcriptBuffer.slice(0, transcriptBuffer.length - held);
     appendDictation(ready);
@@ -105,7 +114,7 @@ export function createLiveTextSession({ onChange, send }: Options) {
   }
   function result(callId: string, status: string) {
     send({ type: 'response.item.create', item: { type: 'function_call_output', call_id: callId,
-      output: JSON.stringify({ status, text, writing }) } });
+      output: JSON.stringify({ status, text, writing, visible }) } });
   }
   function backend(envelope: Record<string, unknown>) {
     if (toolsLimited) return;
@@ -160,6 +169,8 @@ export function createLiveTextSession({ onChange, send }: Options) {
         else if (args.action === 'append' && text.length + args.text.length > MAX_TEXT) status = 'text_too_long';
         else {
           if (args.action === 'read') readRevisions.set(delegationId, textRevision);
+          // Preserve an ordinary final word held as a possible control prefix.
+          if (['hide', 'stop_dictation', 'show'].includes(String(args.action))) appendDictation(transcriptBuffer);
           if (args.action !== 'read') { transcriptBuffer = ''; bufferBoundary = true; }
           control(args.action as TextAction, args.text);
           if (readRevisions.has(delegationId)) readRevisions.set(delegationId, textRevision);
@@ -210,9 +221,9 @@ export function createLiveTextSession({ onChange, send }: Options) {
         emit();
       }
     },
-    action(action: 'stop' | 'clear' | 'undo') {
-      if (!['stop', 'clear', 'undo'].includes(action)) return;
-      if (action === 'stop') appendDictation(transcriptBuffer);
+    action(action: 'stop' | 'clear' | 'undo' | 'hide' | 'show') {
+      if (!['stop', 'clear', 'undo', 'hide', 'show'].includes(action)) return;
+      if (action === 'stop' || action === 'hide') appendDictation(transcriptBuffer);
       transcriptBuffer = '';
       bufferBoundary = true;
       control(action === 'stop' ? 'stop_dictation' : action, '', true);

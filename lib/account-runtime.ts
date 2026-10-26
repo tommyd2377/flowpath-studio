@@ -37,6 +37,7 @@ export const accountServer = state.flowpathAccounts ??= createAccountServer({
   mode,
   creationSafetyEnabled,
   safetyAdminFixture: creationSafetyFixtures,
+  localUnmeteredTesting: () => !!localAppOrigin(),
   validateWaveform: async (request, waveform) => {
     if (!creationSafetyEnabled()) {
       if (waveform.textPanel?.version === 1) throw new CreationSafetyError('Creator text display is paused until safety review is available.', 503);

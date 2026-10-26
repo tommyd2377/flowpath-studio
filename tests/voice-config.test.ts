@@ -87,7 +87,10 @@ test('only an explicitly enabled Text Box grants its local tools and transcript 
     'session.started', 'session.closed', 'error', 'session.input_transcript.delta',
     'response.event', 'response.event', 'response.event', 'response.event', 'response.event', 'session.delegation.created',
   ]);
-  assert.match(config.instructions, /Stop writing pauses text capture, not the voice conversation/);
+  assert.match(config.instructions, /Stop writing pauses capture and leaves the panel visible/);
+  assert.match(config.instructions, /starts closed/);
+  assert.ok(config.delegation.responses.tools[0].parameters.properties.action.enum.includes('show'));
+  assert.ok(config.delegation.responses.tools[0].parameters.properties.action.enum.includes('hide'));
   assert.match(config.delegation.responses.instructions, /first call action read/);
   assert.equal(config.store, false);
   const diagnosed = voiceSessionConfig({ ...waveform, textPanel: { type: 'text', version: 2 } }, true);

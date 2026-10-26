@@ -1,6 +1,6 @@
 # Text Box plugin
 
-**Next UX requirement (October 26):** applied does not mean visible. The user confirmed basic dictation works and requested desktop mockups with no panel until requested, a compact raised portrait/waveform row, complete visible controls and an approximately 800 ms reveal. The current implementation still mounts the panel immediately. See the [experience brief](experience-design.md) for proposed visibility states, mobile adaptation and plugin QA; no show/hide action or layout is implemented by that document.
+**Selected desktop UX (October 26):** the approved left-portrait layout is implemented. Applied does not mean visible: the panel and all its controls remain unmounted until requested. Start writing opens/captures immediately, with an 800 ms visual reveal. Show reopens without capturing; Hide pauses and dismisses without ending voice or erasing text. The panel uses available viewport height with a scrolling body and persistent toolbar. See [experience details](experience-design.md).
 
 The October 26 user-approved interaction replaces the creator text-entry field with **Plugins → Text Box → Apply plugin** in waveform settings. Save, then open the waveform and start a new conversation. The user's manual testing uses the normal application and Google account flow on `http://localhost:3220`; synthetic owners belong only to internal automated tests.
 
@@ -8,9 +8,10 @@ The October 26 user-approved interaction replaces the creator text-entry field w
 
 - Say **Start writing** or **Start dictation**, then dictate. User transcript fragments populate the plain-text panel without a second model call per fragment.
 - Say **Stop writing** or **Stop dictation** to pause capture while keeping the voice conversation running. The panel also has Stop writing.
+- Say **Show the text box** to reveal it without capture, or **Hide the text box** / **Close the text box** to pause capture and dismiss it. These also work without “the.” A hidden panel has no rendered pointer/focus targets. Hide is also an explicit button; hiding immediately unmounts the panel. Opening does not move focus; a button dismissal returns focus to the waveform.
 - Ask **Put a short answer in the box**, **Make that shorter**, **Add another item**, **Clear the box**, or **Undo that**. GPT-Live delegates to GPT-6 Luna, whose validated `update_text_box` call operates on this conversation's panel. Editing current content first reads the panel.
-- Clear, Undo and Copy text are explicit buttons. Ending a call keeps its text available to copy, including the paid/admin account flow. Starting another conversation or leaving the page clears it; paid visitors return through the existing payer/consent gate. Each conversation starts empty. Text stays in tab memory, never creator configuration, application storage or analytics. Tool results include current text in the existing model conversation so requested edits can use it. Provider data policy still applies.
-- The four exact start/stop phrases are reserved controls, including inside dictated text. Other wording uses model delegation. Transcription can be mistaken or delayed. Request literal quotations containing reserved phrases as a written answer instead.
+- Clear, Undo and Copy text are explicit buttons. Ending a call keeps revealed text available to copy, including the paid/admin account flow. If it is hidden after ending, Show text in owner navigation reopens retained content without starting a call. Starting another conversation or leaving the page clears it; paid visitors return through the existing payer/consent gate. Each conversation starts empty. Text stays in tab memory, never creator configuration, application storage or analytics. Tool results include current text/visibility in the existing model conversation so requested edits can use it. Provider data policy still applies.
+- Exact start/stop dictation and show/hide/close text-box phrases are reserved controls, including inside dictated text. Other wording uses model delegation. Transcription can be mistaken or delayed. Request literal quotations containing reserved phrases as a written answer instead.
 
 The first version does not add uploaded-document retrieval, web search, cross-session storage, arbitrary HTML or third-party executable plugins. Private creator instructions are not a visitor document library. News remains separate.
 
@@ -24,7 +25,7 @@ The server reads the saved plugin after authenticating waveform access. A browse
 
 ## Event lifecycle
 
-`lib/live-text-session.ts` owns bounded ephemeral text and undo history. `lib/use-voice-session.ts` creates one controller per conversation and finishes it during teardown. `components/LiveTextPanel.tsx` renders escaped plain text and controls, never raw HTML.
+`lib/live-text-session.ts` owns bounded ephemeral text, visibility and undo history. Visibility starts false. Read/ordinary speech/cleanup do not open it; explicit start/show/replace/append do. `lib/use-voice-session.ts` creates one controller per conversation and finishes it during teardown. `components/LiveTextPanel.tsx` renders escaped plain text and controls, never raw HTML. Its text body follows incoming fragments only while the reader stays at the bottom; Jump to latest restores following. The host mounts no closed panel. Reduced motion disables glides/reveal. No saved configuration migration or new dependency is required.
 
 Only completed `response.output_item.done` function items with validated IDs/arguments execute. `response.created` binds work to a response/delegation. Calls are deduplicated, results use `response.item.create`, and one `response.create` follows completion after outputs are supplied. Local controls invalidate known in-flight operations. A delegated read binds subsequent edits to the current panel revision, so an edit based on that read cannot discard newer dictation. A closed controller ignores later provider events; local Clear/Undo/Copy remain available afterward.
 
@@ -37,6 +38,18 @@ Unit tests cover capability validation, owner saving, exact review binding, Luna
 October 26 local verification: `npm run check` passed lint, typecheck, all 288 unit tests and the production build in a source-only temporary checkout without private environment files. `npm run test:browser` passed 52 tests; `npm run test:browser:paid` passed six synthetic tests. The final homepage-description update also passed the six focused voice-configuration tests. The actual development server was restarted on port 3220: home/account returned HTTP 200 and the account endpoint reported Firebase mode. No paid provider call, production deployment or GitHub push was performed for this implementation.
 
 Hundreds of milliseconds is a first-visible-text goal, not a measured guarantee. Transcript arrival and delegated model time must be measured separately. No model fallback or automatic paid retry is installed.
+
+### Selected desktop layout acceptance, October 26
+
+The final layout uses a 72 px desktop portrait beside the waveform, a bounded-width conversation row and a panel filling the available browser height. The text body scrolls; actions stay visible. Closed panels and controls are absent from DOM/accessibility state. Tests cover show/hide, focus return, text retention/reopening, stale writes after dismissal, reduced motion and frame/control bounds at 1440×900, 1280×720, 1366×768, 390×844, 844×390 and 640×360. Legacy static text remains compatible.
+
+Actual Brave acceptance used the normal signed-in Google account and saved Text Box capability. Before a request, the panel/controls and News link were absent. A real provider POST returned 201 and the compact row appeared. That first call was ended by the user before dictation. A subsequent local call was initially blocked by the exhausted reservation budget. The user then explicitly removed local founder-testing quotas; see [local app](local-app.md) for the implemented runtime exception and its tests. No private environment file or hosted policy was edited.
+
+After the runtime restart, the user started a real call and dictation appeared in the panel while the UI remained connected/Writing. DOM geometry verified the panel at top 176, bottom 794 inside the actual 1920×818 content viewport; all five controls ended at y=749. The coordinator did not end or modify the user's active dictation. This verifies actual mounting/dictation and frame visibility; live delegated-edit latency, a long-duration provider session and every panel button were not separately exercised in that active user call. They remain distinct from automated regression evidence.
+
+Final code verification after the local testing-policy update: `npm run check` passed lint, typecheck, all 296 unit/integration tests and the production build; the full standard browser suite passed 58/58 and paid/public fixtures passed 6/6. Logs: `/private/tmp/flowpath-local-unmetered-{check,browser,paid}.log`. The initial browser run had a mobile boundary assertion and an overridden reduced-motion rule; both were corrected before the full passing runs. An initial command from the running-app directory hit Next's existing dev-server lock; successful checks used the separate source-only copy instead. No environment/private runtime data was copied into that check directory.
+
+The server remains running on localhost:3220 at the user's explicit request. The user retains control of Brave and is continuing manual testing. No further server restart/browser interaction is part of this handoff. No push, deployment, hosted policy change, Stripe change or private environment-file edit occurred.
 
 ### Live startup correction, October 26
 

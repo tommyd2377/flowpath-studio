@@ -657,12 +657,8 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     expect(accent).toBe('64,105,225');
     const newsLink = page.getByRole('link', { name: 'FlowPath News example', exact: true });
     const accountLink = page.getByRole('link', { name: 'My waveform', exact: true });
-    await expect(newsLink).toHaveAttribute('href', 'https://flowpathapp.com');
-    const newsColor = await newsLink.evaluate(element => getComputedStyle(element).color);
-    await expect(accountLink).toHaveCSS('color', newsColor);
-    const newsBounds = (await newsLink.boundingBox())!;
-    const accountBounds = (await accountLink.boundingBox())!;
-    expect(newsBounds.x + newsBounds.width).toBeLessThan(accountBounds.x);
+    await expect(newsLink).toHaveCount(0);
+    await expect(accountLink).toBeVisible();
     const wave = page.locator('.wave-control');
     const initial = (await wave.boundingBox())!;
     const identity = (await photo.boundingBox())!;
@@ -677,18 +673,18 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     }
     await expect(page.locator('.wordmark')).toHaveCSS('opacity', '1');
     await expect(page.locator('.wordmark')).toHaveAttribute('aria-hidden', 'false');
-    const moving = await page.evaluate(() => ({ photo: document.querySelector('.profile-photo')!.getBoundingClientRect().y,
-      wave: document.querySelector('.wave-control')!.getBoundingClientRect().y }));
-    expect(Math.abs((moving.photo - identity.y) - (moving.wave - initial.y))).toBeLessThan(1);
-    await expect.poll(async () => Math.abs((await photo.boundingBox())!.y - 12)).toBeLessThan(1);
+    const portraitTop = viewport.width <= 600 ? 32 : viewport.height <= 650 ? 24 : 48;
+    await expect.poll(async () => Math.abs((await photo.boundingBox())!.y - portraitTop)).toBeLessThan(1);
     await expect(page.locator('.voice-hint')).toHaveCSS('opacity', '0');
     const connected = (await wave.boundingBox())!;
     const connectedPhoto = (await photo.boundingBox())!;
-    expect(Math.abs((connectedPhoto.y - identity.y) - (connected.y - initial.y))).toBeLessThan(1);
-    expect(connectedPhoto.y + connectedPhoto.height).toBeLessThan(connected.y);
+    if (viewport.width > 600) {
+      expect(Math.abs(connectedPhoto.y + connectedPhoto.height / 2 - (connected.y + connected.height / 2))).toBeLessThan(1);
+      expect(connectedPhoto.x + connectedPhoto.width).toBeLessThan(connected.x);
+    } else expect(connectedPhoto.y + connectedPhoto.height).toBeLessThanOrEqual(connected.y);
     await expect(photo).toBeVisible();
-    expect(connected.width).toBe(initial.width);
-    expect(connected.height).toBe(initial.height);
+    expect(connected.width).toBeLessThanOrEqual(initial.width);
+    expect(connected.height).toBeLessThan(initial.height);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
     const tinted = await page.locator('canvas').evaluate(canvas => {
       const element = canvas as HTMLCanvasElement;
@@ -730,7 +726,6 @@ test('a private profile remains accessible with reduced motion and an immediate 
   await page.goto(`/w/${waveformId}`);
   const photo = (await page.getByRole('img', { name: 'Reduced motion profile profile photo', exact: true }).boundingBox())!;
   const wave = page.locator('.wave-control');
-  const initial = (await wave.boundingBox())!;
   await wave.focus();
   await page.keyboard.press('Enter');
   await expect(page.locator('main')).toHaveAttribute('data-voice-phase', 'listening');
@@ -739,8 +734,9 @@ test('a private profile remains accessible with reduced motion and an immediate 
   await expect(page.locator('.voice-hint')).toHaveCSS('opacity', '0');
   const connected = (await wave.boundingBox())!;
   const connectedPhoto = (await page.locator('.profile-photo').boundingBox())!;
-  expect(Math.abs(connectedPhoto.y - 12)).toBeLessThan(1);
-  expect(Math.abs((connectedPhoto.y - photo.y) - (connected.y - initial.y))).toBeLessThan(1);
+  expect(Math.abs(connectedPhoto.y - 48)).toBeLessThan(1);
+  expect(Math.abs(connectedPhoto.y + connectedPhoto.height / 2 - (connected.y + connected.height / 2))).toBeLessThan(1);
+  expect(connectedPhoto.x + connectedPhoto.width).toBeLessThan(connected.x);
   await expect(page.locator('.wordmark')).toHaveCSS('opacity', '1');
   await expect(page.locator('.wordmark')).toHaveAttribute('aria-hidden', 'false');
   await page.keyboard.press('Escape');
@@ -870,9 +866,10 @@ test('normal account plugin flow supports dictation, delegated updates, controls
   expect(waveform.textPanel).toEqual({ type: 'text', version: 2 });
   await page.getByRole('link', { name: 'Open waveform', exact: true }).click();
   const box = page.getByRole('region', { name: 'Text Box content', exact: true });
-  await expect(box).toBeVisible();
+  await expect(box).toHaveCount(0);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await expect(box).toHaveCount(0);
   let time = 0;
   async function speech(delta: string) {
     await emit(page, { type: 'session.input_transcript.delta', event_id: `text_${time}`, delta, start_ms: time, end_ms: time + 100 });
@@ -883,6 +880,15 @@ test('normal account plugin flow supports dictation, delegated updates, controls
   await expect(box).toHaveText('Buy eggs and milk. ');
   await speech('Stop writ'); await speech('ing.');
   await speech('This stays out of the box.');
+  await expect(box).toHaveText('Buy eggs and milk. ');
+  await expect(page.getByRole('button', { name: 'Stop writing', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await speech('Hide the text '); await speech('box.');
+  await expect(box).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Copy text', exact: true })).toHaveCount(0);
+  await speech('Ordinary conversation stays private to speech.');
+  await expect(box).toHaveCount(0);
+  await speech('Show the text box.');
   await expect(box).toHaveText('Buy eggs and milk. ');
   await expect(page.getByRole('button', { name: 'Stop writing', exact: true })).toBeDisabled();
 
@@ -901,6 +907,9 @@ test('normal account plugin flow supports dictation, delegated updates, controls
   expect(sent.find(event => event.type === 'response.item.create')?.item.call_id).toBe('call_text');
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(box).toHaveText('Buy eggs and milk. ');
+  await page.getByRole('button', { name: 'Hide', exact: true }).click();
+  await expect(box).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Voice waveform', exact: true })).toBeFocused();
   await speech('Start writing. Another line.');
   await page.getByRole('button', { name: 'Stop writing', exact: true }).click();
   await speech('Late speech is ignored.');
@@ -914,9 +923,15 @@ test('normal account plugin flow supports dictation, delegated updates, controls
   await page.getByRole('button', { name: 'Clear', exact: true }).click();
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(box).toContainText('Another line.');
+  await page.getByRole('button', { name: 'Hide', exact: true }).click();
+  await expect(box).toHaveCount(0);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.getByRole('button', { name: 'Show text', exact: true }).click();
+  await expect(box).toContainText('Another line.');
+  await expect(page.locator('.voice-text-panel--live')).toHaveCSS('animation-name', 'none');
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
-  await expect(box).toContainText('Say “Start writing”');
+  await expect(box).toHaveCount(0);
   await page.getByRole('button', { name: 'End conversation', exact: true }).click();
   await expect(page.locator('#voice-status')).toHaveText('');
   await page.goto('/account');
@@ -926,4 +941,51 @@ test('normal account plugin flow supports dictation, delegated updates, controls
   expect(waveform.textPanel).toBeNull();
   await page.getByRole('link', { name: 'Open waveform', exact: true }).click();
   await expect(box).toHaveCount(0);
+});
+
+for (const viewport of [
+  { width: 1440, height: 900 }, { width: 1280, height: 720 }, { width: 1366, height: 768 },
+  { width: 390, height: 844 }, { width: 844, height: 390 }, { width: 640, height: 360 },
+]) test(`requested Text Box keeps its full frame and controls inside ${viewport.width}×${viewport.height}`, async ({ page }) => {
+  await page.setViewportSize(viewport);
+  await fakeMedia(page); await mockSession(page);
+  const id = 'c1111111-1111-4111-8111-111111111111';
+  const profilePhoto = await syntheticProfilePhoto(page);
+  await page.route('**/api/waveform*', route => route.fulfill({ json: { waveform: {
+    id, name: 'Layout assistant', profilePhoto, accentColor: '#3a66ff', textPanel: { type: 'text', version: 2 },
+  } } }));
+  await page.goto(`/w/${id}`);
+  const box = page.getByRole('region', { name: 'Text Box content', exact: true });
+  await expect(box).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'FlowPath News example', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await expect(box).toHaveCount(0);
+  const notes = Array.from({ length: 80 }, (_, index) => `Line ${index + 1}: these are conversation notes.\n`).join('');
+  await emit(page, { type: 'session.input_transcript.delta', event_id: 'layout_notes', delta: `Start writing. ${notes}`, start_ms: 0, end_ms: 100 });
+  await expect(box).toHaveText(notes);
+  const panel = page.locator('.voice-text-panel--live');
+  await expect(panel).toHaveCSS('animation-duration', '0.8s');
+  // Wait for the reveal to reach its intended resting geometry.
+  await expect.poll(() => panel.evaluate(node => getComputedStyle(node).translate)).toBe('none');
+  const bounds = (await panel.boundingBox())!;
+  expect(bounds.y).toBeGreaterThan(100);
+  expect(bounds.x).toBeGreaterThanOrEqual(0);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width);
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(viewport.height - 12);
+  for (const name of ['Stop writing', 'Undo', 'Clear', 'Copy text', 'Hide']) {
+    const control = (await page.getByRole('button', { name, exact: true }).boundingBox())!;
+    expect(control.y).toBeGreaterThan(bounds.y);
+    expect(control.y + control.height).toBeLessThanOrEqual(viewport.height - 12);
+    expect(control.x).toBeGreaterThanOrEqual(0);
+    expect(control.x + control.width).toBeLessThanOrEqual(viewport.width);
+  }
+  expect(await box.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+  await page.screenshot({ path: `test-results/text-workspace-${viewport.width}-${viewport.height}.png` });
+  await page.getByRole('button', { name: 'Hide', exact: true }).click();
+  await expect(box).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  await expect(page.locator('#voice-status')).toHaveText('');
 });

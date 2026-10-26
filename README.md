@@ -1,6 +1,6 @@
 # FlowPath Studio
 
-Latest [experience direction](docs/experience-design.md): plugins appear only on visitor request, below a compact portrait/waveform row with all panel controls visible; News belongs on the Studio homepage only. These UX requirements/designs await implementation. The current Text Box still renders immediately.
+The selected [desktop experience](docs/experience-design.md) places the portrait left of the raised waveform. Text Box remains absent until requested and reveals over 800 ms, with its toolbar visible inside the viewport. Stop writing pauses capture; Hide dismisses without ending voice or erasing text. News appears only on the Studio homepage. Mobile reflow is protected; further mobile visual tuning remains separate.
 
 FlowPath Studio is the current voice-first waveform app. Choose **Create your waveform** to configure a name, instructions, voice, accent color and optional portrait. An opt-in local test preview also supports public sharing and the three creator/visitor payment modes; real paid usage remains paused.
 
@@ -44,9 +44,9 @@ Public mode explicitly requires the configured HTTPS origin and transactional vo
 
 Live testing requires explicit approval for the app, host, task and call budget. Only after that approval may development use FLOWPATH_LIVE_ENABLED=1 with already-configured server credentials. Do not create/copy keys or change private environment files. Normal conversations end at 15 minutes, and the browser closes after 45 seconds of silence. Each local process admits at most three provider starts, including failures. Public mode additionally requires durable allowances and an independent authenticated closure task; incomplete configuration stays paused. See the dated verification notes for actual live results.
 
-The verified founder Google account has an [Admin testing switch](docs/admin-testing.md) in My waveform settings. When saved on, its own waveform opens directly without prepaid or admin confirmations, and personal time/silence limits are bypassed. Off restores regular-user limits. The 15-minute maximum and shared capacity limits always apply; other accounts never receive the switch or an override.
+The verified founder Google account has an [Admin testing switch](docs/admin-testing.md) in My waveform settings. On opens its own waveform directly. In the validated full localhost app, the user's October 26 choice removes daily, restart, silence and app-imposed elapsed-time quotas for that founder test. Hosted testing retains its 15-minute maximum and shared capacity limits. Off restores regular-user rules; other accounts never receive the switch or an override. Account and confirmed-cleanup checks remain in every mode.
 
-The shared daily testing budget counts reserved blocks, not measured talking time. A personal/admin conversation reserves 15 minutes when admitted; ending it early does not return that block. Four such starts can therefore use a 60-minute budget; a 120-minute budget can fit eight if no other demos/calls use it. Ordinary homepage demos reserve three minutes instead. Admission failures before a reservation do not consume a block. Admin settings and budget-limit messages state this explicitly.
+In bounded hosted mode, the shared daily budget counts reserved blocks, not measured talking time. A personal/admin conversation reserves 15 minutes when admitted; ending early does not return that block. Four starts can use a 60-minute budget; a 120-minute budget can fit eight without other usage. Ordinary homepage demos reserve three minutes. The explicitly unmetered local founder-testing mode is exempt from those quota gates; existing counters are preserved.
 
 ## Optional conversation diagnostics
 

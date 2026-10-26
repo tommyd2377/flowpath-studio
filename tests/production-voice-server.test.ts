@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import WebSocket from 'ws';
 import { createVoiceServer } from '../lib/voice-server';
-import { createProductionVoiceStore, type VoiceDatabase, type VoiceOwner, type VoicePolicy, type VoiceTransaction } from '../lib/production-voice-store';
+import { createProductionVoiceStore, UNMETERED_LOCAL_DEADLINE, type VoiceDatabase, type VoiceOwner, type VoicePolicy, type VoiceTransaction } from '../lib/production-voice-store';
 import { PUBLIC_VOICE_COOKIE, PUBLIC_VOICE_SECONDS, publicVoiceOwner } from '../lib/public-voice-identity';
 import { PUBLIC_GREETING_INSTRUCTIONS } from '../lib/voice-config';
 
@@ -516,4 +516,21 @@ test('normal durable admission does not inherit the old three-start development 
     f.advance(61_000);
   }
   assert.equal(f.calls.filter(url => url.endsWith('/live/sessions')).length, 4);
+});
+
+test('local unmetered founder starts have no restart throttle or app deadline and still close normally', async () => {
+  const f = fixture();
+  const server = createVoiceServer({ ...f.options,
+    resolveAdmin: async () => ({ uid: owner.ownerUid, accountSessionId: owner.accountSessionId, testing: true, isCurrent: () => true }),
+    production: { ...f.options.production, policy: () => ({ ...policy, globalDailySeconds: 900, unmeteredAdminTesting: true }) } });
+  for (let index = 0; index < 5; index++) {
+    const id = randomUUID();
+    const response = await server.POST(request('POST', id));
+    assert.equal(response.status, 201);
+    assert.equal((await response.json()).expiresAt, UNMETERED_LOCAL_DEADLINE);
+    assert.equal(f.scheduled.length, 0, 'no local expiry task or overflowing timer is installed');
+    f.started();
+    assert.equal((await server.DELETE(request('DELETE', id))).status, 200);
+  }
+  assert.equal(f.calls.filter(url => url.endsWith('/live/sessions')).length, 5);
 });

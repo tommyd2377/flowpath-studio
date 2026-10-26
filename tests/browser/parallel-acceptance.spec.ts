@@ -8,7 +8,7 @@ test('homepage completes loading its optimized logo in the clean fixture server'
   await expect.poll(() => page.locator('.wordmark img').evaluate(image => (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0)).toBe(true);
   await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeVisible();
 });
-test('background approval is reused on save; Text Box capability renders and resets after signout', async ({ page }) => {
+test('background approval is reused on save; available Text Box stays absent before a request', async ({ page }) => {
   await page.goto('/account');
   await page.getByRole('button', { name: 'Use test owner A', exact: true }).click();
   let reviews = 0;
@@ -25,8 +25,10 @@ test('background approval is reused on save; Text Box capability renders and res
   expect(reviews).toBe(before);
   const address = await page.getByRole('link', { name: 'Open waveform', exact: true }).getAttribute('href');
   await page.goto(address!);
-  await expect(page.getByRole('region', { name: 'Text Box content', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Copy text', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Text Box content', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Copy text', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'FlowPath News example', exact: true })).toHaveCount(0);
   await page.goto('/account');
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await page.goto(address!);

@@ -1,7 +1,7 @@
 import WebSocket from 'ws';
 import { PUBLIC_GREETING_INSTRUCTIONS, VOICE_SESSION_SECONDS, voiceSessionConfig, type WaveformPrompt } from './voice-config';
 import { isAllowedRequest } from './request-origin';
-import { VoiceAdmissionError, type ProductionVoiceStore, type StoredVoice, type VoiceOwner, type VoicePolicy } from './production-voice-store';
+import { isUnmeteredLocalTest, VoiceAdmissionError, type ProductionVoiceStore, type StoredVoice, type VoiceOwner, type VoicePolicy } from './production-voice-store';
 import { creationContentDigest } from './creation-safety';
 import { serverAnalytics } from './analytics-runtime';
 
@@ -421,7 +421,7 @@ export function createVoiceServer(options: Options = {}) {
       if (!options.production && active.size) return json({ error: 'A conversation is already open.' }, 409);
       if (!options.production && attemptedStarts >= maxStarts) return json({ error: budgetMessage }, 429);
       starts = starts.filter(time => now() - time < 60_000);
-      if (starts.length >= 3) return json({ error: 'Please wait a minute before starting another conversation.' }, 429);
+      if (starts.length >= 3 && !(owner && policy && isUnmeteredLocalTest(owner, policy))) return json({ error: 'Please wait a minute before starting another conversation.' }, 429);
       starts.push(now());
       const session: Conversation = {
         id: body.sessionId, apiKey, canceled: false,
@@ -430,7 +430,7 @@ export function createVoiceServer(options: Options = {}) {
       if (options.production) {
         try {
           session.durable = await options.production.store.reserve(owner!, session.id, policy!);
-          try { await options.production.scheduleDeadline(session.id, session.durable.expiresAt); }
+          try { if (!session.durable.admin?.unmeteredLocal) await options.production.scheduleDeadline(session.id, session.durable.expiresAt); }
           catch {
             await options.production.store.finish(session.id, { finalized: true, rejected: true });
             return json({ error: 'The voice deadline could not be scheduled. No conversation was started.' }, 503);
@@ -485,8 +485,10 @@ export function createVoiceServer(options: Options = {}) {
           const canceled = await options.production!.store.created(session.id, providerId, expiresAt);
           session.canceled ||= canceled;
         }
-        session.timer = setTimeout(() => { void close(session); }, Math.max(0, expiresAt - now()));
-        session.timer.unref?.();
+        if (!session.durable?.admin?.unmeteredLocal) {
+          session.timer = setTimeout(() => { void close(session); }, Math.max(0, expiresAt - now()));
+          session.timer.unref?.();
+        }
         session.startTimer = setTimeout(() => { void close(session); }, 30_000);
         session.startTimer.unref?.();
         session.control = attachControl(session, options, () => { void close(session); });
