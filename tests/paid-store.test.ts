@@ -5,6 +5,7 @@ import { createPaidStore } from '../lib/paid-store';
 import { createPaidVoiceStore } from '../lib/paid-voice-store';
 import { DEFAULT_PACK, paymentSettings, returnDestination } from '../lib/paid-model';
 import { paidFixture } from './paid-fixture';
+import { createPaidReconciliation } from '../lib/paid-reconciliation';
 
 test('the only default pack is $5 USD for 900 seconds and return destinations cannot escape', () => {
   assert.equal(DEFAULT_PACK.amount, 500); assert.equal(DEFAULT_PACK.seconds, 900);
@@ -116,7 +117,9 @@ test('unconfirmed closure, missing provider IDs and elapsed deadlines retain hol
   assert.equal((await restarted.segment(s.id))?.state, 'uncertain');
   await assert.rejects(restarted.reserve({ visitorId: 'other' }, f.wave.id, randomUUID(), 'creator', f.policy), /confirmed cleanup/);
   assert.equal((await f.store.publication(f.wave.id))?.held, 900);
-  await restarted.settle(s.id, { finalized: true, rejected: true });
+  await assert.rejects(restarted.settle(s.id, { finalized: true, rejected: true }), /provider authority/);
+  await createPaidReconciliation(restarted, { environment: 'fixture', lookup: async () => ({ outcome: 'not-created',
+    requestId: s.id, referenceId: 'synthetic_authority_no_creation' }) }).resolve(s.id);
   assert.equal((await f.store.publication(f.wave.id))?.held, 0);
 });
 

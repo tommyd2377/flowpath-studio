@@ -4,7 +4,7 @@ October 25, 2026. This builds on the current simple waveform. It does not restor
 
 ## Status and preview
 
-The local synthetic flow works end to end: account → save waveform → get test pack → allocate finite budget → explicitly publish → anonymous sponsored usage → cumulative intro expiry → account sign-in → explicit visitor-funded continuation. One account still has one waveform. The test pack is **$5 USD / 15 minutes / 900 seconds** for both personal usage and sponsorship. No subscriptions, top-ups, payouts, Connect or commissions.
+The local synthetic flow works end to end: account → save waveform → get test pack → allocate finite budget → explicitly publish → anonymous sponsored usage → cumulative intro expiry → account sign-in → explicit visitor-funded continuation. One account still has one waveform. The preserved legacy fixture default is **$5 USD / 15 minutes / 900 seconds**; server configuration can select another test pack. Pricing remains undecided: neither $1/10 minutes nor $5/$6 per hour is selected by this implementation. Existing purchase snapshots and credited seconds are never revalued. No subscriptions, top-ups, payouts, Connect or commissions.
 
 **This is not ready to accept real money.** `paidVoiceReady()` deliberately returns true only in explicit local fixture mode. Outside fixtures, both paid voice and checkout creation fail closed. No environment flag enables live processing. The existing homepage's separate 180-second demo and its protective controls remain intact. A paid-test activation routes private waveform starts through paid admission and rejects the legacy personal free-start endpoint except for the verified founder's explicit [admin continuation](admin-testing.md).
 
@@ -42,11 +42,34 @@ The reservation deadline begins at server admission, before provider creation. S
 
 Duplicate closure paths settle once. A lost final event, missing provider identifier, failed persistence or crash retains the hold. A timer, day change or successful REST hangup acknowledgment never proves final duration and never releases funds. The adapter can reattach and close a persisted provider ID through the existing supervisor. No audio or transcripts are needed for accounting. Provider overshoot is recorded on the segment, charged at most the reservation and borne by the platform.
 
+### October 26 accounting hardening
+
+Paid admission now rejects missing, infinite, fractional or negative daily caps; concurrency must be an integer from 1 to 20. A zero daily-second cap pauses starts. The existing segment maximum remains 900 seconds, bounded further by the prepaid wallet, allocated sponsorship budget, cumulative intro allowance and shared daily reservation cap. The cap counts full admitted reservations and is not refunded by early settlement. Invalid wallet, allowance, sponsorship or global-capacity records fail closed for reconciliation. These are finite **admission/accounting bounds**; they do not establish a guaranteed provider-cost bound after a lost creation response or late cutoff.
+
+Late provider-ID persistence preserves `uncertain` state. Confirmed creation/connection and uncertain reservations cannot be released through a generic rejected-setup result. A confirmed no-provider-attempt setup failure remains free. Settlement validates held funds/allowance/capacity before applying one atomic debit, release and audit; a failed write rolls back all of them. Reversals preserve active holds and original payers, and settlement may leave compensating debt. Final duration is rounded once, clamped to the reservation and observed connected elapsed time; provider overshoot remains platform liability.
+
+The billing factory accepts a server-owned `assertWaveformAllowed(tx, ownerUid, waveform)` hook. Save, publish and admission check approval in their existing database transaction before financial writes; unpublish and confirmed cleanup remain available. The paid runtime snapshots `creationContentDigest` during configuration resolution and passes it into reserve. A concurrent content edit fails reserve without a hold, even if the new version is separately approved. A publication revision change after reservation prevents provider setup. The integration runtime owns enabling the safety hook and supplying its authoritative review store; omitting it preserves older unit fixtures and is not production safety approval.
+
+### Fixture reconciliation procedure
+
+`createPaidReconciliation(store, { environment: 'fixture', lookup })` is a local test utility with an injected synthetic provider-authority lookup. It has no HTTP endpoint, admin dashboard, production provider adapter or live credential path. Its only resolution input is the segment ID; the caller cannot submit a charge/duration through `resolve`.
+
+1. `inspect(id)` reports state, reserved/charged seconds and whether provider identity/connection are known. It does not release funds or perform provider work.
+2. `resolve(id)` inspects only an uncertain segment and queries the injected authority once. Timeout, lookup failure, an unknown outcome, elapsed expiry and day rollover preserve every hold and block replacement admission.
+3. Confirmed final closure must bind the original request ID, matching provider ID, bounded reference ID and final cumulative duration. A recovered provider ID is persisted. Without server-confirmed connection, the charge remains zero. A confirmed no-creation result must bind the original request and cannot conflict with any stored provider/connection evidence. A missing response or provider lookup returning no record is not, by itself, proof of no creation.
+4. Confirmed settlement and the `provider_reconciliation` ledger entry commit together. Concurrent/replayed resolution settles once. Failed writes leave holds intact for a later authorized retry. No balance edit, refund, provider creation or automatic retry occurs.
+
+This procedure proves synthetic accounting behavior only. A real operational reconciliation process still needs a provider-backed, recoverable request-identity lookup with authoritative terminal outcomes, controlled operator access and independent acceptance. Unknown outcomes must remain unresolved.
+
+Billing-lane verification on October 26: **48 scoped paid/Stripe Node tests passed** under sanitized Node 24.6.0, plus ESLint on the changed modules/tests and `git diff --check`. Fake authority tests cover nonfinite caps, concurrent reservations, corrupt accounting records, stale approved content, late provider identity, unknown/reordered outcomes, rollback, reversal debt and idempotent settlement. No build, browser suite, live API, real Stripe call, private runtime access or deployment was run in this lane; integration owns the full checks.
+
 ### Required upstream work before activation
 
 The existing supervisor closes upstream via sideband, a server timer and one REST fallback. Paid segments are now wired into the existing independent deadline scheduler and authenticated expiry route; OIDC validation happens before ledger/provider access. Synthetic tests verify fresh-worker reattachment, partial settlement, authenticated retry after a missing final event, unknown-ID holds and scheduling failure before creation. The runtime still refuses non-fixture creation and does not expose real provider credentials for paid-test recovery. No real task was scheduled. Queue delivery can be late and a lost creation response can leave an unknown provider ID. **A guaranteed paid overshoot bound has not been established.** This implementation does not pretend a browser timeout or a delayed queue establishes one. Paid orphan recovery is not live-verified.
 
 Before enabling real paid usage, implement and verify a provider-backed hard cutoff/recoverable creation protocol, persist provider lifecycle authority, and independently verify the paid deadline worker with response loss, restart, late task delivery, persistence failures and missing finalization. Establish a measured/documented overshoot bound and a manual reconciliation procedure for unresolved holds. Do not clear uncertain holds just because their deadlines passed. No hidden model, tools or automatic paid creation retries are used.
+
+The fixture reconciliation helper above is not that production procedure. No provider-guaranteed cutoff, lost-create lookup authority or hard overshoot bound has been established; the fixture-only paid-readiness gate remains unchanged.
 
 ## Stripe boundary
 

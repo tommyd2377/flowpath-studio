@@ -8,6 +8,7 @@ import { productionVoicePolicy, VoiceAdmissionError } from './production-voice-s
 import { scheduleProductionVoiceDeadline } from './voice-deadline';
 import { accountServer } from './account-runtime';
 import { configuredPublicOrigin } from './request-origin';
+import { creationContentDigest } from './creation-safety';
 
 const shared = globalThis as typeof globalThis & { flowpathPaidVoiceServer?: ReturnType<typeof createVoiceServer> };
 export function getPaidVoiceServer() {
@@ -52,7 +53,7 @@ export function getPaidVoiceServer() {
       if (header !== 'creator' && header !== 'self') throw new VoiceAdmissionError('Choose who pays before starting.', 402);
       const identity = actor.uid ? await accountServer.resolveIdentity(request) : null;
       return { ownerUid: actor.uid ? `account:${actor.uid}` : actor.visitorId, accountSessionId: actor.accountSessionId ?? actor.visitorId,
-        waveform: publication.waveform, paid: { actor, choice: header }, isCurrent: () => identity?.isCurrent() ?? !actor.uid };
+        waveform: publication.waveform, paid: { actor, choice: header, expectedContentDigest: creationContentDigest(publication.waveform) }, isCurrent: () => identity?.isCurrent() ?? !actor.uid };
     },
     production: { store: createPaidVoiceStore(store), policy: () => paidFixtures ? { globalConcurrency: 3, globalDailySeconds: 9_000,
       ownerDailySeconds: 3_600, access: 'signed-in', allowedUids: [] } : productionVoicePolicy(process.env),

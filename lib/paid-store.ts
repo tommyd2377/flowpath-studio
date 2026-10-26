@@ -3,6 +3,8 @@ import type { Waveform } from './account-model';
 import { DEFAULT_PAYMENT_SETTINGS, paymentSettings, type MinutePack, type PaymentSettings } from './paid-model';
 import { ACCOUNT_SESSION_COLLECTION, activeAccountSession } from './production-account-session';
 import { VoiceAdmissionError, type VoiceDatabase, type VoiceTransaction } from './production-voice-store';
+import { validatePaidLimits } from './paid-limits';
+import { creationContentDigest } from './creation-safety';
 
 export type PaidActor = { visitorId: string; uid?: string; accountSessionId?: string };
 type Wallet = { balance: number; held: number; allocated: number; openPurchase?: string };
@@ -29,8 +31,32 @@ const read = async <T>(tx: VoiceTransaction, key: string) => await tx.get(key) a
 function fail(message: string, status = 409): never { throw new VoiceAdmissionError(message, status); }
 
 /** All monetary/allowance mutations share one database transaction. No browser duration is accepted. */
-export function createPaidStore(database: VoiceDatabase, now = Date.now) {
+export function createPaidStore(database: VoiceDatabase, now = Date.now, options: {
+  assertWaveformAllowed?: (tx: VoiceTransaction, ownerUid: string, waveform: Waveform) => Promise<void>;
+} = {}) {
   const audit = (tx: VoiceTransaction, id: string, entry: object) => tx.set(path('Ledger', id), { ...entry, at: now(), environment: 'test' });
+  async function readWallet(tx: VoiceTransaction, uid: string) {
+    const wallet = await read<Wallet>(tx, walletPath(uid)) ?? blankWallet();
+    if (!Number.isSafeInteger(wallet.balance) || !Number.isSafeInteger(wallet.held) || wallet.held < 0
+      || !Number.isSafeInteger(wallet.allocated) || wallet.allocated < 0
+      || !Number.isSafeInteger(wallet.held + wallet.allocated)) fail('Wallet accounting requires reconciliation.', 503);
+    return wallet;
+  }
+  function capacityState(global: Record<string, unknown> | null) {
+    if (global && (typeof global.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(global.day)
+      || !Number.isSafeInteger(global.reservedSeconds) || Number(global.reservedSeconds) < 0
+      || !global.active || typeof global.active !== 'object' || Array.isArray(global.active)
+      || Object.values(global.active).some(state => !['creating', 'active', 'uncertain'].includes(String(state))))) {
+      fail('Capacity data requires review.', 503);
+    }
+    return (global?.active ?? {}) as Record<string, string>;
+  }
+  function validateSponsorship(publication: Publication) {
+    paymentSettings(publication.settings, true);
+    if (!Number.isSafeInteger(publication.spent) || publication.spent < 0 || !Number.isSafeInteger(publication.held)
+      || publication.held < 0 || !Number.isSafeInteger(publication.spent + publication.held)
+      || publication.settings.budgetSeconds < publication.spent + publication.held) fail('Sponsorship accounting requires reconciliation.', 503);
+  }
   async function authorize(tx: VoiceTransaction, actor: PaidActor) {
     if (actor.uid && actor.accountSessionId && !activeAccountSession(await tx.get(`${ACCOUNT_SESSION_COLLECTION}/${actor.accountSessionId}`), actor.uid, now())) fail('Sign in again to continue.', 403);
   }
@@ -48,6 +74,8 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now) {
     if (actor.uid && (await tx.get(`voiceAdminOwners/${hash(actor.uid)}`))?.active) fail('Your previous conversation must close before starting another.');
     const publication = await read<Publication>(tx, wavePath(waveformId));
     if (!publication || !publication.published && publication.ownerUid !== actor.uid) fail('This waveform is unavailable.', 404);
+    await options.assertWaveformAllowed?.(tx, publication.ownerUid, publication.waveform);
+    validateSponsorship(publication);
     const { id, row } = await participant(tx, actor);
     if (row.active) fail('Your previous conversation must close before starting another.');
     const own = actor.uid === publication.ownerUid;
@@ -55,8 +83,10 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now) {
     if (own && choice !== 'self') fail('Choose to continue using your own balance.', 402);
     if (choice === 'creator' && publication.settings.mode === 'visitor') fail('An account and available paid minutes are needed to continue.', 402);
     const payerUid = choice === 'self' ? actor.uid! : publication.ownerUid;
-    const wallet = await read<Wallet>(tx, walletPath(payerUid)) ?? blankWallet();
+    const wallet = await readWallet(tx, payerUid);
     const use = row.uses[waveformId] ?? { used: 0, held: 0 };
+    if (!Number.isSafeInteger(use.used) || use.used < 0 || !Number.isSafeInteger(use.held) || use.held < 0
+      || !Number.isSafeInteger(use.used + use.held)) fail('Allowance accounting requires reconciliation.', 503);
     const allowance = choice === 'creator' && publication.settings.mode === 'intro' ? publication.settings.allowanceSeconds : null;
     const funds = choice === 'self' ? free(wallet) : wallet.balance < wallet.held + wallet.allocated ? 0
       : publication.settings.budgetSeconds - publication.spent - publication.held;
@@ -78,6 +108,7 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now) {
         const prior = await read<Publication>(tx, wavePath(waveform.id));
         if (prior && prior.ownerUid !== actor.uid) fail('This waveform belongs to another account.', 403);
         if (onlyIfMissing && prior) return;
+        await options.assertWaveformAllowed?.(tx, actor.uid!, waveform);
         tx.set(wavePath(waveform.id), prior ? { ...prior, waveform, revision: prior.revision + 1 }
           : { ownerUid: actor.uid, waveform, published: false, settings: DEFAULT_PAYMENT_SETTINGS, spent: 0, held: 0, revision: 1 });
       });
@@ -100,14 +131,15 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now) {
     },
     async wallet(uid: string) {
       return database.transaction(async tx => {
-        const wallet = await read<Wallet>(tx, walletPath(uid)) ?? blankWallet();
+        const wallet = await readWallet(tx, uid);
         return { ...wallet, available: free(wallet) };
       });
     },
     async capacity(policy: { concurrency: number; dailySeconds: number }) {
+      validatePaidLimits(policy);
       return database.transaction(async tx => {
         const global = await tx.get('voiceAdmission/global');
-        const slots = (global?.active ?? {}) as Record<string, string>;
+        const slots = capacityState(global);
         const day = new Date(now()).toISOString().slice(0, 10);
         const used = global?.day === day ? Number(global.reservedSeconds) : 0;
         return Object.values(slots).includes('uncertain') ? 'A previous connection needs confirmed cleanup.'
@@ -123,7 +155,9 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now) {
         await authorize(tx, actor);
         const prior = await read<Publication>(tx, wavePath(waveform.id));
         if (prior && prior.ownerUid !== actor.uid) fail('This waveform belongs to another account.', 403);
-        const wallet = await read<Wallet>(tx, walletPath(actor.uid!)) ?? blankWallet();
+        if (published) await options.assertWaveformAllowed?.(tx, actor.uid!, waveform);
+        if (prior) validateSponsorship(prior);
+        const wallet = await readWallet(tx, actor.uid!);
         const spent = prior?.spent ?? 0, held = prior?.held ?? 0;
         const oldAllocation = prior ? Math.max(0, prior.settings.budgetSeconds - spent) : 0;
         const budget = settings.mode === 'visitor' || adminUnfunded ? spent + held : settings.budgetSeconds;
@@ -140,14 +174,16 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now) {
     async quote(actor: PaidActor, id: string, choice: 'creator' | 'self') {
       return database.transaction(async tx => { const a = await allocation(tx, actor, id, choice); return { seconds: a.seconds, payer: choice }; });
     },
-    async reserve(actor: PaidActor, waveformId: string, id: string, choice: 'creator' | 'self', policy: { concurrency: number; dailySeconds: number }) {
+    async reserve(actor: PaidActor, waveformId: string, id: string, choice: 'creator' | 'self', policy: { concurrency: number; dailySeconds: number }, expectedContentDigest?: string) {
+      validatePaidLimits(policy);
       return database.transaction(async tx => {
         if (await tx.get(segmentPath(id))) fail('This conversation identifier has already been used.');
         const global = await tx.get('voiceAdmission/global');
-        const slots = (global?.active ?? {}) as Record<string, string>;
+        const slots = capacityState(global);
         if (Object.values(slots).includes('uncertain')) fail('A previous connection needs confirmed cleanup.', 503);
         if (Object.keys(slots).length >= policy.concurrency) fail('All available voice connections are in use.');
         const a = await allocation(tx, actor, waveformId, choice);
+        if (expectedContentDigest !== undefined && expectedContentDigest !== creationContentDigest(a.publication.waveform)) fail('The waveform changed. Reload before starting a conversation.');
         const day = new Date(now()).toISOString().slice(0, 10);
         const daily = global?.day === day ? Number(global.reservedSeconds) : 0;
         if (!Number.isSafeInteger(daily) || daily < 0) fail('Capacity data requires review.', 503);
@@ -185,8 +221,8 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now) {
         if (!segment || ['closed', 'rejected'].includes(segment.state)) return segment;
         if (providerId && segment.providerId && segment.providerId !== providerId) fail('Provider identifier mismatch.', 403);
         const next = { ...segment, ...(providerId ? { providerId } : {}),
-          ...(update === 'created' ? { state: 'active' as const } : {}),
-          ...(update === 'connected' && !segment.connectedAt ? { connectedAt: now() } : {}),
+          ...(update === 'created' && segment.state !== 'uncertain' ? { state: 'active' as const } : {}),
+          ...(update === 'connected' && segment.connectedAt === undefined ? { connectedAt: now() } : {}),
           ...(update === 'cancel' ? { canceled: true } : {}) };
         tx.set(segmentPath(id), next);
         return next;
@@ -206,32 +242,42 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now) {
         if (!segment || segment.state !== 'creating' || segment.canceled || segment.expiresAt <= now()) return false;
         const wave = await read<Publication>(tx, wavePath(segment.waveformId));
         if (!wave || !wave.published && wave.ownerUid !== segment.viewerUid) return false;
+        if (wave.revision !== segment.revision) return false;
+        await options.assertWaveformAllowed?.(tx, wave.ownerUid, wave.waveform);
         await authorize(tx, { visitorId: segment.visitorId, uid: segment.viewerUid, accountSessionId: segment.accountSessionId });
         return true;
       });
     },
-    async settle(id: string, result: { finalized: boolean; seconds?: number; rejected?: boolean; providerId?: string }) {
+    async settle(id: string, result: { finalized: boolean; seconds?: number; rejected?: boolean; providerId?: string;
+      reconciliation?: { referenceId: string; outcome: 'not-created' | 'closed' } }) {
       await database.transaction(async tx => {
         const segment = await read<PaidSegment>(tx, segmentPath(id));
         if (!segment || ['closed', 'rejected'].includes(segment.state)) return;
         if (result.providerId && segment.providerId && result.providerId !== segment.providerId) fail('Provider identifier mismatch.', 403);
         const global = await tx.get('voiceAdmission/global');
-        const slots = { ...(global?.active ?? {}) as Record<string, string> };
+        const slots = { ...capacityState(global) };
+        if (!slots[id]) fail('Capacity reservation requires reconciliation.', 503);
         if (!result.finalized) {
           tx.set(segmentPath(id), { ...segment, state: 'uncertain' });
           tx.set('voiceAdmission/global', { ...global, active: { ...slots, [id]: 'uncertain' } });
           return; // An elapsed timer/REST acknowledgment never releases a hold.
         }
-        if (!result.rejected && (typeof result.seconds !== 'number' || !Number.isFinite(result.seconds) || result.seconds < 0)) fail('Confirmed provider duration is required.', 503);
+        if (result.rejected && (segment.state === 'uncertain' || segment.providerId || segment.connectedAt !== undefined)) fail('Confirmed provider authority is required to reconcile this hold.', 503);
+        if (result.reconciliation?.outcome === 'not-created' && (segment.providerId || segment.connectedAt !== undefined)) fail('Provider creation evidence conflicts with this reservation.', 503);
+        if (!result.rejected && (typeof result.seconds !== 'number' || !Number.isSafeInteger(Math.ceil(result.seconds)) || result.seconds < 0)) fail('Confirmed provider duration is required.', 503);
         // Failed setup is free. Duration comes only from validated provider closure, rounded up once.
         const charged = result.rejected || segment.connectedAt === undefined ? 0 : Math.min(segment.reserved,
           Math.ceil(result.seconds!), Math.max(0, Math.ceil((now() - segment.connectedAt) / 1000)));
-        const wallet = await read<Wallet>(tx, walletPath(segment.payerUid)) ?? blankWallet();
+        const wallet = await readWallet(tx, segment.payerUid);
         const person = await read<Participant>(tx, personPath(segment.viewer)) ?? blankPerson();
         const wave = await read<Publication>(tx, wavePath(segment.waveformId));
         if (!wave || person.active !== id) fail('Reservation requires reconciliation.', 503);
+        validateSponsorship(wave);
         const use = person.uses[segment.waveformId];
         if (!use) fail('Allowance requires reconciliation.', 503);
+        if (!Number.isSafeInteger(use.used) || use.used < 0 || !Number.isSafeInteger(use.held) || use.held < 0
+          || segment.payer === 'creator' && (use.held < segment.reserved || wave.held < segment.reserved || wallet.allocated < segment.reserved)
+          || segment.payer === 'self' && wallet.held < segment.reserved) fail('Reservation accounting requires reconciliation.', 503);
         delete slots[id];
         const { active: _active, ...rest } = person;
         void _active;
@@ -242,11 +288,12 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now) {
           allocated: wallet.allocated - (segment.payer === 'creator' ? wave.settings.mode === 'visitor' ? segment.reserved : charged : 0) });
         if (segment.payer === 'creator') tx.set(wavePath(segment.waveformId), { ...wave, held: wave.held - segment.reserved, spent: wave.spent + charged,
           settings: wave.settings.mode === 'visitor' ? { ...wave.settings, budgetSeconds: wave.spent + charged + wave.held - segment.reserved } : wave.settings });
-        tx.set(segmentPath(id), { ...segment, state: result.rejected ? 'rejected' : 'closed', charged,
+        tx.set(segmentPath(id), { ...segment, ...(result.providerId ? { providerId: result.providerId } : {}), state: result.rejected ? 'rejected' : 'closed', charged,
           providerSeconds: result.seconds ?? 0, settledAt: now(), overshootSeconds: Math.max(0, Math.ceil(result.seconds ?? 0) - segment.reserved) });
         tx.set('voiceAdmission/global', { ...global, active: slots });
         audit(tx, `debit:${id}`, { type: 'usage_debit', uid: segment.payerUid, segmentId: id, seconds: -charged });
         audit(tx, `release:${id}`, { type: 'released_hold', uid: segment.payerUid, segmentId: id, seconds: segment.reserved - charged });
+        if (result.reconciliation) audit(tx, `reconcile:${id}`, { type: 'provider_reconciliation', segmentId: id, ...result.reconciliation });
       });
     },
     async beginPurchase(actor: PaidActor, id: string, destination: string, pack: MinutePack) {
@@ -256,7 +303,7 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now) {
         const existing = await read<Purchase>(tx, purchasePath(id));
         if (existing) { if (existing.uid !== actor.uid) fail('Purchase belongs to another account.', 403);
           if (existing.destination !== destination) fail('This checkout belongs to another waveform. Finish that checkout first.'); return existing; }
-        const wallet = await read<Wallet>(tx, walletPath(actor.uid!)) ?? blankWallet();
+        const wallet = await readWallet(tx, actor.uid!);
         const open = wallet.openPurchase ? await read<Purchase>(tx, purchasePath(wallet.openPurchase)) : null;
         if (open?.status === 'pending' && now() - open.createdAt < 30 * 60_000) {
           if (open.destination !== destination) fail('A checkout for another waveform is pending. Finish it or wait for it to expire.');
@@ -287,7 +334,7 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now) {
           || purchase.checkoutId && purchase.checkoutId !== payment.checkoutId || purchase.paymentIntent && purchase.paymentIntent !== payment.paymentIntent) fail('Payment does not match the server purchase.', 400);
         const intent = await tx.get(path('Intents', payment.paymentIntent));
         if (intent && intent.purchaseId !== id) fail('Payment has already been allocated.', 400);
-        const wallet = await read<Wallet>(tx, walletPath(purchase.uid)) ?? blankWallet();
+        const wallet = await readWallet(tx, purchase.uid);
         const reversedAmount = Math.min(payment.amount, Number(reversal?.amount ?? 0));
         const reversed = Math.ceil(purchase.pack.seconds * reversedAmount / purchase.pack.amount);
         if (purchase.status !== 'paid') {
@@ -313,7 +360,7 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now) {
         const prior = await tx.get(path('Reversals', paymentIntent));
         const intent = await tx.get(path('Intents', paymentIntent));
         const purchase = intent ? await read<Purchase>(tx, purchasePath(String(intent.purchaseId))) : null;
-        const wallet = purchase ? await read<Wallet>(tx, walletPath(purchase.uid)) ?? blankWallet() : null;
+        const wallet = purchase ? await readWallet(tx, purchase.uid) : null;
         if (seen) return;
         const cumulative = Math.max(amount, Number(prior?.amount ?? 0));
         if (purchase && wallet) {
