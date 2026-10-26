@@ -10,13 +10,15 @@ import { appearanceTheme } from '@/lib/appearance-theme';
 import { WAVEFORM_DEFAULT_COLOR } from '@/lib/account-model';
 import VoiceDiagnostics, { useDiagnosticsMode } from './VoiceDiagnostics';
 import TextPanel from './TextPanel';
-import type { TextPanelConfiguration } from '@/lib/text-panel';
+import LiveTextPanel from './LiveTextPanel';
+import { liveTextPanelEnabled, type TextPanelConfiguration } from '@/lib/text-panel';
 import { clientAnalytics, observeVisit } from '@/lib/analytics-runtime';
 
-export default function VoiceExperience({ waveformId, name, accentColor = WAVEFORM_DEFAULT_COLOR, profilePhoto = null, paidPayer, onSettled, textPanel = null, analyticsSurface }: {
-  waveformId?: string; name?: string; accentColor?: string; profilePhoto?: string | null; paidPayer?: 'creator' | 'self'; onSettled?: () => void; textPanel?: TextPanelConfiguration | null; analyticsSurface?: 'private' | 'public';
+export default function VoiceExperience({ waveformId, name, accentColor = WAVEFORM_DEFAULT_COLOR, profilePhoto = null, paidPayer, onSettled, textPanel = null, analyticsSurface, nextConversation }: {
+  waveformId?: string; name?: string; accentColor?: string; profilePhoto?: string | null; paidPayer?: 'creator' | 'self'; onSettled?: () => void; textPanel?: TextPanelConfiguration | null; analyticsSurface?: 'private' | 'public'; nextConversation?: () => void;
 }) {
-  const voice = useVoiceSession(waveformId, paidPayer);
+  const textBoxEnabled = liveTextPanelEnabled(textPanel);
+  const voice = useVoiceSession(waveformId, paidPayer, textBoxEnabled);
   const handledSettlement = useRef(0);
   useEffect(() => { if (voice.settledVersion > handledSettlement.current) { handledSettlement.current = voice.settledVersion; onSettled?.(); } }, [voice.settledVersion, onSettled]);
   const diagnosticsMode = useDiagnosticsMode();
@@ -37,7 +39,7 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
     if (connected || !voice.active) wasConnected.current = connected;
   }, [connected, voice.active, surface]);
   const hasPortrait = Boolean(waveformId && profilePhoto);
-  const label = voice.needsAudioResume ? 'Resume voice playback' : voice.active
+  const label = nextConversation ? 'Choose next conversation' : voice.needsAudioResume ? 'Resume voice playback' : voice.active
     ? voice.phase === 'connecting' ? 'Cancel connection' : 'End conversation'
     : 'Start conversation';
   const showStatus = Boolean(voice.status) || !connected || voice.needsAudioResume || (voice.remainingSeconds !== null && voice.remainingSeconds <= 15);
@@ -74,17 +76,21 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
       <button className="wave-control" type="button" aria-label={label} aria-pressed={voice.active}
         aria-describedby={showStatus && status ? 'voice-status' : !connected ? 'voice-hint' : undefined}
         onClick={() => {
-          if (voice.needsAudioResume) void voice.start();
+          if (nextConversation) nextConversation();
+          else if (voice.needsAudioResume) void voice.start();
           else if (!voice.active) { clientAnalytics.record({ eventName: 'voice_start_requested', properties: { surface } }); void voice.start(diagnosticsMode && recordNext); setRecordNext(false); }
           else void voice.stop();
         }}>
         <Waveform phase={voice.phase} inputAnalyser={voice.inputAnalyser} outputAnalyser={voice.outputAnalyser} accentColor={waveformId ? accentColor : undefined} />
       </button>
-      <p className="voice-hint" id="voice-hint" aria-hidden={connected}>Tap the wave whenever you’re ready</p>
+      <p className="voice-hint" id="voice-hint" aria-hidden={connected}>{nextConversation ? 'Copy your text, then tap the wave to choose your next conversation' : 'Tap the wave whenever you’re ready'}</p>
       <p className="voice-status" id="voice-status" role="status" aria-live="polite" aria-atomic="true">{showStatus ? status : ''}</p>
       {paidPayer && <p className="paid-session-meter" aria-live="polite">{paidPayer === 'creator' ? 'Creator pays' : 'You pay from your prepaid balance'}{voice.remainingSeconds !== null ? ` · ${voice.remainingSeconds} seconds remaining${voice.remainingSeconds <= 30 ? ' — ending soon' : ''}` : ''}</p>}
       <span className="sr-only">{connected ? 'Conversation connected. Tap the waveform or press Escape to end.' : ''}</span>
-      {textPanel && <div className="voice-text-panel"><TextPanel configuration={textPanel} scopeKey={waveformId ?? 'home'} /></div>}
+      {textBoxEnabled ? <div className="voice-text-panel"><LiveTextPanel {...voice.textState}
+        onStop={voice.stopWriting} onClear={voice.clearText} onUndo={voice.undoText} />
+        {voice.textState.message && <p role="status">{voice.textState.message}</p>}
+      </div> : textPanel && <div className="voice-text-panel"><TextPanel configuration={textPanel} scopeKey={waveformId ?? 'home'} /></div>}
     </main>
     {diagnosticsMode && <VoiceDiagnostics key={voice.diagnosticVersion} active={voice.active} recordNext={recordNext} onRecordNext={setRecordNext}
       recording={voice.diagnosticRecording} hasReport={voice.hasDiagnostic} version={voice.diagnosticVersion}

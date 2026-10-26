@@ -39,7 +39,7 @@ export const accountServer = state.flowpathAccounts ??= createAccountServer({
   safetyAdminFixture: creationSafetyFixtures,
   validateWaveform: async (request, waveform) => {
     if (!creationSafetyEnabled()) {
-      if (waveform.textPanel) throw new CreationSafetyError('Text display is paused until safety review is available.', 503);
+      if (waveform.textPanel?.version === 1) throw new CreationSafetyError('Creator text display is paused until safety review is available.', 503);
       return;
     }
     const identity = await accountServer.resolveIdentity(request);

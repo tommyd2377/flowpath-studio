@@ -22,7 +22,7 @@ export function getPaidStore() {
   return shared.flowpathPaidStore ??= createPaidStore(applicationDatabase(), Date.now, {
     assertWaveformAllowed: async (tx, uid, waveform) => {
       if (creationSafetyEnabled()) await creationReviewStore().requireAllowed(tx, uid, waveform);
-      else if (waveform.textPanel) throw new CreationSafetyError('Text display is paused until safety review is available.', 503);
+      else if (waveform.textPanel?.version === 1) throw new CreationSafetyError('Creator text display is paused until safety review is available.', 503);
     },
   });
 }

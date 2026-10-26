@@ -86,7 +86,8 @@ function AdminReviewQueue() {
       <p>Owner: {review.proof.ownerUid}</p>
       <h4>Instructions</h4>
       <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{review.candidate.initialPrompt}</div>
-      {review.candidate.textPanel && <><h4>Creator text</h4><div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{review.candidate.textPanel.text}</div></>}
+      {review.candidate.textPanel?.version === 1 && <><h4>Creator text</h4><div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{review.candidate.textPanel.text}</div></>}
+      {review.candidate.textPanel?.version === 2 && <p>Text Box plugin enabled. Conversation text is not saved with this waveform.</p>}
       <div className="account-actions">
         <button type="button" className="primary-button" disabled={loading || busy || !canDecideCreationReview(review.status)} onClick={() => void decide(review, 'allowed')}>Approve reviewed version</button>
         <button type="button" className="secondary-button" disabled={loading || busy || !canDecideCreationReview(review.status)} onClick={() => void decide(review, 'blocked')}>Reject reviewed version</button>

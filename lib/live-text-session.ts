@@ -16,12 +16,13 @@ const validText = (value: unknown): value is string => typeof value === 'string'
 export function createLiveTextSession({ onChange, send }: Options) {
   let text = '', writing = false, message = '', finished = false, generation = 0, toolsLimited = false;
   let transcriptBuffer = '', lastTranscriptEnd = -1, dictationCheckpoint = false, bufferBoundary = true;
-  let controlBarrier = -1;
+  let controlBarrier = -1, textRevision = 0;
   const undo: string[] = [];
   const events = new Set<string>(), calls = new Set<string>();
   const responses = new Map<string, BackendResponse>();
   const delegations = new Map<string, string>();
   const delegationGenerations = new Map<string, number>();
+  const readRevisions = new Map<string, number>();
   const emit = () => onChange({ text, writing, canUndo: undo.length > 0, message });
   function checkpoint() {
     if (undo.at(-1) !== text) undo.push(text);
@@ -31,6 +32,7 @@ export function createLiveTextSession({ onChange, send }: Options) {
     if (next === text) return;
     if (saveUndo) checkpoint();
     text = next;
+    textRevision++;
   }
   function appendDictation(fragment: string) {
     if (!writing || !fragment) return;
@@ -42,6 +44,7 @@ export function createLiveTextSession({ onChange, send }: Options) {
     }
     if (!dictationCheckpoint) { checkpoint(); dictationCheckpoint = true; }
     text += text.length ? fragment : fragment.trimStart();
+    textRevision++;
   }
   function control(action: TextAction, value = '', local = false) {
     if (local) { generation++; controlBarrier = lastTranscriptEnd; }
@@ -59,7 +62,7 @@ export function createLiveTextSession({ onChange, send }: Options) {
       if (action === 'clear') replace('');
       else if (action === 'undo') {
         const previous = undo.pop();
-        if (previous !== undefined) text = previous;
+        if (previous !== undefined && previous !== text) { text = previous; textRevision++; }
       } else if (action === 'replace') replace(value);
       else if (action === 'append') replace(text + value);
     }
@@ -152,10 +155,14 @@ export function createLiveTextSession({ onChange, send }: Options) {
       if (args && Object.keys(args).length === 2 && Object.keys(args).every(key => ['action', 'text'].includes(key))
         && actions.includes(args.action as TextAction) && validText(args.text)
         && (['replace', 'append'].includes(String(args.action)) || args.text === '')) {
-        if (args.action === 'append' && text.length + args.text.length > MAX_TEXT) status = 'text_too_long';
+        if (['replace', 'append', 'clear', 'undo'].includes(String(args.action))
+          && readRevisions.has(delegationId) && readRevisions.get(delegationId) !== textRevision) status = 'superseded';
+        else if (args.action === 'append' && text.length + args.text.length > MAX_TEXT) status = 'text_too_long';
         else {
+          if (args.action === 'read') readRevisions.set(delegationId, textRevision);
           if (args.action !== 'read') { transcriptBuffer = ''; bufferBoundary = true; }
           control(args.action as TextAction, args.text);
+          if (readRevisions.has(delegationId)) readRevisions.set(delegationId, textRevision);
           status = 'applied';
           emit();
         }
@@ -217,7 +224,7 @@ export function createLiveTextSession({ onChange, send }: Options) {
       finished = true;
       writing = false;
       transcriptBuffer = '';
-      responses.clear(); delegations.clear(); delegationGenerations.clear(); events.clear(); calls.clear();
+      responses.clear(); delegations.clear(); delegationGenerations.clear(); readRevisions.clear(); events.clear(); calls.clear();
       emit();
     },
   };

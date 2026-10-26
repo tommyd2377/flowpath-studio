@@ -79,6 +79,17 @@ test('read does not discard a buffered fragmented stop command', () => {
   assert.equal(h.state().text, 'Eggs ');
 });
 
+test('a delayed edit cannot replace dictation received since its panel read', () => {
+  const h = setup();
+  h.transcript('Start writing. First sentence.');
+  h.created(); h.call('read'); h.complete();
+  h.transcript(' Second sentence.');
+  h.created('response_edit');
+  h.call('replace', 'Shorter first sentence.', 'call_edit', 'response_edit');
+  assert.equal(h.result().status, 'superseded');
+  assert.equal(h.state().text, 'First sentence. Second sentence.');
+});
+
 test('duplicate, overlapping and out-of-order input is not appended twice', () => {
   const h = setup();
   h.transcript('start writing');

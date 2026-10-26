@@ -110,6 +110,25 @@ test('one saved waveform stays private to its verified owner and keeps its stabl
   assert.equal((await server.waveformGET(request('waveform?id=', 'GET', undefined, ownerA))).status, 404);
 });
 
+test('Text Box capability saves through owner settings without persisting conversation text', async t => {
+  const { server, signIn } = await harness(t);
+  const cookie = await signIn();
+  const plugin = { type: 'text', version: 2 };
+  const saved = await server.waveformPUT(request('waveform', 'PUT', { ...input, textPanel: plugin }, cookie));
+  assert.equal(saved.status, 200);
+  const waveform = (await saved.json()).waveform;
+  assert.deepEqual(waveform.textPanel, plugin);
+  const unauthorized = await signIn('owner-b');
+  assert.equal((await server.waveformGET(request(`waveform?id=${waveform.id}`, 'GET', undefined, unauthorized))).status, 404);
+  for (const textPanel of [{ ...plugin, text: 'Do not persist dictation' }, { ...plugin, version: 99 }]) {
+    assert.equal((await server.waveformPUT(request('waveform', 'PUT', { ...input, textPanel }, cookie))).status, 400);
+  }
+  assert.deepEqual((await (await server.waveformGET(request('waveform', 'GET', undefined, cookie))).json()).waveform.textPanel, plugin);
+  const removed = await server.waveformPUT(request('waveform', 'PUT', { ...input, textPanel: null }, cookie));
+  assert.equal(removed.status, 200);
+  assert.equal((await removed.json()).waveform.textPanel, null);
+});
+
 test('synthetic prompts persist across sign-out and a fresh server without retaining the auth session', async t => {
   const { server, signIn, settings } = await harness(t);
   const cookie = await signIn();

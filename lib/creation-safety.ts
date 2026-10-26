@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import { WAVEFORM_NAME_LIMIT, WAVEFORM_PROMPT_LIMIT } from './account-model';
+import { validateTextPanelConfiguration, type TextPanelConfiguration } from './text-panel';
 
 export type CreationSafetyStatus = 'pending' | 'allowed' | 'blocked' | 'manual-review';
-export type CreationTextPanel = { type: 'text'; version: 1; text: string };
+export type CreationTextPanel = TextPanelConfiguration;
 export type CreationCandidate = { name: string; initialPrompt: string; textPanel?: CreationTextPanel | null };
 export type CanonicalCreationCandidate = { name: string; initialPrompt: string; textPanel: CreationTextPanel | null };
 export const CREATION_SAFETY_CATEGORIES = [
@@ -37,13 +38,12 @@ export function canonicalCreationCandidate(value: unknown): CanonicalCreationCan
   }
   let textPanel: CreationTextPanel | null = null;
   if (row.textPanel !== undefined && row.textPanel !== null) {
-    const text = object(row.textPanel);
-    if (!text || Object.keys(text).some(key => !['type', 'version', 'text'].includes(key))
-      || text.type !== 'text' || text.version !== 1 || typeof text.text !== 'string' || text.text.length > 4_000
-      || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text.text)) {
+    const text = validateTextPanelConfiguration(row.textPanel);
+    if (!text.ok || !text.value || text.value.version === 1
+      && /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text.value.text)) {
       throw new CreationSafetyError('Use a plain text panel of at most 4,000 characters.', 400);
     }
-    textPanel = { type: 'text', version: 1, text: text.text };
+    textPanel = text.value;
   }
   return { name, initialPrompt, textPanel };
 }

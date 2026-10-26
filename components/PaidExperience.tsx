@@ -5,6 +5,7 @@ import { loadBilling, paidRead, startCheckout, type BillingView } from '@/lib/pa
 import { packLabel, type PublicWaveform } from '@/lib/paid-model';
 import VoiceExperience from './VoiceExperience';
 import { clientAnalytics } from '@/lib/analytics-runtime';
+import { liveTextPanelEnabled } from '@/lib/text-panel';
 
 type PublicView = { waveform: PublicWaveform; mode: string; sponsoredSeconds: number; own: boolean; reason: string; adminTesting?: boolean; adminVoiceReady?: boolean };
 export default function PaidExperience({ id, personal = false }: { id: string; personal?: boolean }) {
@@ -14,13 +15,14 @@ export default function PaidExperience({ id, personal = false }: { id: string; p
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
+  const [finished, setFinished] = useState(false);
   const requestId = useRef<string | null>(null);
   useEffect(() => {
     if (view && billing && (view.own || view.sponsoredSeconds < 1)) clientAnalytics.record({ eventName: 'paywall_shown', properties: { mode: view.mode } });
   }, [view, billing]);
   const destination = `/${personal ? 'w' : 'p'}/${id}`;
   useEffect(() => {
-    const changed = () => { setPayer(undefined); setView(null); setBilling(null); setMessage(''); setRevision(r => r + 1); };
+    const changed = () => { setPayer(undefined); setView(null); setBilling(null); setFinished(false); setMessage(''); setRevision(r => r + 1); };
     const channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('flowpath-account') : null;
     channel?.addEventListener('message', changed);
     window.addEventListener('flowpath-account-change', changed);
@@ -44,8 +46,11 @@ export default function PaidExperience({ id, personal = false }: { id: string; p
     })().catch(error => { if (current) setMessage(error.message); });
     return () => { current = false; };
   }, [id, revision]);
-  if ((payer || view?.adminTesting && view.adminVoiceReady) && view) return <VoiceExperience waveformId={id} name={view.waveform.name} accentColor={view.waveform.accentColor}
-    profilePhoto={view.waveform.profilePhoto} textPanel={view.waveform.textPanel} analyticsSurface={personal ? 'private' : 'public'} paidPayer={payer} onSettled={() => { setPayer(undefined); setView(null); setBilling(null); setRevision(r => r + 1); }} />;
+  const nextConversation = () => { setPayer(undefined); setView(null); setBilling(null); setFinished(false); setRevision(r => r + 1); };
+  if ((payer || view?.adminTesting && view.adminVoiceReady) && view) return <VoiceExperience key={id} waveformId={id} name={view.waveform.name} accentColor={view.waveform.accentColor}
+    profilePhoto={view.waveform.profilePhoto} textPanel={view.waveform.textPanel} analyticsSurface={personal ? 'private' : 'public'} paidPayer={payer}
+    nextConversation={finished && payer ? nextConversation : undefined}
+    onSettled={() => { if (liveTextPanelEnabled(view.waveform.textPanel)) setFinished(true); else nextConversation(); }} />;
   const canSponsor = !!view && !view.own && view.sponsoredSeconds > 0;
   return <main className="account-page paid-experience">
     <Link className="account-back" href="/">← Back to FlowPath</Link>

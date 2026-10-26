@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { VoicePhase } from '@/components/Waveform';
 import { monitorAudio, waitForIce } from './voice-session';
 import { createVoiceDiagnostics, type VoiceDiagnosticFinishReason } from './voice-diagnostics';
+import { createLiveTextSession, type LiveTextState } from './live-text-session';
 
 type VoiceSession = {
   id: string;
@@ -37,6 +38,7 @@ type VoiceSession = {
   acknowledgeClose?: () => void;
   released?: boolean;
   diagnostic?: ReturnType<typeof createVoiceDiagnostics>;
+  text?: ReturnType<typeof createLiveTextSession>;
 };
 
 async function deleteSession(id: string, endpoint: string, requestHeaders: Record<string, string>) {
@@ -72,6 +74,7 @@ function releaseMedia(session: VoiceSession) {
 }
 
 function dispose(session: VoiceSession, leaving = false): Promise<boolean> {
+  session.text?.finish();
   if (session.closePromise) {
     if (leaving) {
       if (session.requested) void deleteSession(session.id, session.endpoint, session.headers);
@@ -113,7 +116,9 @@ function dispose(session: VoiceSession, leaving = false): Promise<boolean> {
   return session.closePromise;
 }
 
-export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'self') {
+const emptyTextState = (): LiveTextState => ({ text: '', writing: false, canUndo: false, message: '' });
+
+export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'self', textBoxEnabled = false) {
   const [phase, setPhase] = useState<VoicePhase>('idle');
   const [active, setActive] = useState(false);
   const [status, setStatus] = useState('');
@@ -125,6 +130,8 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
   const [diagnosticRecording, setDiagnosticRecording] = useState(false);
   const [diagnosticVersion, setDiagnosticVersion] = useState(0);
   const [settledVersion, setSettledVersion] = useState(0);
+  const [textState, setTextState] = useState<LiveTextState>(emptyTextState);
+  const textController = useRef<ReturnType<typeof createLiveTextSession> | null>(null);
   const diagnostic = useRef<ReturnType<typeof createVoiceDiagnostics> | null>(null);
   const current = useRef<VoiceSession | null>(null);
   const closing = useRef<Promise<boolean> | null>(null);
@@ -207,6 +214,21 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
       needsAudioResume: false, lastActivity: Date.now(),
       diagnostic: diagnostic.current ?? undefined,
     };
+    textController.current?.finish();
+    textController.current = null;
+    setTextState(emptyTextState());
+    if (textBoxEnabled) {
+      const controller = createLiveTextSession({
+        onChange: state => { if (mounted.current && session.text && textController.current === session.text) setTextState(state); },
+        send: event => {
+          if (current.current === session && !session.controller.signal.aborted && session.channel?.readyState === 'open') {
+            session.channel.send(JSON.stringify(event));
+          }
+        },
+      });
+      session.text = controller;
+      textController.current = controller;
+    }
     session.diagnostic?.lifecycle('connecting');
     current.current = session;
     revision.current++;
@@ -300,6 +322,10 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
         let event: unknown;
         try { event = JSON.parse(data); } catch { return; }
         session.diagnostic?.providerEvent(event);
+        if (alive()) {
+          try { session.text?.event(event); }
+          catch { fail(session, 'The text connection encountered an error. Tap the wave to reconnect.'); return; }
+        }
         if (!event || typeof event !== 'object' || !('type' in event)) return;
         if (event.type === 'session.closed') {
           session.finalized = true;
@@ -377,7 +403,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
         : error instanceof Error ? error.message : 'The voice connection is unavailable. Tap the wave to try again.';
       fail(session, notice);
     }
-  }, [fail, stop, waveformId, paidPayer]);
+  }, [fail, stop, waveformId, paidPayer, textBoxEnabled]);
 
   useEffect(() => {
     mounted.current = true;
@@ -391,6 +417,8 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
       }
       diagnostic.current?.clear();
       diagnostic.current = null;
+      textController.current?.finish();
+      textController.current = null;
       if (mounted.current) {
         setActive(false);
         setNeedsAudioResume(false);
@@ -401,6 +429,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
         setOutputAnalyser(null);
         setHasDiagnostic(false);
         setDiagnosticRecording(false);
+        setTextState(emptyTextState());
       }
     };
     window.addEventListener('pagehide', leave);
@@ -412,6 +441,9 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
   }, []);
 
   const getDiagnostic = useCallback(() => diagnostic.current?.snapshot() ?? null, []);
+  const stopWriting = useCallback(() => textController.current?.action('stop'), []);
+  const clearText = useCallback(() => textController.current?.action('clear'), []);
+  const undoText = useCallback(() => textController.current?.action('undo'), []);
   const markDiagnostic = useCallback(() => diagnostic.current?.mark() ?? false, []);
   const stopDiagnostic = useCallback(() => {
     diagnostic.current?.finish('capture_stopped');
@@ -426,5 +458,6 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
   }, []);
 
   return { phase, active, status, remainingSeconds, inputAnalyser, outputAnalyser, needsAudioResume, start, stop, settledVersion,
+    textState, stopWriting, clearText, undoText,
     hasDiagnostic, diagnosticRecording, diagnosticVersion, getDiagnostic, markDiagnostic, stopDiagnostic, clearDiagnostic };
 }

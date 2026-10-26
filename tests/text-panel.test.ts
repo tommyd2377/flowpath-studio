@@ -17,9 +17,19 @@ test('text configuration is optional, versioned and bounded without coercion or 
   assert.deepEqual(validateTextPanelConfiguration(boundary), { ok: true, value: boundary });
   assert.deepEqual(validateTextPanelConfiguration(configuration('x'.repeat(TEXT_PANEL_MAX_CHARACTERS + 1))), { ok: false, error: 'text_too_long' });
   assert.deepEqual(validateTextPanelConfiguration({ ...boundary, type: 'html' }), { ok: false, error: 'unsupported_type' });
-  assert.deepEqual(validateTextPanelConfiguration({ ...boundary, version: 2 }), { ok: false, error: 'unsupported_version' });
+  assert.deepEqual(validateTextPanelConfiguration({ ...boundary, version: 3 }), { ok: false, error: 'unsupported_version' });
   assert.deepEqual(validateTextPanelConfiguration({ ...boundary, text: 42 }), { ok: false, error: 'invalid_text' });
   assert.deepEqual(validateTextPanelConfiguration(configuration('')), { ok: true, value: configuration('') });
+});
+
+test('interactive plugin configuration contains only the capability, never conversation text', () => {
+  const plugin = { type: 'text', version: 2 };
+  assert.deepEqual(validateTextPanelConfiguration(plugin), { ok: true, value: plugin });
+  assert.deepEqual(projectTextPanelConfiguration(plugin), plugin);
+  for (const extra of [{ text: 'Dictated private text' }, { text: undefined }, { html: '<script />' }, { enabled: true }]) {
+    assert.deepEqual(validateTextPanelConfiguration({ ...plugin, ...extra }), { ok: false, error: 'invalid_shape' });
+  }
+  assert.equal(render(plugin as TextPanelConfiguration), '', 'legacy renderer never renders interactive content');
 });
 
 test('private fields, accessors and non-data shapes cannot enter the public text projection', () => {

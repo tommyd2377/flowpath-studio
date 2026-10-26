@@ -1,51 +1,39 @@
-# Creator text panel
+# Text Box plugin
 
-The standalone panel displays approved creator-authored plain text. A visitor can choose **Show text** or **Hide text** locally. These buttons do not send a message to the model, start audio, call an API, change an allowance or store visitor input. There is no arbitrary visitor-text input or model tool.
+The October 26 user-approved interaction replaces the creator text-entry field with **Plugins → Text Box → Apply plugin** in waveform settings. Save, then open the waveform and start a new conversation. The user's manual testing uses the normal application and Google account flow on `http://localhost:3220`; synthetic owners belong only to internal automated tests.
 
-## Configuration and validation
+## First version
 
-`lib/text-panel.ts` exports `TextPanelConfiguration`:
+- Say **Start writing** or **Start dictation**, then dictate. User transcript fragments populate the plain-text panel without a second model call per fragment.
+- Say **Stop writing** or **Stop dictation** to pause capture while keeping the voice conversation running. The panel also has Stop writing.
+- Ask **Put a short answer in the box**, **Make that shorter**, **Add another item**, **Clear the box**, or **Undo that**. GPT-Live delegates to GPT-6 Luna, whose validated `update_text_box` call operates on this conversation's panel. Editing current content first reads the panel.
+- Clear, Undo and Copy text are explicit buttons. Ending a call keeps its text available to copy, including the paid/admin account flow. Starting another conversation or leaving the page clears it; paid visitors return through the existing payer/consent gate. Each conversation starts empty. Text stays in tab memory, never creator configuration, application storage or analytics. Tool results include current text in the existing model conversation so requested edits can use it. Provider data policy still applies.
+- The four exact start/stop phrases are reserved controls, including inside dictated text. Other wording uses model delegation. Transcription can be mistaken or delayed. Request literal quotations containing reserved phrases as a written answer instead.
 
-```ts
-{ type: 'text', version: 1, text: string }
-```
+The first version does not add uploaded-document retrieval, web search, cross-session storage, arbitrary HTML or third-party executable plugins. Private creator instructions are not a visitor document library. News remains separate.
 
-`TEXT_PANEL_MAX_CHARACTERS` is 4,000 JavaScript UTF-16 code units, using the same `string.length` convention as the existing editor. The configuration is optional; `null` and `undefined` validate as absent. Empty text is valid. Validation preserves exact text and line breaks, with no trimming, interpretation or clipping. Oversized input is rejected, so a creator can correct the original draft.
+## Configuration and authority
 
-`validateTextPanelConfiguration(unknown)` returns `{ ok: true, value: configuration | null }` or `{ ok: false, error }`. Errors are fixed codes: `invalid_shape`, `unsupported_type`, `unsupported_version`, `invalid_text` and `text_too_long`. Unknown fields, custom prototypes, symbols and accessors are rejected. No raw input or errors are logged or retained.
+`lib/text-panel.ts` accepts optional `null`, legacy `{ type: 'text', version: 1, text: string }`, and interactive `{ type: 'text', version: 2 }`. Version 2 rejects extra fields, including saved `text`. Version-1 records remain readable without migration and keep their approved static display until the creator explicitly applies or removes Text Box. No existing record is rewritten by deployment or page load.
 
-`projectTextPanelConfiguration(unknown)` returns a detached validated configuration or `null`. Use it only after authoritative validation/approval when projecting public output; invalid saves should return an error instead of silently removing existing text. Passing the whole waveform record fails validation because owner, prompt and other fields are outside this projection.
+Version 2 enables a built-in capability without creator-authored display text. It is available with ordinary Firebase accounts even where the optional creation-review adapter is not activated. Existing name/instruction rules remain. Where creation review is enabled, changing the plugin changes the exact candidate digest and requires matching approval. Legacy authored display text retains its review gate. Visitor dictation never updates creator review or published configuration.
 
-## Host integration
+The server reads the saved plugin after authenticating waveform access. A browser cannot enable it through the session POST body. Only enabled conversations receive the text tool and relevant transcript/delegation events. Their data channel may return tool results and request continuation; model selection, configuration, secrets and account authority stay server-side. The browser executor only changes local text; its acknowledgments never determine billing, membership or publication.
 
-```tsx
-<TextPanel
-  configuration={approvedWaveform.textPanel ?? null}
-  scopeKey={hostResetKey}
-/>
-```
+## Event lifecycle
 
-The default export in `components/TextPanel.tsx` accepts:
+`lib/live-text-session.ts` owns bounded ephemeral text and undo history. `lib/use-voice-session.ts` creates one controller per conversation and finishes it during teardown. `components/LiveTextPanel.tsx` renders escaped plain text and controls, never raw HTML.
 
-| Prop | Behavior |
-| --- | --- |
-| `configuration` | Validated text configuration or `null`. Invalid runtime values render nothing. |
-| `scopeKey` | Required local reset key. Change whenever waveform or account identity changes; never send it to analytics. |
-| `enabled` | Defaults to `true`. `false` disables the button and keeps creator text out of the DOM. |
-| `initiallyVisible` | Defaults to `false`. A host can explicitly show an approved creator update on arrival. |
+Only completed `response.output_item.done` function items with validated IDs/arguments execute. `response.created` binds work to a response/delegation. Calls are deduplicated, results use `response.item.create`, and one `response.create` follows completion after outputs are supplied. Local controls invalidate known in-flight operations. A delegated read binds subsequent edits to the current panel revision, so an edit based on that read cannot discard newer dictation. A closed controller ignores later provider events; local Clear/Undo/Copy remain available afterward.
 
-Mount the component below the waveform/status, within the host's existing responsive layout. It uses the existing secondary-button class, native keyboard button behavior, a labeled section and `aria-expanded`/`aria-controls`. Long text wraps within a maximum width of 36rem. Hidden text is absent from the content node; Show/Hide changes only component state. No animation, focus stealing or media lifecycle hook is added.
-
-Identity, content, availability and initial-visibility changes remount the inner component through `textPanelResetKey`; old reveal/hide state cannot carry into a different waveform or identity. Hide is a local viewing preference, not a privacy boundary: an approved public configuration can already be present in the page's application data.
-
-Creator changes arrive through `configuration`. The coordinator owns persistence, editor fields, public projection and mounting. Include exact material text in the same authoritative safety digest as the name/instructions. Do not publish an unchecked edit or expose private configuration. The panel cannot grant approval by itself.
+Transcript spaces and timing are preserved; duplicate/stale fragments are ignored. Start/stop commands span fragment boundaries without dropping ordinary final letters. Local stop protects against known pending work; fully delayed delegation metadata has a best-effort timing boundary, not a precise provider cancellation acknowledgment. Complete validated tool replacements appear at once; partial JSON is never executed. Bounds are 4,000 characters, ten undo snapshots and finite event/tool tracking. Existing voice admission, cancellation, deadline and spending controls remain.
 
 ## Verification
 
-The focused Node suite uses React's static renderer and synthetic input. It covers bounds, safe projection, malicious text, origin labeling, initial/disabled states and reset-key changes. It verifies escaping rather than filtering strings: HTML, script tags, Markdown and URLs remain literal text without executable nodes or network requests.
+Unit tests cover capability validation, owner saving, exact review binding, Luna/tool setup, transcript fragments, controls, invalid/duplicate/superseded calls, undo and closure. Browser tests use a mocked Firebase account interface and fake media to verify application/removal, dictation, tool updates, escaping, mobile width and fresh-conversation reset. These make no paid API calls and do not replace the user's real Google/microphone/provider acceptance test.
 
-```sh
-node --import tsx --test tests/text-panel.test.ts
-```
+October 26 local verification: `npm run check` passed lint, typecheck, all 288 unit tests and the production build in a source-only temporary checkout without private environment files. `npm run test:browser` passed 52 tests; `npm run test:browser:paid` passed six synthetic tests. The final homepage-description update also passed the six focused voice-configuration tests. The actual development server was restarted on port 3220: home/account returned HTTP 200 and the account endpoint reported Firebase mode. No paid provider call, production deployment or GitHub push was performed for this implementation.
 
-Host-level browser acceptance must additionally cover keyboard Show/Hide, live creator updates, identity switching, mobile placement and unchanged voice cleanup. This lane does not claim those integrated browser behaviors, live voice or deployment verification.
+Hundreds of milliseconds is a first-visible-text goal, not a measured guarantee. Transcript arrival and delegated model time must be measured separately. No model fallback or automatic paid retry is installed.
+
+Official references: [transcript deltas](https://developers.openai.com/api/docs/guides/live-conversations#transcript-deltas), [delegation and function continuation](https://developers.openai.com/api/docs/guides/live-delegation), [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna).

@@ -10,6 +10,8 @@ test('the public voice explains the current product without claiming installed c
   assert.match(instructions, /invitation using Google or verified email sign-in/);
   assert.match(instructions, /not conversation memory/);
   assert.match(instructions, /News is a separate example today, not an installed plugin/);
+  assert.match(instructions, /apply the Text Box plugin in waveform settings/);
+  assert.match(instructions, /not enabled in this homepage demo/);
   assert.match(instructions, /cannot send or submit a request/);
   assert.match(instructions, /no web search, current news, external tools, messaging, or installed plugins/);
   assert.match(instructions, /https:\/\/flowpathapp\.com/);
@@ -47,13 +49,13 @@ test('transcript and handoff events require an explicit per-session diagnostic o
 });
 
 
-test('managed reasoning uses the low-cost model with bounded output, minimal effort and no paid search tools', () => {
+test('managed delegation defaults to GPT-6 Luna with bounded output and no reasoning or search tools', () => {
   const config = voiceSessionConfig({ name: 'Historical persona', initialPrompt: 'P'.repeat(8000) });
   assert.equal(config.delegation.type, 'responses');
-  assert.equal(VOICE_BACKEND_MODEL, 'gpt-5-nano');
+  assert.equal(VOICE_BACKEND_MODEL, 'gpt-6-luna');
   const backend = config.delegation.responses;
   assert.equal(backend.model, VOICE_BACKEND_MODEL);
-  assert.deepEqual(backend.reasoning, { effort: 'minimal' });
+  assert.deepEqual(backend.reasoning, { effort: 'none' });
   assert.equal(backend.max_output_tokens, VOICE_BACKEND_MAX_OUTPUT_TOKENS);
   assert.equal(backend.service_tier, 'default');
   assert.deepEqual(backend.tools, []); assert.equal(backend.tool_choice, 'none');
@@ -66,4 +68,28 @@ test('managed reasoning uses the low-cost model with bounded output, minimal eff
   assert.match(config.instructions, /express it naturally in the saved persona/);
   assert.match(backend.instructions, /fact need not appear in the saved persona prompt/);
   assert.equal(config.store, false); assert.deepEqual(config.input, []);
+});
+
+test('only an explicitly enabled Text Box grants its local tools and transcript stream', () => {
+  const waveform = { name: 'Text assistant', initialPrompt: 'Use a friendly voice.' };
+  for (const textPanel of [undefined, null, { type: 'text', version: 1, text: 'Legacy creator content' }] as const) {
+    const config = voiceSessionConfig({ ...waveform, textPanel });
+    assert.deepEqual(config.delegation.responses.tools, []);
+    assert.deepEqual(config.client.data_channel.allowed_client_events, ['session.close']);
+  }
+  const config = voiceSessionConfig({ ...waveform, textPanel: { type: 'text', version: 2 } });
+  assert.equal(config.delegation.responses.model, 'gpt-6-luna');
+  assert.equal(config.delegation.responses.tool_choice, 'auto');
+  assert.deepEqual(config.delegation.responses.tools.map(tool => tool.name), ['update_text_box']);
+  assert.equal(config.delegation.responses.parallel_tool_calls, false);
+  assert.deepEqual(config.client.data_channel.allowed_client_events, ['session.close', 'response.item.create', 'response.create']);
+  assert.deepEqual(config.client.data_channel.allowed_server_events.map(event => event.type), [
+    'session.started', 'session.closed', 'error', 'session.input_transcript.delta', 'response.event', 'session.delegation.created',
+  ]);
+  assert.match(config.instructions, /Stop writing pauses text capture, not the voice conversation/);
+  assert.match(config.delegation.responses.instructions, /first call action read/);
+  assert.equal(config.store, false);
+  const diagnosed = voiceSessionConfig({ ...waveform, textPanel: { type: 'text', version: 2 } }, true);
+  const events = diagnosed.client.data_channel.allowed_server_events.map(event => event.type);
+  assert.equal(events.filter(event => event === 'session.input_transcript.delta').length, 1);
 });

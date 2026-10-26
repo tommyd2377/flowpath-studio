@@ -10,9 +10,9 @@ Existing prompts are not automatically rewritten. A saved prompt exactly at the 
 
 ## Model and delegation
 
-`lib/voice-config.ts` selects `gpt-live-1` for audio and managed `responses` delegation with `gpt-5-nano` for reasoning. The October 25 official model/pricing comparison lists GPT-5 nano as a reasoning model at $0.05 per million uncached input tokens and $0.40 per million output tokens under standard pricing, below the compared GPT-5.4 nano and GPT-6 Luna options. Its knowledge cutoff is May 2024. It is a cost-first starting point, not a measured claim that it is the fastest or most accurate available model.
+`lib/voice-config.ts` selects `gpt-live-1` for audio and managed `responses` delegation with **`gpt-6-luna`**. The user explicitly selected Luna on October 26 as the default everywhere in the active Studio application; the prior nano model is no longer a default or fallback. Official Luna documentation supports `reasoning.effort=none` and Responses function calling. Standard short-context prices consulted October 26 are $0.10 per million uncached input tokens and $0.50 per million output tokens. This is not a measured claim of end-to-end voice or text latency.
 
-Backend settings are server-selected: `reasoning.effort=minimal`, standard `service_tier=default`, `max_output_tokens=1024`, `tools=[]`, `tool_choice=none` and no parallel tools. The output ceiling includes reasoning tokens. The backend returns concise useful facts; the voice delivers them in the saved persona. There is no hosted web search, extra tool charge, backend model fallback or application retry. Backend token usage is billed separately from voice seconds; paid wallet accounting remains time-based and paid voice/Checkout remain paused under their existing launch block.
+Backend settings are server-selected: `reasoning.effort=none`, standard `service_tier=default`, `max_output_tokens=1024` and no parallel tools. Without Text Box, `tools=[]` and `tool_choice=none`. The enabled plugin registers only `update_text_box`, selects `tool_choice=auto` and allows up to 4,096 output tokens to encode bounded text replacements; its operations can read, start/stop dictation, replace, append, clear or undo this visitor's panel. The backend returns concise useful facts; the voice delivers them in the saved persona. There is no hosted web search, backend model fallback or application retry. Backend token usage is billed separately from voice seconds; paid wallet accounting remains time-based and paid voice/Checkout remain paused under their existing launch block.
 
 The Live prompt uses the documented `Generate <|SpawnThinking|>` routing instructions. Dates, biography, missing factual context and reasoning can delegate; greetings, brief clarifications and facts already provided need not. The voice may give one short in-character thinking acknowledgment, waits for the result, and then answers without claiming to have browsed or exposing internal reasoning. A persona instruction alone does not make historical facts verified, and this change does not guarantee perfect recall.
 
@@ -30,8 +30,7 @@ Real model access, managed-delegation compatibility, answer quality, in-characte
 
 Official sources consulted:
 
-- [GPT-5 nano](https://developers.openai.com/api/docs/models/gpt-5-nano)
+- [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)
 - [Standard API pricing](https://developers.openai.com/api/docs/pricing)
-- [GPT-5 minimal reasoning](https://developers.openai.com/api/docs/guides/gpt-5#minimal-reasoning)
 - [Managed Responses delegation](https://developers.openai.com/api/docs/guides/live-delegation#configure-responses-delegation)
 - [Live prompting](https://developers.openai.com/api/docs/guides/live-prompting#recommended-prompt-structure)

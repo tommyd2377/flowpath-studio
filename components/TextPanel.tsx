@@ -1,7 +1,7 @@
 'use client';
 
 import { useId, useState } from 'react';
-import { projectTextPanelConfiguration, textPanelResetKey, type TextPanelConfiguration } from '@/lib/text-panel';
+import { projectTextPanelConfiguration, textPanelResetKey, type TextPanelConfiguration, type LegacyTextPanelConfiguration } from '@/lib/text-panel';
 
 export type TextPanelProps = {
   configuration: TextPanelConfiguration | null;
@@ -12,7 +12,7 @@ export type TextPanelProps = {
 };
 
 function TextPanelContent({ configuration, enabled, initiallyVisible }: {
-  configuration: TextPanelConfiguration; enabled: boolean; initiallyVisible: boolean;
+  configuration: LegacyTextPanelConfiguration; enabled: boolean; initiallyVisible: boolean;
 }) {
   const [visible, setVisible] = useState(initiallyVisible);
   const contentId = useId();
@@ -33,7 +33,7 @@ function TextPanelContent({ configuration, enabled, initiallyVisible }: {
 /** Displays approved creator text. Visitor actions affect this component only. */
 export default function TextPanel({ configuration, scopeKey, enabled = true, initiallyVisible = false }: TextPanelProps) {
   const safeConfiguration = projectTextPanelConfiguration(configuration);
-  if (!safeConfiguration) return null;
+  if (!safeConfiguration || safeConfiguration.version !== 1) return null;
   return <TextPanelContent key={textPanelResetKey(scopeKey, safeConfiguration, enabled, initiallyVisible)}
     configuration={safeConfiguration} enabled={enabled} initiallyVisible={initiallyVisible} />;
 }

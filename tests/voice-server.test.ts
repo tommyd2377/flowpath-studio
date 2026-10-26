@@ -92,6 +92,20 @@ test('private voice admission verifies ownership before reading a key or creatin
   assert.equal((await server.GET(privateRequest('GET', '../someone-else'))).status, 400);
 });
 
+test('text tools come from the owner-checked saved waveform, never a browser activation flag', async () => {
+  const waveformId = randomUUID();
+  const { server, calls } = harness({ resolveWaveform: async (req, id) => req.headers.get('x-test-owner') === 'owner-a' && id === waveformId
+    ? { ownerUid: 'owner-a', waveform: { name: 'Text assistant', initialPrompt: 'Friendly.', textPanel: { type: 'text', version: 2 } }, isCurrent: () => true } : null });
+  assert.equal((await server.POST(request('POST', { sessionId: randomUUID(), sdp, textPanel: { type: 'text', version: 2 } }))).status, 400);
+  assert.equal(calls.length, 0);
+  const sessionId = randomUUID();
+  assert.equal((await server.POST(privateRequest('POST', waveformId, { sessionId, sdp }))).status, 201);
+  const config = JSON.parse(String(calls[0].options.body)).session;
+  assert.equal(config.delegation.responses.model, 'gpt-6-luna');
+  assert.equal(config.delegation.responses.tools[0].name, 'update_text_box');
+  assert.equal((await server.DELETE(privateRequest('DELETE', waveformId, { sessionId }))).status, 200);
+});
+
 test('saved instructions are loaded server-side per conversation and the personal greeting follows that identity', async () => {
   const waveformId = randomUUID();
   let initialPrompt = 'You are the synthetic library assistant. Keep replies short.';

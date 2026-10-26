@@ -813,3 +813,117 @@ test('a normal allowance denial stays visible without microphone permission or a
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect((await tracker(page)).microphoneCalls).toBe(0);
 });
+
+for (const admin of [true, false]) test(`Text Box survives settlement on the ${admin ? 'Google admin' : 'paid payer'} route`, async ({ page }) => {
+  await fakeMedia(page);
+  await mockSession(page, { admin, adminOverride: admin });
+  const id = 'b1111111-1111-4111-8111-111111111111';
+  const waveform = { id, name: 'Text assistant', accentColor: '#3a66ff', profilePhoto: null, textPanel: { type: 'text', version: 2 } };
+  await page.route('**/api/waveform*', route => route.fulfill({ json: { waveform } }));
+  await page.route('**/api/billing', route => route.fulfill({ json: { enabled: true, signedIn: true, voiceReady: true,
+    wallet: { balance: 100, available: 100 }, pack: { id: 'fixture', seconds: 900, amount: 500, currency: 'usd' } } }));
+  await page.route('**/api/published?*', route => route.fulfill({ json: { waveform, mode: 'visitor', sponsoredSeconds: 0,
+    own: true, reason: '', adminTesting: admin, adminVoiceReady: admin } }));
+  await page.route('**/api/paid-session*', route => route.fulfill({ json: route.request().method() === 'GET' ? { enabled: true }
+    : route.request().method() === 'DELETE' ? { closed: true }
+      : { sessionId: route.request().postDataJSON().sessionId, sdp: 'v=0\r\n', expiresAt: Date.now() + 900_000 } }));
+  await page.goto(`/w/${id}`);
+  if (!admin) await page.getByRole('button', { name: 'Continue using my own balance', exact: true }).click();
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await emit(page, { type: 'session.input_transcript.delta', event_id: 'notes', delta: 'Start writing. Notes to copy.', start_ms: 0, end_ms: 100 });
+  const box = page.getByRole('region', { name: 'Text Box content', exact: true });
+  await expect(box).toHaveText('Notes to copy.');
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  await expect(page.locator('#voice-status')).toHaveText('');
+  await expect(box).toHaveText('Notes to copy.');
+  await expect(page.getByRole('button', { name: 'Copy text', exact: true })).toBeEnabled();
+  if (admin) await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeVisible();
+  else {
+    await page.getByRole('button', { name: 'Choose next conversation', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Continue using my own balance', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toHaveCount(0);
+  }
+});
+
+test('normal account plugin flow supports dictation, delegated updates, controls and a fresh conversation', async ({ page }) => {
+  await fakeMedia(page);
+  await mockSession(page);
+  const waveformId = 'a1111111-1111-4111-8111-111111111111';
+  let waveform = { id: waveformId, ownerUid: 'synthetic-google-owner', name: 'Text assistant', initialPrompt: 'Be helpful.',
+    voice: 'marin', accentColor: '#3a66ff', profilePhoto: null, updatedAt: 1,
+    textPanel: null as { type: 'text'; version: 2 } | null };
+  // Mock transport, not a replacement UI: exercise the normal Firebase account branch.
+  await page.route('**/api/account', route => route.fulfill({ json: { mode: 'firebase', creationSafetyEnabled: false,
+    user: { uid: waveform.ownerUid, displayName: 'Synthetic Google member' } } }));
+  await page.route('**/api/waveform*', async route => {
+    if (route.request().method() === 'PUT') waveform = { ...waveform, ...route.request().postDataJSON() };
+    await route.fulfill({ json: { waveform } });
+  });
+  await page.goto('/account');
+  await expect(page.getByRole('button', { name: /Use test owner/ })).toHaveCount(0);
+  await expect(page.getByLabel('Text below the waveform (optional)', { exact: true })).toHaveCount(0);
+  await page.getByLabel('Plugins', { exact: true }).selectOption('text');
+  await page.getByRole('button', { name: 'Apply plugin', exact: true }).click();
+  await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
+  await expect(page.locator('.account-status')).toContainText('Saved.');
+  expect(waveform.textPanel).toEqual({ type: 'text', version: 2 });
+  await page.getByRole('link', { name: 'Open waveform', exact: true }).click();
+  const box = page.getByRole('region', { name: 'Text Box content', exact: true });
+  await expect(box).toBeVisible();
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  let time = 0;
+  async function speech(delta: string) {
+    await emit(page, { type: 'session.input_transcript.delta', event_id: `text_${time}`, delta, start_ms: time, end_ms: time + 100 });
+    time += 100;
+  }
+  await speech('Start writ'); await speech('ing. ');
+  await speech('Buy egg'); await speech('s and milk. ');
+  await expect(box).toHaveText('Buy eggs and milk. ');
+  await speech('Stop writ'); await speech('ing.');
+  await speech('This stays out of the box.');
+  await expect(box).toHaveText('Buy eggs and milk. ');
+  await expect(page.getByRole('button', { name: 'Stop writing', exact: true })).toBeDisabled();
+
+  const malicious = '<script>window.textPluginAttack=true</script>\nA short answer.';
+  const envelope = (event: object) => ({ type: 'response.event', delegation_id: 'text_job', event });
+  await emit(page, envelope({ type: 'response.created', response: { id: 'resp_text' } }));
+  await emit(page, envelope({ type: 'response.output_item.done', response_id: 'resp_text', item: {
+    type: 'function_call', status: 'completed', name: 'update_text_box', call_id: 'call_text',
+    arguments: JSON.stringify({ action: 'replace', text: malicious }),
+  } }));
+  await emit(page, envelope({ type: 'response.completed', response: { id: 'resp_text', status: 'completed' } }));
+  await expect(box).toHaveText(malicious);
+  expect(await page.evaluate(() => 'textPluginAttack' in window)).toBe(false);
+  const sent = (await tracker(page)).sentEvents.map(value => JSON.parse(value));
+  expect(sent.filter(event => event.type === 'response.create')).toHaveLength(1);
+  expect(sent.find(event => event.type === 'response.item.create')?.item.call_id).toBe('call_text');
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(box).toHaveText('Buy eggs and milk. ');
+  await speech('Start writing. Another line.');
+  await page.getByRole('button', { name: 'Stop writing', exact: true }).click();
+  await speech('Late speech is ignored.');
+  await expect(box).toContainText('Another line.');
+  await expect(box).not.toContainText('Late speech');
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await box.evaluate(node => node.getBoundingClientRect().right <= innerWidth)).toBe(true);
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  await expect(page.locator('#voice-status')).toHaveText('');
+  await expect(box).toContainText('Another line.');
+  await page.getByRole('button', { name: 'Clear', exact: true }).click();
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(box).toContainText('Another line.');
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await expect(box).toContainText('Say “Start writing”');
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  await expect(page.locator('#voice-status')).toHaveText('');
+  await page.goto('/account');
+  await page.getByRole('button', { name: 'Remove Text Box', exact: true }).click();
+  await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
+  await expect(page.locator('.account-status')).toContainText('Saved.');
+  expect(waveform.textPanel).toBeNull();
+  await page.getByRole('link', { name: 'Open waveform', exact: true }).click();
+  await expect(box).toHaveCount(0);
+});

@@ -8,15 +8,16 @@ test('homepage completes loading its optimized logo in the clean fixture server'
   await expect.poll(() => page.locator('.wordmark img').evaluate(image => (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0)).toBe(true);
   await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeVisible();
 });
-test('background approval is reused on save; approved plain text renders safely and resets after signout', async ({ page }) => {
+test('background approval is reused on save; Text Box capability renders and resets after signout', async ({ page }) => {
   await page.goto('/account');
   await page.getByRole('button', { name: 'Use test owner A', exact: true }).click();
   let reviews = 0;
   page.on('request', request => { if (new URL(request.url()).pathname === '/api/creation-review' && request.method() === 'POST') reviews++; });
   await page.getByLabel('Waveform name', { exact: true }).fill('Safe panel');
   await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('Synthetic instructions.');
-  const text = '<script>window.untrustedPanel = true</script>\nCreator text';
-  await page.getByLabel('Text below the waveform (optional)', { exact: true }).fill(text);
+  await page.getByLabel('Plugins', { exact: true }).selectOption('text');
+  await page.getByRole('button', { name: 'Apply plugin', exact: true }).click();
+  await expect(page.getByLabel('Text below the waveform (optional)', { exact: true })).toHaveCount(0);
   await expect(page.locator('[data-creation-safety]')).toHaveAttribute('data-creation-safety', 'allowed');
   const before = reviews;
   await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
@@ -24,15 +25,12 @@ test('background approval is reused on save; approved plain text renders safely 
   expect(reviews).toBe(before);
   const address = await page.getByRole('link', { name: 'Open waveform', exact: true }).getAttribute('href');
   await page.goto(address!);
-  await page.getByRole('button', { name: 'Show text', exact: true }).click();
-  await expect(page.getByText(text, { exact: true })).toBeVisible();
-  expect(await page.evaluate(() => 'untrustedPanel' in window)).toBe(false);
-  await page.getByRole('button', { name: 'Hide text', exact: true }).click();
-  await expect(page.getByText(text, { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Text Box content', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Copy text', exact: true })).toBeDisabled();
   await page.goto('/account');
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await page.goto(address!);
-  await expect(page.getByRole('button', { name: 'Show text', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Text Box content', exact: true })).toHaveCount(0);
 });
 test('blocked content cannot save through the UI or direct API, including after material edits', async ({ page }) => {
   await page.goto('/account');
