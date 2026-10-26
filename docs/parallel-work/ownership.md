@@ -6,8 +6,8 @@ October 26, 2026. Pair with [contracts](contracts.md) and [current state](curren
 
 - Confirmed repository: `tommyd2377/flowpath-studio`, `/Users/thomasdevito/Projects/theVoice`.
 - Common Git ancestor: `2dcb4481b64966de9d7a8c8f8f4a3842b0f99f3f`, branch `codex/simple-waveform`.
-- **Repository handoff follow-up:** after the audit, the user authorized committing/pushing the current app and making `codex/simple-waveform` the repository default. The inherited application source is now committed as **`ccdddb59e34f0da33a9742143c686fb6e3d084e0`**, separately from these foundation documents. At audit start it comprised 30 modified tracked files and 42 untracked files; those changes were preserved, not reimplemented.
-- Use the verified `origin/codex/simple-waveform` tip containing this document as the common foundation. Fetch and resolve its full SHA once, record it in every lane's coordination header, then create isolated worktrees from that same commit. Do not reconstruct the baseline from the old ancestor or overwrite a checkout from the audit archive.
+- **Repository handoff follow-up:** after the audit, the user authorized committing/pushing the current app and clarified that the branch literally named **`main`** must contain the waveform application and be the repository default. `main` advances through the existing waveform history without rewriting it; other branches remain preserved. The inherited application source is committed as **`ccdddb59e34f0da33a9742143c686fb6e3d084e0`**, separately from these foundation documents. At audit start it comprised 30 modified tracked files and 42 untracked files; those changes were preserved, not reimplemented.
+- Use the verified `origin/main` tip containing this document as the common foundation. Fetch and resolve its full SHA once, record it in every lane's coordination header, then create isolated worktrees from that same commit. Do not reconstruct the baseline from the old ancestor or overwrite a checkout from the audit archive.
 - The source-only archive in current-state.md remains a historical local snapshot with per-file hashes. It excludes credentials, `.env*`, runtime data, archives, `.git`, dependencies and generated output; it predates this repository handoff. Prefer the committed branch for new work. No private runtime/env files should be copied into worktrees.
 - Each lane branches from that **same** foundation SHA into its own worktree. If Git/worktree creation is unavailable, use one independent extracted source copy per worker and return a scoped patch plus baseline manifest hash; integration applies it once and runs checks. Never have two implementation workers edit one directory. Read-only audit agents may inspect the original checkout.
 - Do not start lanes from bare `2dcb448` and reimplement the missing paid code. The original foundation audit made no Git mutations; the later repository handoff is separately user-authorized. That approval does not grant future lanes permission to push, merge or deploy. Older branches/history remain preserved and outside active feature scope.
@@ -59,7 +59,7 @@ Baseline checks use a source-only temporary copy with locally copied installed d
 ```text
 FlowPath Studio lane: <lane>; single writer: <thread>.
 Repo: tommyd2377/flowpath-studio. Git ancestor: 2dcb4481b64966de9d7a8c8f8f4a3842b0f99f3f.
-Foundation: <verified origin/codex/simple-waveform SHA including these docs>; source snapshot commit is ccdddb59e34f0da33a9742143c686fb6e3d084e0.
+Foundation: <verified origin/main SHA including these docs>; source snapshot commit is ccdddb59e34f0da33a9742143c686fb6e3d084e0.
 Worktree/source copy: <absolute isolated path>; branch: <branch or patch-only>.
 Read AGENTS.md, README.md, docs/architecture.md and docs/parallel-work/{current-state,contracts,ownership}.md.
 Edit lease: <exact lane paths>. Shared schemas/auth/runtime/manifests: integration only; billing primitives: billing only.

@@ -2,7 +2,7 @@
 
 FlowPath Studio is the current voice-first waveform app. Choose **Create your waveform** to configure a name, instructions, voice, accent color and optional portrait. An opt-in local test preview also supports public sharing and the three creator/visitor payment modes; real paid usage remains paused.
 
-The active application branch is **`codex/simple-waveform`** in `tommyd2377/flowpath-studio`. The earlier website builder is retired; older branches and Git history are retained for recovery. See the [current-state audit](docs/parallel-work/current-state.md) and [parallel-work handoff](docs/parallel-work/ownership.md) for implementation status, test results and contributor boundaries.
+The active application branch is **`main`** in `tommyd2377/flowpath-studio`. The earlier website builder is retired; older branches and Git history are retained for recovery. See the [current-state audit](docs/parallel-work/current-state.md) and [parallel-work handoff](docs/parallel-work/ownership.md) for implementation status, test results and contributor boundaries.
 
 A small voice interface: the FlowPath logo with Studio tucked beneath it, one centered waveform, and an invitation to tap. On connection, the logo and invitation fade while the waveform glides up to the logo's center; all three transitions run together over 800 milliseconds. Tap again or press Escape to end and return to the centered opening view. The homepage has matching News-example and account links in its top corners; those links remain available during the public welcome conversation.
 
