@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { activeAccountSession, ACCOUNT_SESSION_COLLECTION } from './production-account-session';
 import { validDemoGrant } from './demo-access';
-import { MEMBERS_COLLECTION } from './invitations';
+import { MEMBERS_COLLECTION } from './membership';
 import { FRANKLIN_DEMO_ID, isPublicVoiceOwner } from './public-voice-identity';
 import { UNMETERED_LOCAL_DEADLINE, VOICE_CLEANUP_LEASE_MS, VoiceAdmissionError,
   type StoredVoice, type VoiceDatabase, type VoiceOwner, type VoiceTransaction } from './production-voice-store';

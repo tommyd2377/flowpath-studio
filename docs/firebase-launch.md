@@ -155,15 +155,9 @@ The new apex A record replaced Squarespace's four website A records (`198.185.15
 
 8. Verify HTTPS, invitation rejection/redemption, both sign-in paths, settings privacy/persistence, task authentication, and closure. Real sign-in/verification mail and paid voice remain separate from synthetic checks; user credentials and microphone permission require user interaction.
 
-## More invitations
+## Beta access (current source candidate)
 
-From an already authorized admin development environment:
-
-```sh
-npm run invites:create -- --project flowpath-studio --count 25
-```
-
-The explicit project protects the old app. A private recovery file is flushed before one atomic hash-only publication. A failure is marked NOT_CONFIRMED and is not automatically retried; do not share or regenerate that batch blindly. No codes appear in logs, source, or deployment archives.
+The per-person invitation generator is retired. The candidate uses the same exact shared demo code for joining the beta, through a server-issued expiring grant and verified Google or email identity. Existing memberships and sessions remain intact; disabled memberships cannot rejoin using another grant. Historical invite records and private recovery files are left untouched and unused. No generator command remains. See `docs/hosted-beta.md` for source versus deployment status.
 
 ## Operational limits
 

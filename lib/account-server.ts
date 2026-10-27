@@ -5,7 +5,7 @@ import { DEFAULT_VOICE, isVoiceName } from './voice-options';
 import { normalizeProfilePhoto, validProfilePhoto } from './profile-photo';
 import { configuredPublicOrigin, isAllowedRequest } from './request-origin';
 import { AccountSessionInactiveError, accountSessionId, type DurableAccountSessions } from './production-account-session';
-import { InvitationRequiredError } from './invitations';
+import { BetaAccessRequiredError } from './membership';
 import { validateTextPanelConfiguration } from './text-panel';
 import { CreationSafetyError } from './creation-safety';
 import {
@@ -17,7 +17,7 @@ export const ACCOUNT_COOKIE = 'flowpath_account';
 export const ACCOUNT_COOKIE_SECONDS = 5 * 24 * 60 * 60;
 
 export type FirebaseAccountAdapter = {
-  signIn(idToken: string, inviteCode?: string): Promise<{ user: AccountUser; cookie: string }>;
+  signIn(idToken: string, demoGrant?: string): Promise<{ user: AccountUser; cookie: string }>;
   authenticate(cookie: string): Promise<AccountUser | null>;
   sessions?: DurableAccountSessions;
   readWaveform(uid: string): Promise<Waveform | null>;
@@ -29,7 +29,7 @@ type Options = {
   firebase?: FirebaseAccountAdapter;
   firebaseConfig?: () => FirebasePublicConfig | undefined;
   firebaseAutoConfig?: () => boolean;
-  openRegistration?: () => boolean;
+  membershipGrant?: (request: Request) => string | undefined;
   beforeAccountChange?: (owner: AccountUser) => Promise<boolean>;
   afterSignIn?: (request: Request, owner: AccountUser) => Promise<void>;
   afterWaveformSaved?: (request: Request, waveform: Waveform) => Promise<void>;
@@ -299,7 +299,6 @@ export function createAccountServer(options: Options = {}) {
         ...(options.hostedTesterDemo?.() ? { hostedTesterDemo: true } : {}),
         ...(options.creationSafetyEnabled?.() ? { creationSafetyEnabled: true } : {}),
         ...(currentMode === 'local' && options.safetyAdminFixture ? { safetyAdminFixture: true } : {}),
-        ...(options.openRegistration?.() ? { openRegistration: true } : {}),
         ...(firebaseConfig ? { firebaseConfig } : {}), ...(autoFirebaseConfig ? { autoFirebaseConfig: true } : {}) });
     },
     async accountPOST(request: Request) {
@@ -315,14 +314,13 @@ export function createAccountServer(options: Options = {}) {
         user = safetyAdmin ? { uid: 'local-safety-admin', displayName: 'Test safety admin', role: 'admin' } : localAccounts[body.localAccount];
         cookie = randomBytes(32).toString('base64url');
       } else {
-        if (Object.keys(body).some(key => key !== 'idToken' && key !== 'inviteCode')
-          || typeof body.idToken !== 'string' || !/^[A-Za-z0-9._-]{1,16384}$/.test(body.idToken)
-          || body.inviteCode !== undefined && (typeof body.inviteCode !== 'string' || body.inviteCode.length > 64)) {
+        if (Object.keys(body).some(key => key !== 'idToken')
+          || typeof body.idToken !== 'string' || !/^[A-Za-z0-9._-]{1,16384}$/.test(body.idToken)) {
           return json({ error: 'Invalid sign-in request.' }, 400);
         }
-        try { ({ user, cookie } = await options.firebase!.signIn(body.idToken, body.inviteCode as string | undefined)); }
-        catch (error) { return error instanceof InvitationRequiredError
-          ? json({ error: error.message, code: 'invitation-required' }, 403)
+        try { ({ user, cookie } = await options.firebase!.signIn(body.idToken, options.membershipGrant?.(request))); }
+        catch (error) { return error instanceof BetaAccessRequiredError
+          ? json({ error: error.message, code: 'beta-access-required' }, 403)
           : json({ error: 'Sign-in could not be verified. Please try again.' }, 401); }
       }
       if (!await canChangeAccount(request)) return finishing();

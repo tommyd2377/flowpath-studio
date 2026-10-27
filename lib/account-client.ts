@@ -2,8 +2,8 @@
 
 import type { AccountMode, FirebasePublicConfig } from './account-model';
 
-class InvitationRequiredError extends Error {
-  constructor() { super('An active invitation is required to join FlowPath Studio.'); }
+class BetaAccessRequiredError extends Error {
+  constructor() { super('Unlock beta access with the demo code before joining. Existing members can sign in normally.'); }
 }
 
 async function accountRequest(method: 'POST' | 'DELETE', body?: object) {
@@ -13,7 +13,7 @@ async function accountRequest(method: 'POST' | 'DELETE', body?: object) {
   });
   if (!response.ok) {
     const result = await response.json().catch(() => null) as { code?: string } | null;
-    if (result?.code === 'invitation-required') throw new InvitationRequiredError();
+    if (result?.code === 'beta-access-required') throw new BetaAccessRequiredError();
     throw new Error('Sign-in could not be completed. Please try again.');
   }
 }
@@ -48,7 +48,7 @@ async function firebaseClient() {
 }
 
 function authenticationError(error: unknown) {
-  if (error instanceof InvitationRequiredError) return error;
+  if (error instanceof BetaAccessRequiredError) return error;
   const code = error && typeof error === 'object' && 'code' in error ? error.code : '';
   switch (code) {
     case 'auth/invalid-email': return new Error('Enter a valid email address.');
@@ -64,14 +64,13 @@ function authenticationError(error: unknown) {
   }
 }
 
-export async function signInAccount(mode: AccountMode, localAccount?: string, inviteCode?: string) {
+export async function signInAccount(mode: AccountMode, localAccount?: string) {
   if (mode === 'local') await accountRequest('POST', { localAccount });
   else if (mode === 'firebase') {
     const { auth, sdk } = await firebaseClient();
     try {
       const result = await sdk.signInWithPopup(auth, new sdk.GoogleAuthProvider());
-      const code = inviteCode?.trim();
-      await accountRequest('POST', { idToken: await result.user.getIdToken(), ...(code ? { inviteCode: code } : {}) });
+      await accountRequest('POST', { idToken: await result.user.getIdToken() });
     } finally {
       // The application uses an HttpOnly server session, not browser token storage.
       await sdk.signOut(auth);
@@ -83,7 +82,7 @@ export async function signInAccount(mode: AccountMode, localAccount?: string, in
 export type EmailAccountAction = 'sign-in' | 'create-account' | 'reset-password' | 'resend-verification';
 export type EmailAccountResult = 'signed-in' | 'verification-sent' | 'verification-required' | 'password-reset-sent';
 
-export async function authenticateWithEmail(action: EmailAccountAction, email: string, password = '', inviteCode?: string): Promise<EmailAccountResult> {
+export async function authenticateWithEmail(action: EmailAccountAction, email: string, password = ''): Promise<EmailAccountResult> {
   const { auth, sdk } = await firebaseClient();
   const address = email.trim();
   try {
@@ -105,8 +104,7 @@ export async function authenticateWithEmail(action: EmailAccountAction, email: s
       }
       return 'verification-required';
     }
-    const code = inviteCode?.trim();
-    await accountRequest('POST', { idToken: await result.user.getIdToken(), ...(code ? { inviteCode: code } : {}) });
+    await accountRequest('POST', { idToken: await result.user.getIdToken() });
     notifyAccountChanged();
     return 'signed-in';
   } catch (error) {

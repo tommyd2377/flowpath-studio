@@ -7,7 +7,9 @@ import type { Waveform } from '../lib/account-model';
 import { configuredFirebaseProjectId, createFirebaseAccountAdapter, getFirebaseAccountServices, supportedAccountClaims } from '../lib/firebase-accounts';
 import { accountSessionId, activeAccountSession, createDurableAccountSessions } from '../lib/production-account-session';
 import { configuredProxyHost, configuredPublicOrigin, isAllowedPublicHost, isAllowedRequest } from '../lib/request-origin';
-import { INVITATIONS_COLLECTION, MEMBERS_COLLECTION, InvitationRequiredError, createInvitationAccess, generateInvitationCode, invitationCodeHash } from '../lib/invitations';
+import { MEMBERS_COLLECTION, BetaAccessRequiredError, createBetaMembershipAccess } from '../lib/membership';
+import { demoGrantId, createDemoAccess } from '../lib/demo-access';
+import { PaidMemoryDatabase } from './paid-fixture';
 
 const origin = 'https://flowpath.studio';
 const input = { name: 'Synthetic owner', initialPrompt: 'Discuss gardening.' };
@@ -113,16 +115,13 @@ test('admin testing persists across instances and every read/write rechecks the 
   assert.equal((await fresh.waveformPUT(request('waveform', 'PUT', { ...input, adminTesting: 'true' }, cookie))).status, 400);
 });
 
-test('paid test registration admits verified new accounts without invitations while disabled memberships remain blocked', async () => {
-  const { db, rows } = fakeDatabase();
-  const closed = createInvitationAccess(db, () => 100_000);
-  assert.equal(await closed.admit('new-listener'), false);
-  const open = createInvitationAccess(db, () => 100_000, true);
-  assert.equal(await open.admit('new-listener'), true);
-  assert.equal(await open.isMember('new-listener'), true);
+test('new memberships require the shared demo grant even when another test feature is enabled', async () => {
+  const { db, rows } = fakeDatabase(); const access = createBetaMembershipAccess(db, () => 100_000), grant = 'a'.repeat(64);
+  assert.equal(await access.admit('new-listener'), false);
+  rows.set(`voiceDemoAccess/${grant}`, { state: 'active', expiresAt: 200_000 });
+  assert.equal(await access.admit('new-listener', grant), true);
   rows.set(`${MEMBERS_COLLECTION}/disabled-listener`, { state: 'disabled' });
-  assert.equal(await open.admit('disabled-listener'), false);
-  assert.equal(await open.admit('another-listener', 'invalid-invitation'), false);
+  assert.equal(await access.admit('disabled-listener', grant), false);
 });
 
 test('production requires explicit HTTPS origin and durable Firebase sessions; fixtures remain local', async () => {
@@ -358,81 +357,58 @@ test('the Firebase settings transaction preserves one private waveform under its
   await assert.rejects(firebase.saveWaveform(user.uid, waveform), /no longer active/);
 });
 
-test('invitation codes use one bounded canonical format and only hashes identify stored codes', async () => {
-  const codes = Array.from({ length: 25 }, generateInvitationCode);
-  assert.equal(new Set(codes).size, 25);
-  for (const code of codes) {
-    assert.match(code, /^FP-[A-F0-9]{24}$/);
-    const hash = invitationCodeHash(code)!;
-    assert.match(hash, /^[a-f0-9]{64}$/);
-    assert.equal(invitationCodeHash(` ${code.toLowerCase()} `), hash);
-    assert.equal(hash.includes(code), false);
-  }
-  for (const code of [undefined, '', 'FP-short', 'https://example.com', 'FP-' + 'a'.repeat(25)]) {
-    assert.equal(invitationCodeHash(code), null);
-  }
+test('one shared grant can admit multiple verified UIDs atomically; returning members need no code', async () => {
+  const { db, rows } = fakeDatabase(), grant = 'a'.repeat(64);
+  rows.set(`voiceDemoAccess/${grant}`, { state: 'active', expiresAt: 200_000 });
+  const access = createBetaMembershipAccess(db, () => 100_000);
+  assert.deepEqual(await Promise.all(['first', 'second', 'first'].map(uid => access.admit(uid, grant))), [true, true, true]);
+  assert.equal(await access.admit('first'), true);
+  rows.set(`voiceDemoAccess/${grant}`, { state: 'expired', expiresAt: 99_000 });
+  assert.equal(await access.admit('first', grant), true);
+  assert.equal(await access.admit('third', grant), false);
+  assert.equal(rows.get(`${MEMBERS_COLLECTION}/first`)?.admission, 'beta-code');
 });
 
-test('a single invitation atomically admits one account and returning members need no code', async () => {
-  const { db, rows } = fakeDatabase();
-  const code = generateInvitationCode();
-  const hash = invitationCodeHash(code)!;
-  rows.set(`${INVITATIONS_COLLECTION}/${hash}`, { expiresAt: 200_000, usedBy: null, usedAt: null });
-  const access = createInvitationAccess(db, () => 100_000);
-  const results = await Promise.all(['first-owner', 'second-owner'].map(uid => access.admit(uid, code)));
-  assert.deepEqual(results, [true, false]);
-  assert.equal(await access.isMember('first-owner'), true);
-  assert.equal(await access.isMember('second-owner'), false);
-  assert.equal(await access.admit('first-owner'), true);
-  assert.equal(await access.admit('first-owner', 'invalid'), true);
-  assert.equal(await access.admit('third-owner', code), false);
-  assert.equal(rows.get(`${INVITATIONS_COLLECTION}/${hash}`)?.usedBy, 'first-owner');
-  assert.equal(JSON.stringify([...rows]).includes(code), false);
-});
-
-test('missing, expired, invalid and previously used invitations fail without creating membership', async () => {
-  const { db, rows } = fakeDatabase();
-  const access = createInvitationAccess(db, () => 100_000);
-  for (const value of [undefined, 'invalid', generateInvitationCode()]) assert.equal(await access.admit(user.uid, value), false);
-  for (const record of [
-    { expiresAt: 100_000, usedBy: null, usedAt: null },
-    { expiresAt: Infinity, usedBy: null, usedAt: null },
-    { expiresAt: 200_000, usedBy: 'someone-else', usedAt: 1 },
-    { expiresAt: 200_000 },
-  ]) {
-    const code = generateInvitationCode();
-    rows.set(`${INVITATIONS_COLLECTION}/${invitationCodeHash(code)}`, record);
-    assert.equal(await access.admit(user.uid, code), false);
+test('missing, malformed, expired or non-active grants cannot create or restore membership', async () => {
+  const { db, rows } = fakeDatabase(), grant = 'b'.repeat(64), access = createBetaMembershipAccess(db, () => 100_000);
+  for (const value of [undefined, 'nyc-1776', 'not-a-grant', grant]) assert.equal(await access.admit(user.uid, value), false);
+  for (const record of [{ state: 'active', expiresAt: 100_000 }, { state: 'active', expiresAt: Infinity }, { state: 'revoked', expiresAt: 200_000 }, { expiresAt: 200_000 }]) {
+    rows.set(`voiceDemoAccess/${grant}`, record); assert.equal(await access.admit(user.uid, grant), false);
   }
   assert.equal(rows.has(`${MEMBERS_COLLECTION}/${user.uid}`), false);
-  const valid = generateInvitationCode();
-  rows.set(`${INVITATIONS_COLLECTION}/${invitationCodeHash(valid)}`, { expiresAt: 200_000, usedBy: null, usedAt: null });
+  rows.set(`voiceDemoAccess/${grant}`, { state: 'active', expiresAt: 200_000 });
   rows.set(`${MEMBERS_COLLECTION}/${user.uid}`, { state: 'disabled' });
-  assert.equal(await access.admit(user.uid, valid), false, 'another invitation cannot override a disabled membership');
+  assert.equal(await access.admit(user.uid, grant), false);
 });
 
-test('verified Firebase identities cannot receive an application cookie before invitation admission', async () => {
+test('full localhost grant namespace is isolated from hosted signup grants', async () => {
+  const { db, rows } = fakeDatabase(), grant = 'c'.repeat(64);
+  rows.set(`localStudio_voiceDemoAccess/${grant}`, { state: 'active', expiresAt: 200_000 });
+  assert.equal(await createBetaMembershipAccess(db, () => 100_000).admit('hosted', grant), false);
+  assert.equal(await createBetaMembershipAccess(db, () => 100_000, 'localStudio_voiceDemoAccess').admit('local', grant), true);
+});
+
+test('the exact demo code enrolls through its HttpOnly grant; raw browser claims never mint account sessions', async () => {
   const { firebase, rows, issued } = actualAdapterFixture(false);
-  const server = createAccountServer({ mode: 'firebase', firebase, development: () => false, publicOrigin: () => origin });
-  for (const inviteCode of [undefined, 'invalid', generateInvitationCode()]) {
-    const denied = await server.accountPOST(request('account', 'POST', { idToken: 'synthetic.id.token', inviteCode }));
-    assert.equal(denied.status, 403);
-    assert.deepEqual(await denied.json(), { code: 'invitation-required', error: new InvitationRequiredError().message });
-    assert.equal(denied.headers.has('set-cookie'), false);
+  const server = createAccountServer({ mode: 'firebase', firebase, membershipGrant: demoGrantId, development: () => false, publicOrigin: () => origin });
+  const denied = await server.accountPOST(request('account', 'POST', { idToken: 'synthetic.id.token' }));
+  assert.equal(denied.status, 403); assert.deepEqual(await denied.json(), { code: 'beta-access-required', error: new BetaAccessRequiredError().message });
+  assert.equal(issued(), 0); assert.equal(denied.headers.has('set-cookie'), false);
+  for (const payload of [{ inviteCode: 'retired' }, { code: 'nyc-1776' }, { demoGrant: 'a'.repeat(64) }, { allowed: true }]) {
+    assert.equal((await server.accountPOST(request('account', 'POST', { idToken: 'synthetic.id.token', ...payload }))).status, 400);
   }
-  assert.equal(issued(), 0, 'no provider session cookie is minted for an uninvited identity');
-  const code = generateInvitationCode();
-  rows.set(`${INVITATIONS_COLLECTION}/${invitationCodeHash(code)}`, { expiresAt: Date.now() + 60_000, usedBy: null, usedAt: null });
-  const admitted = await server.accountPOST(request('account', 'POST', { idToken: 'synthetic.id.token', inviteCode: code }));
-  assert.equal(admitted.status, 200);
-  assert.equal(rows.get(`${MEMBERS_COLLECTION}/${user.uid}`)?.state, 'active');
-  const cookie = admitted.headers.get('set-cookie')!.split(';')[0];
+  const database = new PaidMemoryDatabase(), gate = createDemoAccess(database, { enabled: () => true, publicOrigin: origin });
+  const pair = (response: Response) => response.headers.get('set-cookie')!.split(';')[0];
+  const challenge = pair(await gate.GET(request('demo-access')));
+  for (const code of ['NYC-1776', 'nyc-1776 ']) assert.equal((await gate.POST(request('demo-access', 'POST', { code }, challenge))).status, 403);
+  const accepted = await gate.POST(request('demo-access', 'POST', { code: 'nyc-1776' }, challenge));
+  assert.equal(accepted.status, 200); const grantCookie = pair(accepted);
+  for (const [path, row] of database.rows) rows.set(path, structuredClone(row));
+  const admitted = await server.accountPOST(request('account', 'POST', { idToken: 'synthetic.id.token' }, grantCookie));
+  assert.equal(admitted.status, 200); assert.equal(rows.get(`${MEMBERS_COLLECTION}/${user.uid}`)?.state, 'active');
+  const cookie = pair(admitted);
   assert.equal((await server.resolveOwner(request('account', 'GET', undefined, cookie)))?.uid, user.uid);
-  const returning = await server.accountPOST(request('account', 'POST', { idToken: 'synthetic.id.token' }, cookie));
-  assert.equal(returning.status, 200, 'membership persists after the invitation is consumed');
-  for (const value of [null, 2, {}, 'x'.repeat(65)]) {
-    assert.equal((await server.accountPOST(request('account', 'POST', { idToken: 'synthetic.id.token', inviteCode: value }))).status, 400);
-  }
+  assert.equal((await server.accountPOST(request('account', 'POST', { idToken: 'synthetic.id.token' }, cookie))).status, 200);
 });
 
 test('only the verified founder Google claims grant admin, regardless of browser display name', async () => {

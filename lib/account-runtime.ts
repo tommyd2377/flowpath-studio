@@ -7,6 +7,7 @@ import { localAppOrigin, localAppPath } from './local-app-runtime';
 import { cancelProductionOwnerVoice } from './production-voice-runtime';
 import { creationActor, creationReviewStore, creationSafetyEnabled, creationSafetyFixtures } from './creation-runtime';
 import { applicationDatabase } from './application-database';
+import { demoGrantId } from './demo-access';
 import { demoAccess } from './demo-access-runtime';
 import { hostedTesterDemo } from './tester-voice-config';
 import { CreationSafetyError } from './creation-safety';
@@ -87,15 +88,15 @@ export const accountServer = state.flowpathAccounts ??= createAccountServer({
   },
   firebaseConfig,
   firebaseAutoConfig: autoFirebaseConfig,
-  openRegistration: () => process.env.FLOWPATH_PAID_TEST_ENABLED === '1',
+  membershipGrant: demoGrantId,
   publicOrigin: () => process.env.FLOWPATH_PUBLIC_ORIGIN,
   trustedProxyHost: () => process.env.FLOWPATH_TRUSTED_PROXY_HOST,
   firebase: configuredFirebase ? createFirebaseAccountAdapter(
-    projectId!, process.env.FLOWPATH_FIREBASE_DATABASE_ID ?? '(default)', undefined, process.env.FLOWPATH_PAID_TEST_ENABLED === '1',
+    projectId!, process.env.FLOWPATH_FIREBASE_DATABASE_ID ?? '(default)', undefined,
     async (tx, uid, input) => {
       if (creationSafetyEnabled()) await creationReviewStore().requireAllowed(localAppOrigin() ? {
         get: path => tx.get(localAppPath(path)), set: (path, value) => tx.set(localAppPath(path), value),
       } : tx, uid, input);
-    },
+    }, localAppOrigin() ? localAppPath('voiceDemoAccess') : 'voiceDemoAccess',
   ) : undefined,
 });

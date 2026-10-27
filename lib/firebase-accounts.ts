@@ -5,7 +5,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { ACCOUNT_COOKIE_SECONDS, waveformRecord, type FirebaseAccountAdapter } from './account-server';
 import type { AccountUser, Waveform } from './account-model';
 import { ACCOUNT_SESSION_COLLECTION, AccountSessionInactiveError, activeAccountSession, createDurableAccountSessions } from './production-account-session';
-import { InvitationRequiredError, createInvitationAccess } from './invitations';
+import { BetaAccessRequiredError, createBetaMembershipAccess } from './membership';
 import type { VoiceTransaction } from './production-voice-store';
 import type { WaveformInput } from './account-model';
 
@@ -38,24 +38,24 @@ export function accountRole(claims: { email?: unknown; email_verified?: unknown;
 
 /** Dormant until explicit Firebase configuration; never initialized by fixtures. */
 export function createFirebaseAccountAdapter(projectId: string, databaseId: string,
-  services = () => getFirebaseAccountServices(projectId, databaseId), openRegistration = false,
-  validateWaveform?: (tx: VoiceTransaction, uid: string, input: WaveformInput) => Promise<void>): FirebaseAccountAdapter {
+  services = () => getFirebaseAccountServices(projectId, databaseId),
+  validateWaveform?: (tx: VoiceTransaction, uid: string, input: WaveformInput) => Promise<void>, grantCollection = 'voiceDemoAccess'): FirebaseAccountAdapter {
   const durableSessions = () => createDurableAccountSessions(services().db);
-  const invitations = () => createInvitationAccess(services().db, Date.now, openRegistration);
+  const membership = () => createBetaMembershipAccess(services().db, Date.now, grantCollection);
   const user = (claims: { uid: string; name?: unknown; email?: unknown; email_verified?: unknown; firebase?: { sign_in_provider?: string } }): AccountUser => ({
     ...(accountRole(claims) ? { role: accountRole(claims) } : {}),
     uid: claims.uid, displayName: typeof claims.name === 'string' ? claims.name.slice(0, 80) : 'Waveform owner',
   });
 
   return {
-    async signIn(idToken, inviteCode) {
+    async signIn(idToken, demoGrant) {
       const { auth } = services();
       const claims = await auth.verifyIdToken(idToken, true);
       if (!supportedAccountClaims(claims)
         || !Number.isFinite(claims.auth_time) || Math.abs(Date.now() / 1000 - claims.auth_time) > 300) {
         throw new Error('Recent Google or verified email sign-in required');
       }
-      if (!await invitations().admit(claims.uid, inviteCode)) throw new InvitationRequiredError();
+      if (!await membership().admit(claims.uid, demoGrant)) throw new BetaAccessRequiredError();
       const verifiedCookie = await auth.createSessionCookie(idToken, { expiresIn: ACCOUNT_COOKIE_SECONDS * 1000 });
       // A fresh nonce prevents a re-login from reviving an earlier application session.
       const cookie = `${randomBytes(16).toString('hex')}.${verifiedCookie}`;
@@ -66,7 +66,7 @@ export function createFirebaseAccountAdapter(projectId: string, databaseId: stri
       if (!match) return null;
       try {
         const claims = await services().auth.verifySessionCookie(match[1], true);
-        return supportedAccountClaims(claims) && await invitations().isMember(claims.uid) ? user(claims) : null;
+        return supportedAccountClaims(claims) && await membership().isMember(claims.uid) ? user(claims) : null;
       } catch (error) {
         const code = (error as { code?: unknown }).code;
         if (typeof code === 'string' && ['auth/session-cookie-expired', 'auth/session-cookie-revoked',

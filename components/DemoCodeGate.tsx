@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import BrandLoader from './BrandLoader';
 import { KeyRound } from 'lucide-react';
 
-export default function DemoCodeGate({ onState, onAccess, formId, waveformTrigger = false, onUnlocked }: { onState?: (required: boolean) => void; onAccess?: (allowed: boolean) => void; formId?: string; waveformTrigger?: boolean; onUnlocked?: () => void }) {
+export default function DemoCodeGate({ onState, onAccess, formId, waveformTrigger = false, onUnlocked, purpose = 'demo' }: { onState?: (required: boolean) => void; onAccess?: (allowed: boolean) => void; formId?: string; waveformTrigger?: boolean; onUnlocked?: () => void; purpose?: 'demo' | 'beta' }) {
   const [required, setRequired] = useState(false), [accepted, setAccepted] = useState(false);
   const submitting = useRef(false);
   const [code, setCode] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState('');
@@ -28,9 +28,9 @@ export default function DemoCodeGate({ onState, onAccess, formId, waveformTrigge
   }
   if (!required) return null;
   return <div className={`demo-code-gate${waveformTrigger ? ' demo-code-gate--waveform' : ''}`}>
-    {accepted ? <p role="status">Demo unlocked</p> : <form id={formId} onSubmit={submit}>
-      <label className={waveformTrigger ? 'sr-only' : undefined} htmlFor="demo-code">Demo code</label><div className="demo-code-entry">{waveformTrigger && <KeyRound aria-hidden="true" />}<input id="demo-code" placeholder={waveformTrigger ? 'Enter demo code' : undefined} aria-invalid={!!error} aria-describedby={error ? 'demo-code-error' : undefined} autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={80} required value={code} onChange={event => setCode(event.target.value)} disabled={busy} />
-        {waveformTrigger ? busy && <BrandLoader variant="inline" label="Checking code…" /> : <button className="secondary-button" disabled={busy} type="submit">{busy ? <BrandLoader variant="inline" label="Checking code…" /> : 'Unlock demo'}</button>}</div>
+    {accepted ? <p role="status">{purpose === 'beta' ? 'Beta access unlocked' : 'Demo unlocked'}</p> : <form id={formId} onSubmit={submit}>
+      <label className={waveformTrigger ? 'sr-only' : undefined} htmlFor="demo-code">{purpose === 'beta' ? 'Beta access code' : 'Demo code'}</label><div className="demo-code-entry">{waveformTrigger && <KeyRound aria-hidden="true" />}<input id="demo-code" placeholder={waveformTrigger ? 'Enter demo code' : purpose === 'beta' ? 'Enter your code' : undefined} aria-invalid={!!error} aria-describedby={error ? 'demo-code-error' : undefined} autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={80} required value={code} onChange={event => setCode(event.target.value)} disabled={busy} />
+        {waveformTrigger ? busy && <BrandLoader variant="inline" label="Checking code…" /> : <button className="secondary-button" disabled={busy} type="submit">{busy ? <BrandLoader variant="inline" label="Checking code…" /> : purpose === 'beta' ? 'Unlock access' : 'Unlock demo'}</button>}</div>
       {error && <p id="demo-code-error" role="alert">{error}</p>}
     </form>}
   </div>;

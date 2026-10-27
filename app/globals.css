@@ -409,3 +409,46 @@ button { font: inherit; }
 /* Homepage examples remain distinct from private waveform navigation. */
 .home-news-links { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; max-width: 480px; }
 .voice-navigation:has(.home-news-links) { align-items: flex-start; }
+
+/* Account entry shares the workspace palette, with a compact mobile-first form. */
+.account-page.auth-entry { width: min(440px, calc(100% - 48px)); min-height: 0; margin: 56px auto; padding: 0; border: 1px solid var(--border, #2b3244); border-radius: 24px; box-shadow: 0 20px 70px #0003; clip-path: none; }
+.auth-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 26px; border-bottom: 1px solid var(--border, #2b3244); }
+.auth-brand { display: inline-flex; align-items: center; gap: 9px; color: inherit; font-size: 15px; font-weight: 500; text-decoration: none; white-space: nowrap; }
+.auth-brand img { display: block; flex-shrink: 0; }
+.auth-brand-studio, .auth-home { color: var(--muted, #a0aac1); font-weight: 400; }
+.auth-home { padding: 10px 0 10px 10px; font-size: 12px; text-underline-offset: 4px; }
+.auth-content { padding: 30px 28px 28px; }
+.auth-eyebrow { margin-bottom: 14px; color: var(--accent, #7394ff); text-transform: uppercase; font-size: 11px; letter-spacing: .12em; }
+.auth-entry h1 { margin: 0 0 14px; font-size: 36px; letter-spacing: -.05em; line-height: 1.13; font-weight: 500; }
+.auth-description { margin: 0 0 26px; color: var(--muted, #a0aac1); font-size: 14px; line-height: 1.65; }
+.auth-entry label { margin: 18px 0 8px; font-size: 13px; }
+.auth-entry input { min-height: 52px; border-radius: 12px; font-size: 16px; background: #ffffff05; }
+.auth-entry .primary-button, .auth-entry .secondary-button { min-height: 52px; border-radius: 12px; font-size: 14px; }
+.auth-entry .primary-button { background: #3a66ff; color: #fff; border-color: #3a66ff; }
+.auth-entry .auth-google { display: flex; justify-content: center; align-items: center; gap: 10px; width: 100%; margin: 0; background: #fff; border-color: #747775; color: #1f1f1f; font-family: 'Google Sans', Arial, sans-serif; font-weight: 500; }
+.auth-google img { display: block; object-fit: contain; flex-shrink: 0; }
+.auth-email-choice { display: flex; justify-content: center; align-items: center; gap: 10px; width: 100%; margin-top: 12px; }
+.auth-email-choice svg { width: 18px; height: 18px; }
+.auth-entry .auth-divider { margin: 22px 0; }
+.auth-entry .account-actions { flex-direction: column; align-items: stretch; gap: 10px; margin: 22px 0 0; }
+.auth-entry .account-actions button { width: 100%; }
+.auth-password-label { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 14px; }
+.auth-password-label label { margin: 0; }
+.auth-text-button { border: 0; background: transparent; color: var(--accent, #7394ff); padding: 10px 0; font: inherit; font-size: 12px; cursor: pointer; min-height: 44px; }
+.auth-password-label .auth-text-button { padding: 8px 0; }
+.auth-footer { margin-top: 22px; text-align: center; color: var(--muted, #a0aac1); font-size: 12px; }
+.auth-footer .auth-text-button { padding-left: 3px; }
+.auth-private { display: flex; justify-content: center; align-items: center; gap: 7px; margin: 20px 0 0; color: var(--muted, #a0aac1); font-size: 12px; }
+.auth-private svg { width: 14px; height: 14px; }
+.auth-entry .account-status:empty { display: none; }
+.auth-entry .account-status, .auth-entry .account-error { overflow-wrap: anywhere; margin: 16px 0 0; }
+.auth-entry .demo-code-gate { width: 100%; max-width: none; margin: 0; padding: 0; }
+.auth-entry .demo-code-entry { display: flex; gap: 8px; align-items: center; }
+.auth-entry .demo-code-entry input { flex: 1; min-width: 0; width: 0; }
+.auth-entry .demo-code-entry button { min-height: 52px; flex-shrink: 0; padding: 10px 12px; font-size: 12px; }
+.auth-entry .auth-access { margin-bottom: 22px; }
+.auth-entry .auth-access label { margin-top: 0; }
+.auth-entry .auth-access .field-help { margin: 8px 0 0; line-height: 1.5; }
+.auth-entry .email-sign-in:not([hidden]) { margin-top: 4px; }
+.auth-entry .email-sign-in[hidden], .auth-entry .auth-access[hidden] { display: none; }
+@media (max-width: 600px) { .account-page.auth-entry { width: 100%; min-height: 100svh; margin: 0; border: 0; border-radius: 0; box-shadow: none; } .auth-header { padding: 16px 22px; } .auth-content { max-width: 416px; margin: 0 auto; padding: 28px 24px 36px; } }

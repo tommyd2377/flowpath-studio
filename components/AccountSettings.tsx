@@ -19,9 +19,9 @@ import { PLUGINS } from '@/lib/plugin-contract';
 import BrandLoader from './BrandLoader';
 import DemoCodeGate from './DemoCodeGate';
 import WaveformSettingsPreview from './WaveformSettingsPreview';
-import { AudioLines, BookOpen, LockKeyhole, MessageSquareText, Puzzle, Settings2, SlidersHorizontal, TextCursorInput, ArrowUpRight } from 'lucide-react';
+import { AudioLines, BookOpen, LockKeyhole, MessageSquareText, Puzzle, Settings2, SlidersHorizontal, TextCursorInput, ArrowUpRight, Mail } from 'lucide-react';
 
-type Account = { mode: AccountMode; user: AccountUser | null; openRegistration?: boolean; creationSafetyEnabled?: boolean; safetyAdminFixture?: boolean; localUnmeteredTesting?: boolean; hostedTesterDemo?: boolean };
+type Account = { mode: AccountMode; user: AccountUser | null; creationSafetyEnabled?: boolean; safetyAdminFixture?: boolean; localUnmeteredTesting?: boolean; hostedTesterDemo?: boolean };
 
 function normalizedColor(value: string): string | null {
   const match = /^#?([0-9a-f]{6})$/i.exec(value.trim());
@@ -56,8 +56,8 @@ export default function AccountSettings() {
   const [error, setError] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [inviteCode, setInviteCode] = useState('');
   const [emailAction, setEmailAction] = useState<Exclude<EmailAccountAction, 'resend-verification'>>('sign-in');
+  const [showEmail, setShowEmail] = useState(false);
   const [verificationAvailable, setVerificationAvailable] = useState(false);
   const [returnTo, setReturnTo] = useState('/account');
   const accountRevision = useRef(0);
@@ -87,7 +87,7 @@ export default function AccountSettings() {
         accountRevision.current++;
         photoRevision.current = null;
         setAccentColor(WAVEFORM_DEFAULT_COLOR); setPreviewColor(WAVEFORM_DEFAULT_COLOR); setProfilePhoto(null); setPreparingPhoto(false);
-        setEmail(''); setPassword(''); setInviteCode(''); setEmailAction('sign-in'); setVerificationAvailable(false);
+        setEmail(''); setPassword(''); setEmailAction('sign-in'); setVerificationAvailable(false);
         setBusyAction(null); setLoading(true); setAccount(null); setWaveform(null); setName(''); setVoice(DEFAULT_VOICE); setInitialPrompt(''); setMessage(''); setError('');
       }
       void (async () => {
@@ -120,7 +120,7 @@ export default function AccountSettings() {
     if (!account || account.mode === 'unavailable') return;
     setBusyAction(localAccount ?? 'google'); setError(''); setMessage('');
     try {
-      await signInAccount(account.mode, localAccount, inviteCode);
+      await signInAccount(account.mode, localAccount);
     } catch (error) { setError(error instanceof Error ? error.message : 'Sign-in could not be completed. Please try again.'); }
     finally { setBusyAction(null); }
   }
@@ -134,7 +134,7 @@ export default function AccountSettings() {
   }
 
   function chooseEmailAction(action: typeof emailAction) {
-    setEmailAction(action); setPassword(''); setError(''); setMessage('');
+    setEmailAction(action); setShowEmail(action !== 'create-account'); setPassword(''); setError(''); setMessage('');
   }
 
   async function submitEmail(event: FormEvent<HTMLFormElement>) {
@@ -142,16 +142,17 @@ export default function AccountSettings() {
     if (busy || account?.mode !== 'firebase') return;
     const submitter = (event.nativeEvent as SubmitEvent).submitter;
     const action = submitter?.getAttribute('value') === 'resend-verification' ? 'resend-verification' : emailAction;
+    if (action === 'create-account' && !demoAllowed) { setError('Unlock beta access above before creating an account.'); return; }
     const requestedRevision = accountRevision.current;
     setBusyAction(action); setError(''); setMessage('');
     try {
-      const result = await authenticateWithEmail(action, email, password, inviteCode);
+      const result = await authenticateWithEmail(action, email, password);
       if (requestedRevision !== accountRevision.current) return;
       if (result === 'verification-sent' || result === 'verification-required') {
         setEmailAction('sign-in'); setVerificationAvailable(true);
         setMessage(result === 'verification-sent'
-          ? `Check your inbox for a verification link, then sign in here.${account?.openRegistration ? '' : ' If you’re new, include your invitation code.'} Enter your password again if you need to resend the email.`
-          : `Verify your email before signing in. Check your inbox, or enter your password again to resend the verification email.${account?.openRegistration ? '' : ' If you’re new, include your invitation code when you sign in.'}`);
+          ? `Check your inbox for a verification link, then sign in here. Enter your password again if you need to resend the email.`
+          : `Verify your email before signing in. Check your inbox, or enter your password again to resend the verification email.`);
       } else if (result === 'password-reset-sent') {
         setMessage('If an account uses that email, a password reset link is on its way.');
       }
@@ -231,9 +232,11 @@ export default function AccountSettings() {
     { id: 'sharing', label: 'Sharing & usage', icon: LockKeyhole },
     { id: 'account', label: 'Account & tools', icon: Settings2 },
   ] as const;
+  const creating = emailAction === 'create-account';
+  const resetting = emailAction === 'reset-password';
   if (loading) return <BrandLoader variant="screen" label="Loading your account…" />;
-  return <main className={account?.user ? 'account-page settings-workspace' : 'account-page'} style={appearanceTheme(previewColor)}>
-    <DemoCodeGate onAccess={setDemoAllowed} />
+  return <main className={account?.user ? 'account-page settings-workspace' : account?.mode === 'firebase' ? 'account-page auth-entry' : 'account-page'} style={appearanceTheme(previewColor)}>
+    {(account?.user || account?.mode !== 'firebase') && <DemoCodeGate onAccess={setDemoAllowed} purpose="beta" />}
     {account?.user ? <>
       <header className="settings-topbar"><Link className="settings-brand" href="/" aria-label="Back to FlowPath"><Image src="/brand/flowpath-icon-square.png" alt="" width={36} height={36} loading="eager" />FlowPath <span>Studio</span></Link>
         <div className="account-identity"><span>Signed in as {account.user.displayName}</span><button type="button" onClick={() => void signOut()} disabled={busy} aria-busy={busyAction === 'sign-out'}>{busyAction === 'sign-out' && <BrandLoader variant="inline" />}Sign out</button></div>
@@ -316,36 +319,39 @@ export default function AccountSettings() {
 
         <p className="field-help">Save to preview your draft. Publish to update what visitors see.</p><p className="account-status" role="status" aria-live="polite">{message}</p>{error && <p className="account-error" role="alert">{error}</p>}
       </div><div className="settings-save-actions">{dirty && <button type="button" className="settings-inline-link" disabled={busy || preparingPhoto} onClick={discard}>Discard changes</button>}<button className="primary-button" form="waveform-settings-form" type="submit" disabled={busy || preparingPhoto || promptTooLong || !safety.canSave} aria-busy={busyAction === 'save'}>{busyAction === 'save' && <BrandLoader variant="inline" />}{busyAction === 'save' ? 'Saving…' : 'Save draft'}</button></div></footer>
-    </> : <><Link className="account-back" href="/">← Back to FlowPath</Link><h1>My waveform</h1><p className="account-intro">Your voice, with a little direction from you.</p>{account ? <section className="account-sign-in" aria-label="Sign in">
-      <p>Create an account to save one waveform and its starting instructions. It stays private to you.</p>
-      {account.mode === 'local' ? <>
-        <p className="local-account-note">Local preview: use a test account. This does not create a Google or Firebase account.</p>
-        <div className="account-actions"><button className="primary-button" type="button" onClick={() => void signIn('owner-a')} disabled={busy} aria-busy={busyAction === 'owner-a'}>{busyAction === 'owner-a' && <BrandLoader variant="inline" />}Use test owner A</button><button className="secondary-button" type="button" onClick={() => void signIn('owner-b')} disabled={busy} aria-busy={busyAction === 'owner-b'}>{busyAction === 'owner-b' && <BrandLoader variant="inline" />}Use test owner B</button></div>
-        {account.safetyAdminFixture && <button className="secondary-button" type="button" onClick={() => void signIn('owner-admin')} disabled={busy} aria-busy={busyAction === 'owner-admin'}>{busyAction === 'owner-admin' && <BrandLoader variant="inline" />}Use test safety admin</button>}
-      </> : account.mode === 'firebase' ? <>
-        {!account.openRegistration && <><label htmlFor="invitation-code">Invitation code</label>
-        <input id="invitation-code" value={inviteCode} onChange={event => setInviteCode(event.target.value)} disabled={busy} maxLength={64} autoComplete="off" spellCheck={false} aria-describedby="invitation-help" />
-        <p id="invitation-help" className="field-help">New here? Enter your invitation code to join FlowPath Studio. Already joined? Sign in normally.</p></>}
-        <button className="secondary-button google-sign-in" type="button" onClick={() => void signIn()} disabled={busy} aria-busy={busyAction === 'google'}>{busyAction === 'google' && <BrandLoader variant="inline" />}Continue with Google</button>
-        <p className="auth-divider">or use your email</p>
-        <form className="email-sign-in" onSubmit={event => void submitEmail(event)} aria-label="Email account">
-          <h2>{emailAction === 'create-account' ? 'Create an account' : emailAction === 'reset-password' ? 'Reset your password' : 'Sign in with email'}</h2>
+    </> : account?.mode === 'firebase' ? <>
+      <header className="auth-header"><Link className="auth-brand" href="/" aria-label="FlowPath Studio home"><Image src="/brand/flowpath-icon-square.png" alt="" width={32} height={32} priority /><span>FlowPath <span className="auth-brand-studio">Studio</span></span></Link><Link className="auth-home" href="/">Home</Link></header>
+      <section className="auth-content" aria-label={creating ? 'Create account' : resetting ? 'Reset password' : 'Sign in'}>
+        <div className="auth-eyebrow">{creating ? 'Private beta' : resetting ? 'Account recovery' : 'Your workspace'}</div>
+        <h1>{creating ? <>Create your<br />waveform.</> : resetting ? 'Reset your password.' : 'Welcome back.'}</h1>
+        <p className="auth-description">{creating ? 'A voice, shaped by you.' : resetting ? 'We’ll send a link to help you get back in.' : <>Your voice. Your instructions.<br />Pick up where you left off.</>}</p>
+        <div className="auth-access" hidden={!creating}>
+          <DemoCodeGate onAccess={setDemoAllowed} purpose="beta" />
+          {!demoAllowed && <p className="field-help">One code for the demos and your account. Unlock access, then continue below.</p>}
+        </div>
+        {!resetting && <>
+          <button className="secondary-button google-sign-in auth-google" type="button" onClick={() => void signIn()} disabled={busy} aria-busy={busyAction === 'google'}>{busyAction === 'google' ? <BrandLoader variant="inline" /> : <Image src="/brand/google-g.png" alt="" width={20} height={20} unoptimized />}Continue with Google</button>
+          {creating && !showEmail ? <button className="secondary-button auth-email-choice" type="button" aria-expanded={showEmail} aria-controls="email-account-form" disabled={busy} onClick={() => { setShowEmail(true); requestAnimationFrame(() => document.getElementById('account-email')?.focus()); }}><Mail aria-hidden="true" />Continue with email</button> : <p className="auth-divider">or use email</p>}
+        </>}
+        <form id="email-account-form" className="email-sign-in" hidden={creating && !showEmail} onSubmit={event => void submitEmail(event)} aria-label="Email account">
           <label htmlFor="account-email">Email</label>
-          <input id="account-email" type="email" value={email} onChange={event => { setEmail(event.target.value); setVerificationAvailable(false); setError(''); setMessage(''); }} required disabled={busy} autoComplete="email" autoCapitalize="none" spellCheck={false} />
-          {emailAction !== 'reset-password' && <>
-            <label htmlFor="account-password">Password</label>
-            <input id="account-password" type="password" value={password} onChange={event => setPassword(event.target.value)} required disabled={busy} minLength={emailAction === 'create-account' ? 6 : undefined} autoComplete={emailAction === 'create-account' ? 'new-password' : 'current-password'} aria-describedby={emailAction === 'create-account' ? 'password-help' : undefined} />
-            {emailAction === 'create-account' && <p id="password-help" className="field-help">Use at least six characters. We’ll send a link to verify your email before you sign in.</p>}
+          <input id="account-email" type="email" value={email} onChange={event => { setEmail(event.target.value); setVerificationAvailable(false); setError(''); setMessage(''); }} required disabled={busy} autoComplete="email" autoCapitalize="none" spellCheck={false} placeholder="you@example.com" />
+          {!resetting && <>
+            <div className="auth-password-label"><label htmlFor="account-password">Password</label>{!creating && <button className="auth-text-button" type="button" disabled={busy} onClick={() => chooseEmailAction('reset-password')}>Forgot password?</button>}</div>
+            <input id="account-password" type="password" value={password} onChange={event => setPassword(event.target.value)} required disabled={busy} minLength={creating ? 6 : undefined} autoComplete={creating ? 'new-password' : 'current-password'} aria-describedby={creating ? 'password-help' : undefined} placeholder={creating ? 'At least 6 characters' : 'Your password'} />
+            {creating && <p id="password-help" className="field-help">We’ll send a link to verify your email.</p>}
           </>}
-          <div className="account-actions">
-            <button className="primary-button" type="submit" disabled={busy} aria-busy={busyAction === emailAction}>{busyAction === emailAction && <BrandLoader variant="inline" />}{busyAction === emailAction ? 'Please wait…' : emailAction === 'create-account' ? 'Create account' : emailAction === 'reset-password' ? 'Send reset link' : 'Sign in'}</button>
+          <div className="account-actions"><button className="primary-button" type="submit" disabled={busy} aria-busy={busyAction === emailAction}>{busyAction === emailAction && <BrandLoader variant="inline" />}{busyAction === emailAction ? 'Please wait…' : creating ? 'Create account' : resetting ? 'Send reset link' : 'Sign in'}</button>
             {verificationAvailable && emailAction === 'sign-in' && <button className="secondary-button" type="submit" value="resend-verification" disabled={busy} aria-busy={busyAction === 'resend-verification'}>{busyAction === 'resend-verification' && <BrandLoader variant="inline" />}Resend verification email</button>}
           </div>
         </form>
-        <div className="auth-options">
-          {emailAction === 'sign-in' ? <><button type="button" disabled={busy} onClick={() => chooseEmailAction('create-account')}>Create an account</button><button type="button" disabled={busy} onClick={() => chooseEmailAction('reset-password')}>Forgot password?</button></> : <button type="button" disabled={busy} onClick={() => chooseEmailAction('sign-in')}>Back to email sign-in</button>}
-        </div>
-      </> : <p>Account sign-in is not connected for this preview.</p>}
-    </section> : null}<p className="account-status" role="status" aria-live="polite">{message}</p>{error && <p className="account-error" role="alert">{error}</p>}</>}
+        <p className="account-status" role="status" aria-live="polite">{message}</p>{error && <p className="account-error" role="alert">{error}</p>}
+        <div className="auth-footer">{creating ? <>Already have an account? <button className="auth-text-button" type="button" disabled={busy} onClick={() => chooseEmailAction('sign-in')}>Sign in</button></> : resetting ? <button className="auth-text-button" type="button" disabled={busy} onClick={() => chooseEmailAction('sign-in')}>Back to email sign-in</button> : <>New to FlowPath? <button className="auth-text-button" type="button" disabled={busy} onClick={() => chooseEmailAction('create-account')}>Create an account</button></>}</div>
+        {creating && <p className="auth-private"><LockKeyhole aria-hidden="true" />Your draft stays private.</p>}
+      </section>
+    </> : <><Link className="account-back" href="/">← Back to FlowPath</Link><h1>My waveform</h1><p className="account-intro">Your voice, with a little direction from you.</p>
+      {account?.mode === 'local' ? <section className="account-sign-in" aria-label="Local sign in"><p className="local-account-note">Local preview: use a test account. This does not create a Google or Firebase account.</p><div className="account-actions"><button className="primary-button" type="button" onClick={() => void signIn('owner-a')} disabled={busy} aria-busy={busyAction === 'owner-a'}>{busyAction === 'owner-a' && <BrandLoader variant="inline" />}Use test owner A</button><button className="secondary-button" type="button" onClick={() => void signIn('owner-b')} disabled={busy} aria-busy={busyAction === 'owner-b'}>{busyAction === 'owner-b' && <BrandLoader variant="inline" />}Use test owner B</button>{account.safetyAdminFixture && <button className="secondary-button" type="button" onClick={() => void signIn('owner-admin')} disabled={busy} aria-busy={busyAction === 'owner-admin'}>{busyAction === 'owner-admin' && <BrandLoader variant="inline" />}Use test safety admin</button>}</div></section> : <p>Account sign-in is not connected for this preview.</p>}
+      <p className="account-status" role="status" aria-live="polite">{message}</p>{error && <p className="account-error" role="alert">{error}</p>}
+    </>}
   </main>;
 }

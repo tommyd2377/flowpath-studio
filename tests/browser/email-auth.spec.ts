@@ -3,7 +3,7 @@ import { expect, test, type Page } from '@playwright/test';
 const email = 'student@example.test';
 const password = 'Synthetic-password-123';
 
-async function mockEmailAuthentication(page: Page, verified = false, rejectedPassword = false, autoFirebaseConfig = false, expectedInviteCode?: string) {
+async function mockEmailAuthentication(page: Page, verified = false, rejectedPassword = false, autoFirebaseConfig = false) {
   const activity = { accountPosts: 0, verificationEmails: 0, resetEmails: 0, passwordRequests: [] as Record<string, unknown>[], unexpected: [] as string[] };
   let signedIn = false;
   const now = Math.floor(Date.now() / 1000);
@@ -40,7 +40,7 @@ async function mockEmailAuthentication(page: Page, verified = false, rejectedPas
     if (url.pathname === '/api/account') {
       if (request.method() === 'POST') {
         activity.accountPosts++;
-        expect(request.postDataJSON()).toEqual({ idToken, ...(expectedInviteCode ? { inviteCode: expectedInviteCode } : {}) });
+        expect(request.postDataJSON()).toEqual({ idToken });
         signedIn = true;
         return route.fulfill({ json: { ok: true } });
       }
@@ -48,6 +48,7 @@ async function mockEmailAuthentication(page: Page, verified = false, rejectedPas
       return route.fulfill({ json: { mode: 'firebase', user: signedIn ? { uid: 'synthetic-email-owner', displayName: 'Synthetic owner' } : null, ...(autoFirebaseConfig ? { autoFirebaseConfig: true } : { firebaseConfig: { apiKey: 'synthetic-api-key', authDomain: 'synthetic.firebaseapp.com', projectId: 'synthetic', appId: 'synthetic-app' } }) } });
     }
     if (url.pathname === '/api/waveform') return route.fulfill({ json: { waveform: null } });
+    if (url.pathname === '/api/demo-access') return route.fulfill({ json: { enabled: false } });
     return route.continue();
   });
   return activity;
@@ -60,18 +61,19 @@ async function fillEmail(page: Page) {
 
 test('email sign-up requires verification and sends no application cookie token', async ({ page }) => {
   const activity = await mockEmailAuthentication(page);
+  const accessReady = page.waitForResponse(response => new URL(response.url()).pathname === '/api/demo-access');
   await page.goto('/account');
+  await accessReady;
   await expect(page.getByRole('button', { name: 'Continue with Google', exact: true })).toBeVisible();
-  await expect(page.getByLabel('Invitation code', { exact: true })).not.toHaveAttribute('required');
-  await page.getByLabel('Invitation code', { exact: true }).fill('SYNTHETIC-INVITE');
+  await expect(page.getByLabel('Invitation code', { exact: true })).toHaveCount(0);
   expect(activity.passwordRequests).toHaveLength(0);
   await page.getByRole('button', { name: 'Create an account', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
   await expect(page.getByLabel('Password', { exact: true })).toHaveAttribute('autocomplete', 'new-password');
   await fillEmail(page);
   await page.getByRole('button', { name: 'Create account', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Check your inbox for a verification link');
   await expect(page.getByLabel('Password', { exact: true })).toHaveValue('');
-  await expect(page.getByLabel('Invitation code', { exact: true })).toHaveValue('SYNTHETIC-INVITE');
   expect(activity.accountPosts).toBe(0);
   expect(activity.verificationEmails).toBe(1);
   expect(activity.passwordRequests).toHaveLength(1);
@@ -97,10 +99,9 @@ test('unverified email sign-in only resends after an explicit request', async ({
   expect(activity.unexpected).toEqual([]);
 });
 
-test('verified email sign-in exchanges only the token and invitation and opens private settings', async ({ page }) => {
-  const activity = await mockEmailAuthentication(page, true, false, false, 'SYNTHETIC-INVITE');
+test('verified email sign-in exchanges only the token and existing grant cookie and opens private settings', async ({ page }) => {
+  const activity = await mockEmailAuthentication(page, true, false, false);
   await page.goto('/account');
-  await page.getByLabel('Invitation code', { exact: true }).fill('  SYNTHETIC-INVITE  ');
   await fillEmail(page);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByText('Signed in as Synthetic owner', { exact: true })).toBeVisible();
@@ -128,16 +129,15 @@ test('password reset uses an explicit action and sign-in errors stay readable', 
   expect(activity.unexpected).toEqual([]);
 });
 
-test('invitation-only account rejection gives clear guidance and keeps the code for retry', async ({ page }) => {
+test('missing beta access gives clear guidance without an invitation field or application session', async ({ page }) => {
   const activity = await mockEmailAuthentication(page, true);
   await page.route('**/api/account', route => route.request().method() === 'POST'
-    ? route.fulfill({ status: 403, json: { code: 'invitation-required' } }) : route.fallback());
+    ? route.fulfill({ status: 403, json: { code: 'beta-access-required' } }) : route.fallback());
   await page.goto('/account');
-  await page.getByLabel('Invitation code', { exact: true }).fill('SYNTHETIC-REJECTED');
   await fillEmail(page);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page.getByRole('main').getByRole('alert')).toContainText('An active invitation is required to join FlowPath Studio.');
-  await expect(page.getByLabel('Invitation code', { exact: true })).toHaveValue('SYNTHETIC-REJECTED');
+  await expect(page.getByRole('main').getByRole('alert')).toContainText('Unlock beta access with the demo code before joining. Existing members can sign in normally.');
+  await expect(page.getByLabel('Invitation code', { exact: true })).toHaveCount(0);
   await expect(page.getByLabel('Password', { exact: true })).toHaveValue('');
   await expect(page.getByLabel('Waveform name', { exact: true })).toHaveCount(0);
   expect(activity.verificationEmails).toBe(0);
@@ -155,3 +155,66 @@ test('missing managed SDK defaults fail before any authentication request', asyn
   expect(activity.verificationEmails).toBe(0);
   expect(activity.unexpected).toEqual([]);
 });
+
+test('signup uses one exact beta-code gate and no separate invitation before creating a Firebase identity', async ({ page }) => {
+  const activity = await mockEmailAuthentication(page); let allowed = false;
+  await page.route('**/api/demo-access', route => {
+    if (route.request().method() === 'POST') {
+      allowed = route.request().postDataJSON().code === 'nyc-1776';
+      return route.fulfill({ status: allowed ? 200 : 403, json: allowed ? { enabled: true, allowed } : { error: 'That demo code is incorrect.' } });
+    }
+    return route.fulfill({ json: { enabled: true, allowed } });
+  });
+  await page.goto('/account');
+  await expect(page.getByLabel('Invitation code', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Create an account', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
+  await fillEmail(page);
+  await page.getByRole('button', { name: 'Create account', exact: true }).click();
+  await expect(page.locator('.account-error')).toContainText('Unlock beta access above');
+  expect(activity.passwordRequests).toHaveLength(0);
+  await page.getByLabel('Beta access code', { exact: true }).fill('NYC-1776');
+  await page.getByRole('button', { name: 'Unlock access', exact: true }).click();
+  await expect(page.locator('#demo-code-error')).toContainText('incorrect');
+  expect(activity.passwordRequests).toHaveLength(0);
+  await page.getByLabel('Beta access code', { exact: true }).fill('nyc-1776');
+  await page.getByRole('button', { name: 'Unlock access', exact: true }).click();
+  await expect(page.getByText('Beta access unlocked', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Create account', exact: true }).click();
+  await expect(page.locator('.account-status')).toContainText('Check your inbox');
+  expect(activity.verificationEmails).toBe(1);
+  expect(activity.accountPosts, 'unverified identity still has no application account session').toBe(0);
+  expect(activity.unexpected).toEqual([]);
+});
+
+
+for (const width of [320, 390, 1280]) {
+  test(`account entry uses real logos, clear Home navigation and both layouts at ${width}px`, async ({ page }) => {
+    const activity = await mockEmailAuthentication(page);
+    await page.route('**/api/demo-access', route => route.fulfill({ json: { enabled: true, allowed: false } }));
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/account');
+    await expect(page.getByRole('heading', { name: 'Welcome back.', exact: true })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Home', exact: true })).toHaveAttribute('href', '/');
+    const brand = page.getByRole('link', { name: 'FlowPath Studio home', exact: true }).locator('img');
+    await expect.poll(() => brand.evaluate(img => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+    const google = page.getByRole('button', { name: 'Continue with Google', exact: true }).locator('img');
+    await expect(google).toHaveAttribute('src', '/brand/google-g.png');
+    await expect.poll(() => google.evaluate(img => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+    await expect(page.getByLabel('Beta access code', { exact: true })).toBeHidden();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    await page.screenshot({ path: `test-results/auth-sign-in-${width}.png`, fullPage: true });
+    await page.getByRole('button', { name: 'Create an account', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Create your waveform.', exact: true })).toBeVisible();
+    await expect(page.getByLabel('Beta access code', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('Email', { exact: true })).toBeHidden();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    await page.screenshot({ path: `test-results/auth-create-account-${width}.png`, fullPage: true });
+    await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
+    await expect(page.getByLabel('Email', { exact: true })).toBeFocused();
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Welcome back.', exact: true })).toBeVisible();
+    expect(activity.accountPosts).toBe(0); expect(activity.passwordRequests).toHaveLength(0);
+    expect(activity.unexpected).toEqual([]);
+  });
+}

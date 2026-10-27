@@ -8,7 +8,6 @@
     "build": "next build",
     "start": "next start --hostname 127.0.0.1 --port 3220",
     "start:hosting": "next start --hostname 0.0.0.0",
-    "invites:create": "node --import tsx scripts/create-invites.ts",
     "lint": "eslint app components lib tests scripts playwright.config.ts playwright.paid.config.ts",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "node --import tsx --test tests/*.test.ts",
