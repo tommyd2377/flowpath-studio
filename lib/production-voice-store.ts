@@ -19,8 +19,8 @@ export const UNMETERED_LOCAL_DEADLINE = Number.MAX_SAFE_INTEGER;
 export const isUnmeteredLocalTest = (owner: VoiceOwner, policy: VoicePolicy) => policy.unmeteredAdminTesting === true
   && owner.kind === undefined && owner.admin?.override === true && owner.admin.uid === owner.ownerUid;
 export type VoiceOwner = { ownerUid: string; waveformId: string; accountSessionId: string; kind?: 'visitor'; admin?: AdminVoice;
-  demoVisitorId?: string; contentDigest?: string;
-  paid?: { actor: { visitorId: string; uid?: string; accountSessionId?: string }; choice: 'creator' | 'self'; expectedContentDigest?: string } };
+  demoVisitorId?: string; contentDigest?: string; publishedRevision?: number;
+  paid?: { actor: { visitorId: string; uid?: string; accountSessionId?: string }; choice: 'creator' | 'self'; preview?: boolean; expectedContentDigest?: string } };
 export type StoredVoice = VoiceOwner & {
   id: string; state: 'creating' | 'active' | 'uncertain' | 'closed' | 'rejected';
   createdAt: number; expiresAt: number; canceled: boolean; providerId?: string; seconds?: number;
@@ -63,6 +63,7 @@ function stored(row: Record<string, unknown> | null): StoredVoice | null {
     || row.providerId !== undefined && (typeof row.providerId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(row.providerId))) {
     throw new Error('Invalid durable voice record');
   }
+  if (row.publishedRevision !== undefined && (!Number.isSafeInteger(row.publishedRevision) || Number(row.publishedRevision) < 1)) throw new Error('Invalid published version');
   if (row.admin !== undefined) {
     const admin = object(row.admin);
     if (typeof admin.uid !== 'string' || !admin.uid || typeof admin.accountSessionId !== 'string' || !admin.accountSessionId

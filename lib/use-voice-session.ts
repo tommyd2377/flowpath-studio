@@ -118,7 +118,7 @@ function dispose(session: VoiceSession, leaving = false): Promise<boolean> {
 
 const emptyTextState = (): LiveTextState => ({ text: '', writing: false, visible: false, canUndo: false, message: '' });
 
-export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'self', textBoxEnabled = false) {
+export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'self', textBoxEnabled = false, draftPreview = false, publishedPreview = false) {
   const [phase, setPhase] = useState<VoicePhase>('idle');
   const [active, setActive] = useState(false);
   const [status, setStatus] = useState('');
@@ -207,7 +207,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
     setDiagnosticVersion(value => value + 1);
     if (!waveformId) publicDemoId.current ??= crypto.randomUUID();
     const session: VoiceSession = {
-      id: crypto.randomUUID(), endpoint: waveformId ? `/api/${paidPayer ? 'paid-session' : 'session'}?waveformId=${encodeURIComponent(waveformId)}` : '/api/session',
+      id: crypto.randomUUID(), endpoint: waveformId ? `/api/${paidPayer ? 'paid-session' : 'session'}?waveformId=${encodeURIComponent(waveformId)}${paidPayer && draftPreview ? '&preview=draft' : publishedPreview && !paidPayer ? '&preview=published' : ''}` : '/api/session',
       headers: waveformId ? paidPayer ? { 'X-FlowPath-Payer': paidPayer } : {} : { 'X-FlowPath-Demo': publicDemoId.current! },
       controller: new AbortController(), requested: false,
       ready: false, started: false, answerApplied: false, finalized: false,
@@ -217,10 +217,10 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
     textController.current?.finish();
     textController.current = null;
     setTextState(emptyTextState());
-    if (textBoxEnabled || waveformId && !paidPayer) {
+    if (textBoxEnabled || waveformId && !paidPayer && !publishedPreview) {
       const controller = createLiveTextSession({
         textEnabled: textBoxEnabled,
-        ...(!paidPayer && waveformId ? { searchKnowledge: async (query: string, signal: AbortSignal) => {
+        ...(!paidPayer && waveformId && !publishedPreview ? { searchKnowledge: async (query: string, signal: AbortSignal) => {
           const response = await fetch('/api/knowledge/search', { method: 'POST', credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ waveformId, query }),
             signal: AbortSignal.any([signal, session.controller.signal, AbortSignal.timeout(30_000)]) });
@@ -411,7 +411,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
         : error instanceof Error ? error.message : 'The voice connection is unavailable. Tap the wave to try again.';
       fail(session, notice);
     }
-  }, [fail, stop, waveformId, paidPayer, textBoxEnabled]);
+  }, [fail, stop, waveformId, paidPayer, textBoxEnabled, draftPreview, publishedPreview]);
 
   useEffect(() => {
     mounted.current = true;

@@ -1,3 +1,4 @@
+import { settingsSection } from './settings-navigation';
 import { expect, test, type Page } from '@playwright/test';
 
 test.beforeEach(async ({ context }) => {
@@ -10,12 +11,14 @@ async function save(page: Page, owner: 'A' | 'B') {
   const signOut = page.getByRole('button', { name: 'Sign out', exact: true });
   if (await signOut.isVisible()) await signOut.click();
   await page.getByRole('button', { name: `Use test owner ${owner}`, exact: true }).click();
+  await settingsSection(page, 'appearance');
   await page.getByLabel('Waveform name', { exact: true }).fill(`Knowledge fixture ${owner}`);
+  await settingsSection(page, 'instructions');
   await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('Be a helpful document guide.');
-  await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.locator('.account-status')).toContainText('Saved.');
-  await page.getByLabel('Plugins', { exact: true }).selectOption('knowledge');
-  await page.getByRole('link', { name: 'Manage Knowledge', exact: true }).click();
+  await settingsSection(page, 'plugins');
+  await page.getByRole('link', { name: 'Manage documents', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Knowledge', exact: true })).toBeVisible();
 }
 

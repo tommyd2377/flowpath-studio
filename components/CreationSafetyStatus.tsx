@@ -1,4 +1,5 @@
 import type { CreationSafetyStatus as SafetyStatus } from '@/lib/creation-safety';
+import BrandLoader from './BrandLoader';
 
 type Status = SafetyStatus | 'stale' | 'unavailable' | null;
 const messages: Record<Exclude<Status, null>, string> = {
@@ -13,5 +14,5 @@ const messages: Record<Exclude<Status, null>, string> = {
 export default function CreationSafetyStatus({ status, categories = [] }: { status: Status; categories?: string[] }) {
   if (!status) return null;
   return <p className={status === 'blocked' || status === 'unavailable' ? 'account-error' : 'field-help'}
-    role="status" aria-live="polite" data-creation-safety={status}>{messages[status]}{(status === 'blocked' || status === 'manual-review') && categories.length > 0 && <> Review flags: {categories.join(', ')}.</>}</p>;
+    role="status" aria-live="polite" data-creation-safety={status}>{status === 'pending' && <BrandLoader variant="inline" />}{messages[status]}{(status === 'blocked' || status === 'manual-review') && categories.length > 0 && <> Review flags: {categories.join(', ')}.</>}</p>;
 }

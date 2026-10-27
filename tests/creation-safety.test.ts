@@ -357,3 +357,16 @@ test('expected binding cannot substitute another policy or digest during guarded
     { ...reviewed, policyDigest: 'f'.repeat(64) },
   ] satisfies CreationReviewProof[]) await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, candidate, binding)), denied());
 });
+
+test('an exact published approval survives unrelated draft reviews, but draft enforcement and policy changes stay strict', async () => {
+  const s = setup();
+  const original = await allowed(s);
+  await allowed(s, { ...candidate, name: 'Different draft' });
+  await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, candidate)), denied());
+  const proof = await s.db.transaction(tx => s.store.requireSnapshotAllowed(tx, owner.uid, candidate));
+  assert.equal(proof.reviewId, original.reviewId);
+  await assert.rejects(s.db.transaction(tx => s.store.requireSnapshotAllowed(tx, other.uid, candidate)), denied());
+  await assert.rejects(s.db.transaction(tx => s.store.requireSnapshotAllowed(tx, owner.uid, { ...candidate, name: 'Never reviewed' })), denied());
+  s.setPolicy({ ...policy(), version: 'new-policy' });
+  await assert.rejects(s.db.transaction(tx => s.store.requireSnapshotAllowed(tx, owner.uid, candidate)), denied());
+});

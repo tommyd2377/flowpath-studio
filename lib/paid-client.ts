@@ -12,11 +12,11 @@ export async function paidRead<T>(url: string, init?: RequestInit): Promise<T> {
   if (!response.ok) throw new PaidRequestError(value.error ?? 'This request could not be completed.', value.adminLimit === true);
   return value;
 }
-export async function loadBilling() {
-  const load = () => paidRead<BillingView>('/api/billing');
+export async function loadBilling(signal?: AbortSignal) {
+  const load = () => paidRead<BillingView>('/api/billing', { signal });
   // Settle the server-issued persistent cookie across tabs before any allowance request.
   const run = async () => { const view = await load(); return view.identityPending ? load() : view; };
-  return typeof navigator !== 'undefined' && navigator.locks?.request ? navigator.locks.request('flowpath-paid-identity', run) : run();
+  return typeof navigator !== 'undefined' && navigator.locks?.request ? navigator.locks.request('flowpath-paid-identity', { signal }, run) : run();
 }
 export async function startCheckout(destination: string, requestId: string) {
   const value = await paidRead<{ url: string; test: boolean }>('/api/billing/checkout', { method: 'POST',

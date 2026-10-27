@@ -29,3 +29,5 @@ Studio's exact source and Git history are in the verified local archive at archi
 - Preserve cancellation, microphone cleanup, actual playback-driven waveform state, server session limits, reduced motion and keyboard access.
 - Never add a backend model, search, tools or automatic paid retries to compensate for GPT-Live limitations.
 - Run npm run check and npm run test:browser for session or interaction changes. Report mocked, live and deployed evidence separately.
+- Run routine source edits and the required checks without repeated confirmation when they remain local, synthetic or mocked, and within the authorized task. First verify the selected commands cannot trigger paid providers, deployment, or cloud changes.
+- Retain the existing approval requirements for live paid tests and all existing privacy, credential, deployment, cancellation, and cleanup safeguards.

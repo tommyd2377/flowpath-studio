@@ -9,9 +9,9 @@ import { creationContentDigest } from './creation-safety';
 export type PaidActor = { visitorId: string; uid?: string; accountSessionId?: string };
 type Wallet = { balance: number; held: number; allocated: number; openPurchase?: string };
 type Participant = { linkedUid?: string; active?: string; uses: Record<string, { used: number; held: number }>; starts: number[] };
-export type Publication = { ownerUid: string; waveform: Waveform; published: boolean; settings: PaymentSettings; spent: number; held: number; revision: number };
+export type Publication = { ownerUid: string; waveform: Waveform; published: boolean; draft?: Waveform; draftRevision?: number; settings: PaymentSettings; spent: number; held: number; revision: number };
 export type PaidSegment = { id: string; viewer: string; visitorId: string; viewerUid?: string; accountSessionId?: string;
-  payerUid: string; waveformId: string; payer: 'creator' | 'self'; allowance: number | null; revision: number;
+  payerUid: string; waveformId: string; payer: 'creator' | 'self'; preview?: boolean; allowance: number | null; revision: number;
   reserved: number; createdAt: number; expiresAt: number; connectedAt?: number; providerId?: string;
   state: 'creating' | 'active' | 'uncertain' | 'closed' | 'rejected'; canceled: boolean; charged?: number };
 export type Purchase = { id: string; uid: string; destination: string; pack: MinutePack; createdAt: number;
@@ -30,9 +30,17 @@ const free = (w: Wallet) => Math.max(0, w.balance - w.held - w.allocated);
 const read = async <T>(tx: VoiceTransaction, key: string) => await tx.get(key) as T | null;
 function fail(message: string, status = 409): never { throw new VoiceAdmissionError(message, status); }
 
+/** Compare saved configuration without depending on database field ordering. */
+export function sameWaveformVersion(a: Waveform | undefined, b: Waveform) {
+  return !!a && a.id === b.id && a.name === b.name && a.initialPrompt === b.initialPrompt
+    && a.voice === b.voice && a.accentColor === b.accentColor && a.profilePhoto === b.profilePhoto
+    && a.adminTesting === b.adminTesting && a.updatedAt === b.updatedAt
+    && JSON.stringify(a.textPanel ?? null) === JSON.stringify(b.textPanel ?? null);
+}
+
 /** All monetary/allowance mutations share one database transaction. No browser duration is accepted. */
 export function createPaidStore(database: VoiceDatabase, now = Date.now, options: {
-  assertWaveformAllowed?: (tx: VoiceTransaction, ownerUid: string, waveform: Waveform) => Promise<void>;
+  assertWaveformAllowed?: (tx: VoiceTransaction, ownerUid: string, waveform: Waveform, scope?: 'draft' | 'published') => Promise<void>;
 } = {}) {
   const audit = (tx: VoiceTransaction, id: string, entry: object) => tx.set(path('Ledger', id), { ...entry, at: now(), environment: 'test' });
   async function readWallet(tx: VoiceTransaction, uid: string) {
@@ -69,12 +77,14 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now, options
     if (actor.uid && !anonymous.linkedUid && (anonymous.active || Object.keys(anonymous.uses).length)) fail('Finish linking this browser allowance before continuing.', 409);
     return { id, row };
   }
-  async function allocation(tx: VoiceTransaction, actor: PaidActor, waveformId: string, choice: 'creator' | 'self') {
+  async function allocation(tx: VoiceTransaction, actor: PaidActor, waveformId: string, choice: 'creator' | 'self', preview = false) {
     await authorize(tx, actor);
     if (actor.uid && (await tx.get(`voiceAdminOwners/${hash(actor.uid)}`))?.active) fail('Your previous conversation must close before starting another.');
     const publication = await read<Publication>(tx, wavePath(waveformId));
     if (!publication || !publication.published && publication.ownerUid !== actor.uid) fail('This waveform is unavailable.', 404);
-    await options.assertWaveformAllowed?.(tx, publication.ownerUid, publication.waveform);
+    if (preview && (actor.uid !== publication.ownerUid || choice !== 'self')) fail('Only the owner can preview a draft using their own balance.', 403);
+    const waveform = preview ? publication.draft ?? publication.waveform : publication.waveform;
+    await options.assertWaveformAllowed?.(tx, publication.ownerUid, waveform, preview ? 'draft' : 'published');
     validateSponsorship(publication);
     const { id, row } = await participant(tx, actor);
     if (row.active) fail('Your previous conversation must close before starting another.');
@@ -92,7 +102,7 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now, options
       : publication.settings.budgetSeconds - publication.spent - publication.held;
     const seconds = Math.min(900, funds, allowance === null ? 900 : Math.max(0, allowance - use.used - use.held));
     if (seconds < 1) fail(choice === 'self' ? 'Purchase minutes to continue using your balance.' : 'Sponsored time has ended. An account and available paid minutes are needed to continue.', 402);
-    return { publication, participant: row, participantId: id, payerUid, wallet, use, allowance, seconds };
+    return { publication, waveform, participant: row, participantId: id, payerUid, wallet, use, allowance, seconds };
   }
   return {
     database,
@@ -108,9 +118,12 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now, options
         const prior = await read<Publication>(tx, wavePath(waveform.id));
         if (prior && prior.ownerUid !== actor.uid) fail('This waveform belongs to another account.', 403);
         if (onlyIfMissing && prior) return;
-        await options.assertWaveformAllowed?.(tx, actor.uid!, waveform);
-        tx.set(wavePath(waveform.id), prior ? { ...prior, waveform, revision: prior.revision + 1 }
-          : { ownerUid: actor.uid, waveform, published: false, settings: DEFAULT_PAYMENT_SETTINGS, spent: 0, held: 0, revision: 1 });
+        if (prior?.draft && prior.draft.updatedAt > waveform.updatedAt) return;
+        await options.assertWaveformAllowed?.(tx, actor.uid!, waveform, 'draft');
+        tx.set(wavePath(waveform.id), prior
+          ? { ...prior, draft: waveform, draftRevision: (prior.draftRevision ?? prior.revision) + 1,
+            ...(!prior.published ? { waveform, revision: prior.revision + 1 } : {}) }
+          : { ownerUid: actor.uid, waveform, draft: waveform, draftRevision: 1, published: false, settings: DEFAULT_PAYMENT_SETTINGS, spent: 0, held: 0, revision: 1 });
       });
     },
     async link(visitorId: string, uid: string) {
@@ -150,7 +163,7 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now, options
     async publication(id: string) { return database.transaction(tx => read<Publication>(tx, wavePath(id))); },
     async approvedPublication(id: string) {
       return database.transaction(async tx => { const row = await read<Publication>(tx, wavePath(id));
-        if (row) await options.assertWaveformAllowed?.(tx, row.ownerUid, row.waveform);
+        if (row) await options.assertWaveformAllowed?.(tx, row.ownerUid, row.waveform, 'published');
         return row;
       });
     },
@@ -161,7 +174,7 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now, options
         await authorize(tx, actor);
         const prior = await read<Publication>(tx, wavePath(waveform.id));
         if (prior && prior.ownerUid !== actor.uid) fail('This waveform belongs to another account.', 403);
-        if (published) await options.assertWaveformAllowed?.(tx, actor.uid!, waveform);
+        if (published) await options.assertWaveformAllowed?.(tx, actor.uid!, waveform, 'draft');
         if (prior) validateSponsorship(prior);
         const wallet = await readWallet(tx, actor.uid!);
         const spent = prior?.spent ?? 0, held = prior?.held ?? 0;
@@ -170,17 +183,19 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now, options
         if (budget < spent + held) fail('The budget must cover spent and currently reserved sponsored time.');
         const allocation = budget - spent;
         if (allocation > oldAllocation + free(wallet)) fail('Buy minutes or reduce the sponsorship budget.', 402);
-        const next: Publication = { ownerUid: actor.uid!, waveform, published, settings: { ...settings, budgetSeconds: budget }, spent, held, revision: (prior?.revision ?? 0) + 1 };
+        const next: Publication = { ownerUid: actor.uid!, waveform: !published && prior ? prior.waveform : waveform,
+          draft: waveform, draftRevision: sameWaveformVersion(prior?.draft, waveform)
+            ? prior?.draftRevision ?? prior?.revision ?? 1 : (prior?.draftRevision ?? prior?.revision ?? 0) + 1, published, settings: { ...settings, budgetSeconds: budget }, spent, held, revision: (prior?.revision ?? 0) + 1 };
         tx.set(wavePath(waveform.id), next);
         tx.set(walletPath(actor.uid!), { ...wallet, allocated: wallet.allocated - oldAllocation + allocation });
         audit(tx, `settings:${waveform.id}:${next.revision}`, { type: 'budget_allocation', uid: actor.uid, waveformId: waveform.id, seconds: allocation - oldAllocation, published, ...(adminUnfunded ? { adminOverride: 'unfunded_publish' } : {}) });
         return next;
       });
     },
-    async quote(actor: PaidActor, id: string, choice: 'creator' | 'self') {
-      return database.transaction(async tx => { const a = await allocation(tx, actor, id, choice); return { seconds: a.seconds, payer: choice }; });
+    async quote(actor: PaidActor, id: string, choice: 'creator' | 'self', preview = false) {
+      return database.transaction(async tx => { const a = await allocation(tx, actor, id, choice, preview); return { seconds: a.seconds, payer: choice }; });
     },
-    async reserve(actor: PaidActor, waveformId: string, id: string, choice: 'creator' | 'self', policy: { concurrency: number; dailySeconds: number }, expectedContentDigest?: string) {
+    async reserve(actor: PaidActor, waveformId: string, id: string, choice: 'creator' | 'self', policy: { concurrency: number; dailySeconds: number }, expectedContentDigest?: string, preview = false) {
       validatePaidLimits(policy);
       return database.transaction(async tx => {
         if (await tx.get(segmentPath(id))) fail('This conversation identifier has already been used.');
@@ -188,8 +203,8 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now, options
         const slots = capacityState(global);
         if (Object.values(slots).includes('uncertain')) fail('A previous connection needs confirmed cleanup.', 503);
         if (Object.keys(slots).length >= policy.concurrency) fail('All available voice connections are in use.');
-        const a = await allocation(tx, actor, waveformId, choice);
-        if (expectedContentDigest !== undefined && expectedContentDigest !== creationContentDigest(a.publication.waveform)) fail('The waveform changed. Reload before starting a conversation.');
+        const a = await allocation(tx, actor, waveformId, choice, preview);
+        if (expectedContentDigest !== undefined && expectedContentDigest !== creationContentDigest(a.waveform)) fail('The waveform changed. Reload before starting a conversation.');
         const day = new Date(now()).toISOString().slice(0, 10);
         const daily = global?.day === day ? Number(global.reservedSeconds) : 0;
         if (!Number.isSafeInteger(daily) || daily < 0) fail('Capacity data requires review.', 503);
@@ -202,7 +217,8 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now, options
         if (!a.participant.uses[waveformId] && Object.keys(a.participant.uses).length >= 128) fail('This browser has reached the allowance tracking limit.', 429);
         const segment: PaidSegment = { id, viewer: a.participantId, visitorId: actor.visitorId,
           ...(actor.uid ? { viewerUid: actor.uid } : {}), ...(actor.accountSessionId ? { accountSessionId: actor.accountSessionId } : {}),
-          payerUid: a.payerUid, waveformId, payer: choice, allowance: a.allowance, revision: a.publication.revision,
+          payerUid: a.payerUid, waveformId, payer: choice, allowance: a.allowance, revision: preview ? a.publication.draftRevision ?? a.publication.revision : a.publication.revision,
+          ...(preview ? { preview: true } : {}),
           reserved: a.seconds, createdAt: now(), expiresAt: now() + a.seconds * 1000, state: 'creating', canceled: false };
         tx.set(segmentPath(id), segment);
         tx.set(personPath(a.participantId), { ...a.participant, active: id, starts: [...starts, now()],
@@ -248,8 +264,9 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now, options
         if (!segment || segment.state !== 'creating' || segment.canceled || segment.expiresAt <= now()) return false;
         const wave = await read<Publication>(tx, wavePath(segment.waveformId));
         if (!wave || !wave.published && wave.ownerUid !== segment.viewerUid) return false;
-        if (wave.revision !== segment.revision) return false;
-        await options.assertWaveformAllowed?.(tx, wave.ownerUid, wave.waveform);
+        if (segment.preview && (wave.ownerUid !== segment.viewerUid || segment.payer !== 'self')) return false;
+        if ((segment.preview ? wave.draftRevision ?? wave.revision : wave.revision) !== segment.revision) return false;
+        await options.assertWaveformAllowed?.(tx, wave.ownerUid, segment.preview ? wave.draft ?? wave.waveform : wave.waveform, segment.preview ? 'draft' : 'published');
         await authorize(tx, { visitorId: segment.visitorId, uid: segment.viewerUid, accountSessionId: segment.accountSessionId });
         return true;
       });

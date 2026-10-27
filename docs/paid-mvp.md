@@ -1,5 +1,7 @@
 # FlowPath Studio paid MVP — local test implementation
 
+October 27: private Save draft and Preview draft are now separate from Publish / Update published version and View published version. Draft edits preserve the existing published snapshot and visitor funding until explicit promotion. Additive private draft fields and revision-bound owner-only prepaid previews need no migration; legacy published data and segments retain their prior meaning. Approved published snapshots use exact, current-policy historical proofs while draft Save/Publish remain bound to the current review head. No live payment activation or deployment is included. See [shared contracts](parallel-work/contracts.md).
+
 October 25, 2026. This builds on the current simple waveform. It does not restore archived Studio. No deployment, push, production configuration, real payments or live voice tests were performed. The separately authorized FlowPath Studio sandbox setup is recorded below.
 
 ## Status and preview

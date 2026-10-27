@@ -99,8 +99,23 @@ export function createCreationReviewStore(database: VoiceDatabase, options: Crea
     }
     return proof(record);
   }
+  // A stored published snapshot can retain its exact, unrevoked approval while the draft changes.
+  // Draft Save/Create still requires the current review head through requireAllowed.
+  async function requireSnapshotAllowed(tx: VoiceTransaction, ownerUid: string, candidate: CreationCandidate) {
+    const binding = creationSafetyBinding(candidate, policy());
+    await options.validateCandidate?.(tx, ownerUid, canonicalCreationCandidate(candidate));
+    const head = await current(tx, ownerUid, candidate.document?.id);
+    if (head?.status === 'allowed' && sameCreationBinding(head, binding)) return proof(head);
+    const reference = await tx.get(approvedVersionPath(ownerUid, binding));
+    const record = reference && validId(reference.reviewId) ? recordFrom(await tx.get(reviewPath(reference.reviewId))) : null;
+    if (!record || record.ownerUid !== ownerUid || record.candidate.document?.id !== candidate.document?.id
+      || record.status !== 'allowed' || !sameCreationBinding(record, binding)) {
+      throw new CreationSafetyError('This published version needs an allowed safety review before continuing.');
+    }
+    return proof(record);
+  }
   return {
-    requireAllowed,
+    requireAllowed, requireSnapshotAllowed,
     async get(actor: CreationActor, documentId?: string) {
       actorValid(actor);
       if (documentId !== undefined && !validId(documentId)) throw new CreationSafetyError('Invalid document.', 400);

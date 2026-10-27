@@ -33,7 +33,7 @@ type Options = {
   };
   resolveWaveform?: (request: Request, id: string) => Promise<{
     ownerUid: string; waveform: WaveformPrompt; accountSessionId?: string; isCurrent: () => boolean | Promise<boolean>;
-    paid?: VoiceOwner['paid'];
+    paid?: VoiceOwner['paid']; publishedRevision?: number;
   } | null>;
   resolvePublicVisitor?: (request: Request) => VoiceOwner | null;
   resolveAdmin?: (request: Request) => Promise<{ uid: string; accountSessionId?: string; testing?: boolean; isCurrent: () => boolean | Promise<boolean> } | null>;
@@ -244,7 +244,9 @@ export function createVoiceServer(options: Options = {}) {
     }
     const admin = identity && await identity.isCurrent() ? { uid: identity.uid, accountSessionId: identity.accountSessionId ?? '',
       override: identity.testing === true, ...(previousSessionId ? { previousSessionId } : {}) } : undefined;
-    if ([...params.keys()].some(name => name !== 'waveformId') || params.getAll('waveformId').length > 1) {
+    const preview = params.get('preview');
+    if ([...params.keys()].some(name => name !== 'waveformId' && name !== 'preview') || params.getAll('waveformId').length > 1
+      || params.getAll('preview').length > 1 || preview !== null && (!params.has('waveformId') || !['draft', 'published'].includes(preview))) {
       return { error: json({ error: 'Invalid waveform identifier.' }, 400) };
     }
     if (!params.has('waveformId')) {
@@ -256,6 +258,9 @@ export function createVoiceServer(options: Options = {}) {
     if (!validId(id)) return { error: json({ error: 'Invalid waveform identifier.' }, 400) };
     try {
       const personal = await options.resolveWaveform?.(request, id);
+      if (preview === 'draft' && personal?.paid?.preview !== true || preview === 'published' && personal?.publishedRevision === undefined) {
+        return { error: json({ error: 'This preview is unavailable.' }, 403) };
+      }
       if (!personal || !await personal.isCurrent()) return { error: json({ error: 'Sign in as this waveform’s owner to continue.' }, 403) };
       return { waveformId: id, personal, visitor: undefined, admin, isAdminCurrent: identity?.isCurrent };
     } catch { return { error: json({ error: 'Your waveform could not be loaded. Try again later.' }, 503) }; }
@@ -354,6 +359,7 @@ export function createVoiceServer(options: Options = {}) {
     return access.personal?.accountSessionId && access.waveformId ? {
       ownerUid: access.personal.ownerUid, waveformId: access.waveformId, accountSessionId: access.personal.accountSessionId,
       contentDigest: creationContentDigest(access.personal.waveform),
+      ...(access.personal.publishedRevision !== undefined ? { publishedRevision: access.personal.publishedRevision } : {}),
       ...(access.personal.paid ? { paid: access.personal.paid } : {}),
       ...(access.admin ? { admin: access.admin } : {}),
     } : null;

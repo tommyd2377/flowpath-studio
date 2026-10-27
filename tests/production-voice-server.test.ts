@@ -534,3 +534,16 @@ test('local unmetered founder starts have no restart throttle or app deadline an
   }
   assert.equal(f.calls.filter(url => url.endsWith('/live/sessions')).length, 5);
 });
+
+test('a preview query cannot select a draft or published snapshot without corresponding server authority', async () => {
+  const f = fixture(); const server = createVoiceServer(f.options);
+  const scoped = (value: string) => {
+    const base = request('GET');
+    return new Request(`${base.url}&preview=${value}`, { headers: base.headers });
+  };
+  assert.equal((await server.GET(scoped('draft'))).status, 403);
+  assert.equal((await server.GET(scoped('published'))).status, 403);
+  assert.equal((await server.GET(scoped('invalid'))).status, 400);
+  assert.equal((await server.GET(scoped('draft&preview=published'))).status, 400);
+  assert.equal(f.calls.length, 0);
+});

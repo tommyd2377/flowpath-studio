@@ -10,6 +10,7 @@ import { publicVoiceOwner } from './public-voice-identity';
 import { creationReviewStore, creationSafetyEnabled } from './creation-runtime';
 import { creationContentDigest, CreationSafetyError } from './creation-safety';
 import { waveformRecord } from './account-server';
+import { requirePublishedPreview } from './published-preview';
 
 type AdminResolver = NonNullable<Parameters<typeof createVoiceServer>[0]>['resolveAdmin'];
 type Resolver = NonNullable<Parameters<typeof createVoiceServer>[0]>['resolveWaveform'];
@@ -27,9 +28,9 @@ export function getProductionVoiceServer(resolveWaveform?: Resolver, resolveAdmi
   const local = !!localAppOrigin();
   // Dev hot reload may change registered tools while keeping the process online.
   // Old calls keep their sideband/timers; durable cleanup supports either instance.
-  if (process.env.NODE_ENV === 'development' && shared.flowpathProductionVoiceConfigVersion !== 'creation-safety-v3') {
+  if (process.env.NODE_ENV === 'development' && shared.flowpathProductionVoiceConfigVersion !== 'creation-safety-v3-draft-publication-v1') {
     shared.flowpathProductionVoiceServer = undefined;
-    shared.flowpathProductionVoiceConfigVersion = 'creation-safety-v3';
+    shared.flowpathProductionVoiceConfigVersion = 'creation-safety-v3-draft-publication-v1';
   }
   return shared.flowpathProductionVoiceServer ??= createVoiceServer({
     publicOrigin: local ? undefined : configuredPublicOrigin(process.env.FLOWPATH_PUBLIC_ORIGIN),
@@ -50,6 +51,10 @@ export function getProductionVoiceServer(resolveWaveform?: Resolver, resolveAdmi
         if (!projectId) throw new Error('Firebase project is not configured');
         return getFirebaseAccountServices(projectId, process.env.FLOWPATH_FIREBASE_DATABASE_ID ?? '(default)').db;
       }), Date.now, previousPaidAdminCall, activePaidAdminCall, async (tx, owner) => {
+        if (owner.publishedRevision !== undefined) {
+          await requirePublishedPreview(tx, owner, creationSafetyEnabled() ? creationReviewStore().requireSnapshotAllowed : async () => {}, creationContentDigest);
+          return;
+        }
         if (!creationSafetyEnabled()) return;
         const waveform = waveformRecord(await tx.get(`ownerWaveforms/${owner.ownerUid}`));
         if (!waveform || waveform.id !== owner.waveformId || creationContentDigest(waveform) !== owner.contentDigest) throw new CreationSafetyError('Waveform content changed. Start again after its review.');

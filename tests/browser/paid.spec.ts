@@ -1,3 +1,4 @@
+import { settingsSection } from './settings-navigation';
 import { expect, test, type Page } from '@playwright/test';
 
 test.beforeEach(async ({ context }) => {
@@ -20,12 +21,15 @@ async function saveLegacyText(page: Page, text: string) {
 async function createOwner(page: Page, mode: 'creator' | 'intro' | 'visitor' = 'creator', seconds = 300, text?: string) {
   await page.goto('/account');
   await page.getByRole('button', { name: 'Use test owner A', exact: true }).click();
+  await settingsSection(page, 'appearance');
   await page.getByLabel('Waveform name', { exact: true }).fill(`Paid test ${mode}`);
+  await settingsSection(page, 'instructions');
   await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('Synthetic private instructions.');
-  await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.locator('.account-status')).toContainText('Saved.');
   if (text !== undefined) await saveLegacyText(page, text);
-  await expect(page.getByText('Minutes and publishing', { exact: true })).toBeVisible();
+  await settingsSection(page, 'sharing');
+  await expect(page.getByText('Publishing & usage', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Get a synthetic test pack', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Synthetic test checkout' })).toBeVisible();
   await page.getByRole('button', { name: 'Confirm synthetic test payment', exact: true }).click();
@@ -33,12 +37,13 @@ async function createOwner(page: Page, mode: 'creator' | 'intro' | 'visitor' = '
   await page.getByRole('link', { name: 'Continue to waveform', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Continue using my own balance' })).toBeVisible();
   await page.goto('/account');
+  await settingsSection(page, 'sharing');
   await page.getByLabel('Who pays for visitors?', { exact: true }).selectOption(mode);
   if (mode !== 'visitor') await page.getByLabel('Finite sponsorship budget', { exact: false }).fill('5');
   if (mode === 'intro') await page.getByLabel('Sponsored minutes per visitor', { exact: true }).fill(String(seconds / 60));
-  await page.getByRole('button', { name: /^(Publish|Save published settings)$/ }).click();
-  await expect(page.getByRole('link', { name: 'Open published experience' })).toBeVisible();
-  return (await page.getByRole('link', { name: 'Open published experience' }).getAttribute('href'))!;
+  await page.getByRole('button', { name: /^(Publish|Update published version)$/ }).click();
+  await expect(page.getByRole('link', { name: 'View published version' })).toBeVisible();
+  return (await page.getByRole('link', { name: 'View published version' }).getAttribute('href'))!;
 }
 test('published approved text supports visitor reveal and creator updates without starting voice', async ({ page, browser }) => {
   const text = 'Approved text: <img src=x onerror="window.panelAttack=true">';
@@ -58,6 +63,14 @@ test('published approved text supports visitor reveal and creator updates withou
     expect(projection.waveform.textPanel.text).toBe(text);
     expect(projection.waveform.initialPrompt).toBeUndefined();
     await saveLegacyText(page, 'Updated approved creator text');
+    await visitor.reload();
+    expect((await (await visitor.request.get(`/api/published?id=${address.slice(3)}`)).json()).waveform.textPanel.text).toBe(text);
+    const draft = await (await page.request.get(`/api/published?id=${address.slice(3)}&preview=draft`)).json();
+    expect(draft.waveform.textPanel.text).toBe('Updated approved creator text');
+    expect((await visitor.request.get(`/api/published?id=${address.slice(3)}&preview=draft`)).status()).toBe(404);
+    await settingsSection(page, 'sharing');
+    await page.getByRole('button', { name: 'Update published version', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Publishing and prepaid minutes' }).getByRole('status')).toContainText('Published.');
     await visitor.reload();
     await visitor.getByRole('button', { name: 'Continue with creator-funded time', exact: true }).click();
     await expect(visitor.getByRole('button', { name: 'Show text', exact: true })).toBeVisible();
@@ -153,6 +166,7 @@ test('visitor paywall, canceled checkout, repeated clicks, back navigation and m
   await expect(visitor.getByRole('button', { name: 'Continue with creator-funded time' })).toHaveCount(0);
   // The creator's purchase screen exercises cancel/retry without consuming the visitor's retained fixture balance.
   await page.goto('/account');
+  await settingsSection(page, 'sharing');
   await page.getByRole('button', { name: 'Get a synthetic test pack', exact: true }).dblclick();
   await expect(page.getByRole('heading', { name: 'Synthetic test checkout' })).toBeVisible();
   const checkout = page.url();
@@ -210,10 +224,12 @@ test('saved admin testing opens directly and a failed start stays visible instea
 test('publishing errors remain inline without an admin confirmation or automatic second request', async ({ page }) => {
   await page.goto('/account');
   await page.getByRole('button', { name: 'Use test owner A', exact: true }).click();
+  await settingsSection(page, 'appearance');
   await page.getByLabel('Waveform name', { exact: true }).fill('Publication fixture');
+  await settingsSection(page, 'instructions');
   await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('Synthetic instructions.');
-  await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
-  await expect(page.getByRole('link', { name: 'Open waveform', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
+  await expect(page.getByRole('link', { name: 'Preview draft', exact: true })).toBeVisible();
   let attempts = 0;
   await page.route('**/api/publishing', route => {
     if (route.request().method() === 'GET') return route.fulfill({ json: { published: false, settings: { mode: 'intro', allowanceSeconds: 300, budgetSeconds: 0 }, spent: 0, held: 0 } });
@@ -222,8 +238,61 @@ test('publishing errors remain inline without an admin confirmation or automatic
     return route.fulfill({ status: 402, json: { error: 'Sponsored publishing normally requires a funded sponsorship budget.', adminLimit: true } });
   });
   await page.reload();
+  await settingsSection(page, 'sharing');
   await page.getByRole('button', { name: 'Publish', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Publishing and prepaid minutes' }).getByRole('status')).toContainText('Sponsored publishing normally requires a funded sponsorship budget.');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(attempts).toBe(1);
+});
+
+test('saved private drafts preview with their own session scope and only explicit publication updates visitors', async ({ page }) => {
+  await fakeMedia(page);
+  const address = await createOwner(page, 'visitor');
+  const original = (await (await page.request.get(`/api/published?id=${address.slice(3)}`)).json()).waveform;
+  await page.goto('/account');
+  await page.getByLabel('Waveform name', { exact: true }).fill('Private draft guide');
+  await settingsSection(page, 'sharing');
+  await expect(page.getByRole('button', { name: 'Update published version', exact: true })).toBeDisabled();
+  await expect(page.getByText('Save your draft before publishing these changes.', { exact: true })).toBeVisible();
+  await settingsSection(page, 'instructions');
+  await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('New synthetic draft instructions.');
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
+  await expect(page.locator('.account-status')).toContainText('Saved.');
+  expect((await (await page.request.get(`/api/published?id=${address.slice(3)}`)).json()).waveform).toEqual(original);
+  await page.getByRole('link', { name: 'Preview draft', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue using my own balance', exact: true }).click();
+  await expect(page.locator('.voice-navigation')).toContainText('Private draft guide');
+  const start = page.waitForRequest(request => request.method() === 'POST' && new URL(request.url()).pathname === '/api/paid-session');
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  expect(new URL((await start).url()).searchParams.get('preview')).toBe('draft');
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Continue using my own balance', exact: true })).toBeVisible();
+  await page.goto('/account');
+  await settingsSection(page, 'sharing');
+  await page.getByRole('button', { name: 'Update published version', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Publishing and prepaid minutes' }).getByRole('status')).toContainText('Published.');
+  expect((await (await page.request.get(`/api/published?id=${address.slice(3)}`)).json()).waveform.name).toBe('Private draft guide');
+});
+
+test('founder testing on the published screen selects the published snapshot without a paid payer', async ({ page }) => {
+  const address = await createOwner(page, 'visitor');
+  await fakeMedia(page);
+  await page.route('**/api/published?*', async route => {
+    const response = await route.fetch();
+    await route.fulfill({ json: { ...await response.json(), adminTesting: true, adminVoiceReady: true } });
+  });
+  let starts = 0;
+  await page.route('**/api/session*', route => {
+    if (route.request().method() === 'DELETE') return route.fulfill({ status: 204 });
+    expect(new URL(route.request().url()).searchParams.get('preview')).toBe('published');
+    if (route.request().method() === 'GET') return route.fulfill({ json: { enabled: true } });
+    starts++;
+    return route.fulfill({ json: { sessionId: route.request().postDataJSON().sessionId, sdp: 'v=0\r\n', expiresAt: Date.now() + 900_000, adminOverride: true } });
+  });
+  await page.goto(address);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  expect(starts).toBe(1);
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
 });

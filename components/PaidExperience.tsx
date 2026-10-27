@@ -6,9 +6,10 @@ import { packLabel, type PublicWaveform } from '@/lib/paid-model';
 import VoiceExperience from './VoiceExperience';
 import { clientAnalytics } from '@/lib/analytics-runtime';
 import { liveTextPanelEnabled } from '@/lib/text-panel';
+import BrandLoader from './BrandLoader';
 
 type PublicView = { waveform: PublicWaveform; mode: string; sponsoredSeconds: number; own: boolean; reason: string; adminTesting?: boolean; adminVoiceReady?: boolean };
-export default function PaidExperience({ id, personal = false }: { id: string; personal?: boolean }) {
+export default function PaidExperience({ id, personal = false, initialBilling }: { id: string; personal?: boolean; initialBilling?: BillingView }) {
   const [billing, setBilling] = useState<BillingView | null>(null);
   const [view, setView] = useState<PublicView | null>(null);
   const [payer, setPayer] = useState<'creator' | 'self' | undefined>();
@@ -30,10 +31,12 @@ export default function PaidExperience({ id, personal = false }: { id: string; p
   }, []);
   useEffect(() => {
     let current = true;
+    const controller = new AbortController();
     void (async () => {
-      const b = await loadBilling();
+      // The owner route just loaded this view; later conversations/account changes refresh it.
+      const b = personal && revision === 0 && initialBilling ? initialBilling : await loadBilling(controller.signal);
       if (!b.enabled) throw new Error('This waveform is unavailable.');
-      const p = await paidRead<PublicView>(`/api/published?id=${id}`);
+      const p = await paidRead<PublicView>(`/api/published?id=${id}${personal ? '&preview=draft' : ''}`, { signal: controller.signal });
       if (current) {
         setBilling(b); setView(p);
         const checkout = new URL(location.href).searchParams.get('checkout');
@@ -44,20 +47,20 @@ export default function PaidExperience({ id, personal = false }: { id: string; p
             : 'Payment confirmation is pending. Refresh to check; the return page does not grant minutes.');
       }
     })().catch(error => { if (current) setMessage(error.message); });
-    return () => { current = false; };
-  }, [id, revision]);
+    return () => { current = false; controller.abort(); };
+  }, [id, revision, personal, initialBilling]);
   const nextConversation = () => { setPayer(undefined); setView(null); setBilling(null); setFinished(false); setRevision(r => r + 1); };
   if ((payer || view?.adminTesting && view.adminVoiceReady) && view) return <VoiceExperience key={id} waveformId={id} name={view.waveform.name} accentColor={view.waveform.accentColor}
-    profilePhoto={view.waveform.profilePhoto} textPanel={view.waveform.textPanel} analyticsSurface={personal ? 'private' : 'public'} paidPayer={payer}
+    profilePhoto={view.waveform.profilePhoto} textPanel={view.waveform.textPanel} analyticsSurface={personal ? 'private' : 'public'} paidPayer={payer} draftPreview={personal} publishedPreview={!personal && !payer}
     nextConversation={finished && payer ? nextConversation : undefined}
     onSettled={() => { if (liveTextPanelEnabled(view.waveform.textPanel)) setFinished(true); else nextConversation(); }} />;
   const canSponsor = !!view && !view.own && view.sponsoredSeconds > 0;
+  if (!view && !message) return <BrandLoader variant="screen" label="Loading experience…" />;
   return <main className="account-page paid-experience">
     <Link className="account-back" href="/">← Back to FlowPath</Link>
     <h1>{view?.waveform.name ?? 'Voice experience'}</h1>
     <p>AI-generated voice experience</p>
     {billing?.fixtures && <p className="local-account-note">Synthetic test preview. No real charge or paid voice call.</p>}
-    {!view && !message && <p role="status">Loading experience…</p>}
     {view && billing && <>
       {!billing.voiceReady && <p role="status">{billing.capacityMessage}</p>}
       {canSponsor ? <>
@@ -72,10 +75,10 @@ export default function PaidExperience({ id, personal = false }: { id: string; p
         <button className="primary-button" type="button" disabled={!billing.voiceReady} onClick={() => { clientAnalytics.record({ eventName: 'payer_selected', properties: { payer: 'self' } }); setPayer('self'); }}>Continue using my own balance</button>
       </> : <>
         <p>{packLabel(billing.pack)}. No subscription or automatic top-ups.</p>
-        <button className="primary-button" type="button" disabled={busy || !billing.checkoutReady || !billing.voiceReady} onClick={() => {
+        <button className="primary-button" type="button" disabled={busy || !billing.checkoutReady || !billing.voiceReady} aria-busy={busy} onClick={() => {
           if (busy) return; setBusy(true); requestId.current ??= crypto.randomUUID();
           void startCheckout(destination, requestId.current).catch(error => { setMessage(error.message); setBusy(false); });
-        }}>{billing.fixtures ? 'Get a synthetic test pack' : 'Buy minutes'}</button>
+        }}>{busy && <BrandLoader variant="inline" />}{billing.fixtures ? 'Get a synthetic test pack' : 'Buy minutes'}</button>
       </>)}
       <p className="field-help">Anonymous allowance uses persistent browser storage. Clearing it or changing devices can create a new identity. Signing in carries consumed allowance forward.</p>
     </>}

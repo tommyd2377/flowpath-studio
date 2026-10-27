@@ -3,11 +3,13 @@
 import { useEffect, useRef, useState } from 'react';
 import Image from 'next/image';
 import { canDecideCreationReview, creationReviewDecisionPayload, creationReviewQueueRecords, type CreationReviewQueueRecord } from '@/lib/creation-review-client';
+import BrandLoader from './BrandLoader';
 
 function AdminReviewQueue() {
   const [reviews, setReviews] = useState<CreationReviewQueueRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const [busyDecision, setBusyDecision] = useState<{ review: CreationReviewQueueRecord; decision: 'allowed' | 'blocked' } | null>(null);
+  const busy = busyDecision !== null;
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
@@ -45,7 +47,7 @@ function AdminReviewQueue() {
   async function decide(review: CreationReviewQueueRecord, decision: 'allowed' | 'blocked') {
     if (inFlight.current || !canDecideCreationReview(review.status)) return;
     inFlight.current = true;
-    setBusy(true); setError(''); setMessage('');
+    setBusyDecision({ review, decision }); setError(''); setMessage('');
     const controller = new AbortController();
     decisionRequest.current = controller;
     try {
@@ -68,7 +70,7 @@ function AdminReviewQueue() {
       }
     } finally {
       inFlight.current = false;
-      if (mounted.current && !controller.signal.aborted) setBusy(false);
+      if (mounted.current && !controller.signal.aborted) setBusyDecision(null);
     }
   }
 
@@ -76,7 +78,7 @@ function AdminReviewQueue() {
     <h2>Creation review queue</h2>
     <p>Read the exact version below before choosing a decision. Pending reviews cannot be approved.</p>
     <button type="button" className="secondary-button" disabled={loading || busy} onClick={refresh}>Refresh review queue</button>
-    {loading && <p role="status">Loading reviews…</p>}
+    {loading && <BrandLoader label="Loading reviews…" />}
     {error && <p className="account-error" role="alert">{error}</p>}
     {message && <p role="status">{message}</p>}
     {!loading && !error && !reviews.length && <p>No reviews are waiting.</p>}
@@ -93,8 +95,8 @@ function AdminReviewQueue() {
       {review.candidate.textPanel?.version === 1 && <><h4>Creator text</h4><div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{review.candidate.textPanel.text}</div></>}
       {review.candidate.textPanel?.version === 2 && <p>Text Box plugin enabled. Conversation text is not saved with this waveform.</p>}
       <div className="account-actions">
-        <button type="button" className="primary-button" disabled={loading || busy || !canDecideCreationReview(review.status)} onClick={() => void decide(review, 'allowed')}>Approve reviewed version</button>
-        <button type="button" className="secondary-button" disabled={loading || busy || !canDecideCreationReview(review.status)} onClick={() => void decide(review, 'blocked')}>Reject reviewed version</button>
+        <button type="button" className="primary-button" disabled={loading || busy || !canDecideCreationReview(review.status)} aria-busy={busyDecision?.review === review && busyDecision.decision === 'allowed'} onClick={() => void decide(review, 'allowed')}>{busyDecision?.review === review && busyDecision.decision === 'allowed' && <BrandLoader variant="inline" />}Approve reviewed version</button>
+        <button type="button" className="secondary-button" disabled={loading || busy || !canDecideCreationReview(review.status)} aria-busy={busyDecision?.review === review && busyDecision.decision === 'blocked'} onClick={() => void decide(review, 'blocked')}>{busyDecision?.review === review && busyDecision.decision === 'blocked' && <BrandLoader variant="inline" />}Reject reviewed version</button>
       </div>
     </article>)}
   </section>;

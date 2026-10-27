@@ -14,12 +14,13 @@ import LiveTextPanel from './LiveTextPanel';
 import { liveTextPanelEnabled, type TextPanelConfiguration } from '@/lib/text-panel';
 import { clientAnalytics, observeVisit } from '@/lib/analytics-runtime';
 import { Square } from 'lucide-react';
+import BrandLoader from './BrandLoader';
 
-export default function VoiceExperience({ waveformId, name, accentColor = WAVEFORM_DEFAULT_COLOR, profilePhoto = null, paidPayer, onSettled, textPanel = null, analyticsSurface, nextConversation }: {
-  waveformId?: string; name?: string; accentColor?: string; profilePhoto?: string | null; paidPayer?: 'creator' | 'self'; onSettled?: () => void; textPanel?: TextPanelConfiguration | null; analyticsSurface?: 'private' | 'public'; nextConversation?: () => void;
+export default function VoiceExperience({ waveformId, name, accentColor = WAVEFORM_DEFAULT_COLOR, profilePhoto = null, paidPayer, onSettled, textPanel = null, analyticsSurface, nextConversation, draftPreview = false, publishedPreview = false }: {
+  waveformId?: string; name?: string; accentColor?: string; profilePhoto?: string | null; paidPayer?: 'creator' | 'self'; onSettled?: () => void; textPanel?: TextPanelConfiguration | null; analyticsSurface?: 'private' | 'public'; nextConversation?: () => void; draftPreview?: boolean; publishedPreview?: boolean;
 }) {
   const textBoxEnabled = liveTextPanelEnabled(textPanel);
-  const voice = useVoiceSession(waveformId, paidPayer, textBoxEnabled);
+  const voice = useVoiceSession(waveformId, paidPayer, textBoxEnabled, draftPreview, publishedPreview);
   const handledSettlement = useRef(0);
   useEffect(() => { if (voice.settledVersion > handledSettlement.current) { handledSettlement.current = voice.settledVersion; onSettled?.(); } }, [voice.settledVersion, onSettled]);
   const diagnosticsMode = useDiagnosticsMode();
@@ -100,7 +101,7 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
         <Waveform phase={voice.phase} inputAnalyser={voice.inputAnalyser} outputAnalyser={voice.outputAnalyser} accentColor={waveformId ? accentColor : undefined} />
       </button>
       <p className="voice-hint" id="voice-hint" aria-hidden={connected || docked}>{nextConversation ? 'Copy your text, then tap the wave to choose your next conversation' : 'Tap the wave whenever you’re ready'}</p>
-      <p className="voice-status" id="voice-status" role="status" aria-live="polite" aria-atomic="true">{showStatus ? status : ''}</p>
+      <p className="voice-status" id="voice-status" role="status" aria-live="polite" aria-atomic="true">{voice.phase === 'connecting' && <BrandLoader variant="inline" />}{showStatus ? status : ''}</p>
       {paidPayer && <p className="paid-session-meter" aria-live="polite">{paidPayer === 'creator' ? 'Creator pays' : 'You pay from your prepaid balance'}{voice.remainingSeconds !== null ? ` · ${voice.remainingSeconds} seconds remaining${voice.remainingSeconds <= 30 ? ' — ending soon' : ''}` : ''}</p>}
       <span className="sr-only">{connected ? 'Conversation connected. Tap the waveform or press Escape to end.' : ''}</span>
       {textVisible ? <div ref={panel} className="voice-text-panel voice-text-panel--live"><LiveTextPanel {...voice.textState}

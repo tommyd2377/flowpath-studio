@@ -98,6 +98,7 @@ test('a reviewed concurrent edit cannot charge a hold for a stale resolved conte
     assert.ok(allowed.has(creationContentDigest(waveform)));
   } });
   await guarded.saveWaveform(f.owner, changed);
+  await guarded.publish(f.owner, changed, (await guarded.publication(f.wave.id))!.settings, true);
   const before = structuredClone(f.db.rows);
   await assert.rejects(guarded.reserve(f.guest, f.wave.id, randomUUID(), 'creator', f.policy, digest), /waveform changed/);
   assert.deepEqual(f.db.rows, before);
@@ -107,15 +108,43 @@ test('a reviewed concurrent edit cannot charge a hold for a stale resolved conte
 
 test('paid adapter carries the exact content digest and configuration changes cancel setup before provider work', async () => {
   const f = paidFixture(); await f.credit(); await f.publish(); const oldDigest = creationContentDigest(f.wave);
-  await f.store.saveWaveform(f.owner, { ...f.wave, name: 'New version' });
+  await f.store.publish(f.owner, { ...f.wave, name: 'New version' }, (await f.store.publication(f.wave.id))!.settings, true);
   const adapter = createPaidVoiceStore(f.store, f.now);
   const owner = { ownerUid: f.guest.visitorId, waveformId: f.wave.id, accountSessionId: f.guest.visitorId,
     paid: { actor: f.guest, choice: 'creator' as const, expectedContentDigest: oldDigest } };
   await assert.rejects(adapter.reserve(owner, randomUUID(), { globalConcurrency: 3, globalDailySeconds: 9000,
     ownerDailySeconds: 3600, access: 'signed-in', allowedUids: [] }), /waveform changed/);
   const call = await f.reserve();
-  await f.store.saveWaveform(f.owner, { ...f.wave, name: 'Another new version' });
+  await f.store.publish(f.owner, { ...f.wave, name: 'Another new version' }, (await f.store.publication(f.wave.id))!.settings, true);
   assert.equal(await f.store.mayStart(call.id), false);
   await f.store.settle(call.id, { finalized: true, rejected: true });
   assert.equal((await f.store.publication(f.wave.id))?.held, 0);
+});
+
+test('saving an approved draft preserves published content, revision, visitor starts and finances until explicit publish', async () => {
+  const f = paidFixture(); await f.credit(); await f.publish();
+  const publication = (await f.store.publication(f.wave.id))!;
+  const wallet = await f.store.wallet(f.owner.uid!);
+  const visitorCall = await f.reserve();
+  const draft = { ...f.wave, name: 'Private draft', initialPrompt: 'Draft instructions', textPanel: { type: 'text' as const, version: 2 as const } };
+  await f.store.saveWaveform(f.owner, draft);
+  const saved = (await f.store.publication(f.wave.id))!;
+  assert.deepEqual(saved.waveform, publication.waveform);
+  assert.deepEqual(saved.draft, draft);
+  assert.equal(saved.revision, publication.revision);
+  assert.equal(await f.store.mayStart(visitorCall.id), true);
+  await f.store.settle(visitorCall.id, { finalized: true, rejected: true });
+  assert.deepEqual(await f.store.wallet(f.owner.uid!), wallet);
+  const before = structuredClone(f.db.rows);
+  await assert.rejects(f.store.reserve(f.guest, f.wave.id, randomUUID(), 'creator', f.policy, undefined, true), /Only the owner/);
+  assert.deepEqual(f.db.rows, before);
+  await f.credit();
+  const preview = await f.store.reserve(f.owner, f.wave.id, randomUUID(), 'self', f.policy, creationContentDigest(draft), true);
+  assert.equal(preview.preview, true);
+  assert.equal(await f.store.mayStart(preview.id), true);
+  await f.store.saveWaveform(f.owner, { ...draft, name: 'Newer draft' });
+  assert.equal(await f.store.mayStart(preview.id), false);
+  await f.store.settle(preview.id, { finalized: true, rejected: true });
+  await f.store.publish(f.owner, draft, saved.settings, true);
+  assert.deepEqual((await f.store.publication(f.wave.id))!.waveform, draft);
 });

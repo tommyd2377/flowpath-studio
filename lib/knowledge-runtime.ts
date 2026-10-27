@@ -6,6 +6,7 @@ import { createKnowledgeServer } from './knowledge-server';
 import { localAppOrigin } from './local-app-runtime';
 import { creationActor, creationReviewStore, creationSafetyEnabled } from './creation-runtime';
 import { CreationSafetyError } from './creation-safety';
+import { resolvePublishedPreview } from './published-preview';
 
 const fixtures = process.env.NODE_ENV === 'development' && process.env.FLOWPATH_ACCOUNT_MODE === 'local' && process.env.FLOWPATH_KNOWLEDGE_FIXTURES === '1';
 const shared = globalThis as typeof globalThis & { flowpathKnowledgeFixtures?: Map<string, string> };
@@ -43,6 +44,11 @@ export const knowledgeServer = createKnowledgeServer({ store: knowledgeStore, av
   },
 });
 export async function withWaveformKnowledge(request: Request, id: string) {
+  if (new URL(request.url).searchParams.get('preview') === 'published') {
+    const { getPaidStore, paidEnabled } = await import('./paid-runtime');
+    return paidEnabled ? resolvePublishedPreview(request, id, { resolveAdmin: accountServer.resolveAdmin,
+      approvedPublication: getPaidStore().approvedPublication }) : null;
+  }
   const resolved = await accountServer.resolveVoiceWaveform(request, id);
   if (!resolved) return null;
   const knowledge = request.method !== 'DELETE' && available() && await knowledgeStore.enabled({

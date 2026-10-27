@@ -1,3 +1,4 @@
+import { settingsSection } from './settings-navigation';
 import { expect, test, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 
@@ -154,6 +155,64 @@ test('Knowledge shows sourced passages on request and hiding it leaves voice con
   expect(events.filter(type => type === 'response.item.create')).toHaveLength(1);
   expect(events.filter(type => type === 'response.create')).toHaveLength(1);
   await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+});
+
+test('source loaders stay inside Text Box, preserve content, and cannot reopen a hidden panel', async ({ page }) => {
+  const waveformId = '00000000-0000-4000-8000-000000000078';
+  await fakeMedia(page); await mockSession(page);
+  await page.route('**/api/waveform*', route => route.fulfill({ json: { waveform: { id: waveformId,
+    name: 'Loader guide', textPanel: { type: 'text', version: 2 } } } }));
+  const releases: Array<() => void> = [];
+  const responses = [0, 1].map(() => new Promise<void>(resolve => releases.push(resolve)));
+  let searches = 0;
+  await page.route('**/api/knowledge/search', async route => {
+    const index = searches++;
+    await responses[index];
+    await route.fulfill({ json: { revision: index + 1, passages: [{ id: `source_${index + 1}`, documentId: waveformId,
+      filename: 'museum.txt', quote: index ? 'A later result.' : 'The museum opens at nine.' }] } });
+  });
+  const lookup = async (index: number) => {
+    const backend = (event: object) => emit(page, { type: 'response.event', delegation_id: `loader_${index}`, event });
+    await backend({ type: 'response.created', response: { id: `loader_response_${index}` } });
+    await backend({ type: 'response.output_item.done', response_id: `loader_response_${index}`, item: {
+      type: 'function_call', name: 'search_waveform_knowledge', call_id: `loader_call_${index}`,
+      arguments: JSON.stringify({ query: 'Opening hours', display: true }),
+    } });
+    await backend({ type: 'response.completed', response: { id: `loader_response_${index}`, status: 'completed' } });
+  };
+  try {
+    await page.goto(`/w/${waveformId}`);
+    await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+    await lookup(0);
+    const panel = page.getByRole('region', { name: 'Text Box content', exact: true });
+    await expect(panel).toHaveAttribute('aria-busy', 'true');
+    await expect(panel.locator('.brand-loader--component')).toBeVisible();
+    await expect(panel.locator('img')).toHaveAttribute('src', /flowpath-icon-square/);
+    await expect(page.locator('.brand-loader--screen')).toHaveCount(0);
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await expect(page.locator('.voice-text-panel--live')).toHaveCSS('opacity', '1');
+    await page.screenshot({ path: 'test-results/loader-text-box.png' });
+    releases[0]();
+    await expect(panel).toContainText('The museum opens at nine.');
+    await expect(panel).toHaveAttribute('aria-busy', 'false');
+    await lookup(1);
+    await expect(panel).toHaveAttribute('aria-busy', 'true');
+    await expect(panel).toContainText('The museum opens at nine.');
+    await expect(page.locator('.live-text-panel__state .brand-loader--inline')).toBeVisible();
+    await expect(panel.locator('.brand-loader--component')).toHaveCount(0);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await expect(page.locator('.live-text-panel__state img')).toHaveCSS('animation-name', 'none');
+    await page.getByRole('button', { name: 'Hide', exact: true }).click();
+    releases[1]();
+    await expect.poll(async () => JSON.stringify((await tracker(page)).sentEvents)).toContain('loader_call_1');
+    expect(searches).toBe(2);
+    await expect(panel).toHaveCount(0);
+    await expect(page.locator('.brand-loader')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+    expect((await tracker(page)).stoppedTracks).toBe(0);
+    await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  } finally { releases.forEach(release => release()); }
 });
 
 async function syntheticProfilePhoto(page: Page) {
@@ -895,12 +954,12 @@ test('normal account plugin flow supports dictation, delegated updates, controls
   await page.goto('/account');
   await expect(page.getByRole('button', { name: /Use test owner/ })).toHaveCount(0);
   await expect(page.getByLabel('Text below the waveform (optional)', { exact: true })).toHaveCount(0);
-  await page.getByLabel('Plugins', { exact: true }).selectOption('text');
+  await settingsSection(page, 'plugins');
   await page.getByRole('button', { name: 'Apply plugin', exact: true }).click();
-  await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.locator('.account-status')).toContainText('Saved.');
   expect(waveform.textPanel).toEqual({ type: 'text', version: 2 });
-  await page.getByRole('link', { name: 'Open waveform', exact: true }).click();
+  await page.getByRole('link', { name: 'Preview draft', exact: true }).click();
   const box = page.getByRole('region', { name: 'Text Box content', exact: true });
   await expect(box).toHaveCount(0);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
@@ -971,11 +1030,12 @@ test('normal account plugin flow supports dictation, delegated updates, controls
   await page.getByRole('button', { name: 'End conversation', exact: true }).click();
   await expect(page.locator('#voice-status')).toHaveText('');
   await page.goto('/account');
+  await settingsSection(page, 'plugins');
   await page.getByRole('button', { name: 'Remove Text Box', exact: true }).click();
-  await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.locator('.account-status')).toContainText('Saved.');
   expect(waveform.textPanel).toBeNull();
-  await page.getByRole('link', { name: 'Open waveform', exact: true }).click();
+  await page.getByRole('link', { name: 'Preview draft', exact: true }).click();
   await expect(box).toHaveCount(0);
 });
 

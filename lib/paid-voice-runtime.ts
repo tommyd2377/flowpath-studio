@@ -47,13 +47,17 @@ export function getPaidVoiceServer() {
     },
     resolveWaveform: async (request, id) => {
       const actor = await getPaidApi().actor(request);
+      const preview = new URL(request.url).searchParams.get('preview') === 'draft';
       const publication = await store.publication(id);
+      if (preview && publication?.ownerUid !== actor.uid) return null;
       if (!publication || request.method !== 'DELETE' && !publication.published && publication.ownerUid !== actor.uid) return null;
       const header = request.headers.get('X-FlowPath-Payer');
       if (header !== 'creator' && header !== 'self') throw new VoiceAdmissionError('Choose who pays before starting.', 402);
+      if (preview && header !== 'self') throw new VoiceAdmissionError('Draft preview requires your own balance.', 403);
+      const waveform = preview ? publication.draft ?? publication.waveform : publication.waveform;
       const identity = actor.uid ? await accountServer.resolveIdentity(request) : null;
       return { ownerUid: actor.uid ? `account:${actor.uid}` : actor.visitorId, accountSessionId: actor.accountSessionId ?? actor.visitorId,
-        waveform: publication.waveform, paid: { actor, choice: header, expectedContentDigest: creationContentDigest(publication.waveform) }, isCurrent: () => identity?.isCurrent() ?? !actor.uid };
+        waveform, paid: { actor, choice: header, ...(preview ? { preview: true } : {}), expectedContentDigest: creationContentDigest(waveform) }, isCurrent: () => identity?.isCurrent() ?? !actor.uid };
     },
     production: { store: createPaidVoiceStore(store), policy: () => paidFixtures ? { globalConcurrency: 3, globalDailySeconds: 9_000,
       ownerDailySeconds: 3_600, access: 'signed-in', allowedUids: [] } : productionVoicePolicy(process.env),

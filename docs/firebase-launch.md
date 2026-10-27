@@ -2,6 +2,12 @@
 
 Prepared October 18, 2026. This is the new waveform product, not the archived Studio builder.
 
+## October 27 Workspace/draft release preparation
+
+The user requested committing, pushing and deploying the current version. Source validation passed `npm run check` (348 unit/integration tests, lint, types, production build), 77 standard browser tests and eight synthetic paid-preview browser tests. Workspace settings, shared loaders, startup request cancellation/parallel reads and private draft versus explicit publication are included. The current application code matches the checked source-only copy.
+
+Read-only deployment preflight confirmed backend `flowpath-studio` in `us-east4`, latest ready revision `flowpath-studio-build-2026-10-19-001`, with Cloud Run service-level manual scaling set to **zero**. The existing hosted admission code gate, live-payments gate and local-only Knowledge/review activation remain. A release of this candidate alone does not activate the full local voice/Knowledge/review experience. Hosting reactivation versus a paused-source rollout needs a clear release decision; do not silently change manual scaling, enable voice, create credentials or activate paid features.
+
 ## October 27 hosting pause and lifecycle prerequisite
 
 The separate billing investigation reports user-requested manual scaling to zero and zero-instance metrics; the public hosted app/voice are reported unavailable. This thread has not independently inspected production or session records. Firebase Auth/Firestore and local voice routing are separate and preserved. The deployment/availability evidence below is historical.

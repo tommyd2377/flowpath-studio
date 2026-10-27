@@ -98,6 +98,10 @@ test('saved server-verified admin testing publishes without funding and grants n
       const saved = await f.accounts.resolveVoiceWaveform(request, id);
       return saved ? { ...saved, waveform: { ...saved.waveform, adminTesting: testing } } : null;
     },
+      resolveAdmin: async (request: Request) => {
+        const identity = await f.accounts.resolveIdentity(request);
+        return identity ? { uid: identity.owner.uid, accountSessionId: identity.accountSessionId, testing, isCurrent: identity.isCurrent } : null;
+      },
       resolveIdentity: async (request: Request) => {
         const identity = await f.accounts.resolveIdentity(request);
         return identity ? { ...identity, owner: { ...identity.owner, role: 'admin' as const } } : null;
@@ -134,5 +138,52 @@ test('saved server-verified admin testing publishes without funding and grants n
     assert.equal((await f.store.publication(f.savedWave.id))?.settings.budgetSeconds, 0);
     const malformed = await admin.publishingPOST(req('/api/publishing', 'POST', { ...body, continueAsAdmin: true, settings: { ...settings, allowanceSeconds: -1 } }, f.cookie));
     assert.equal(malformed.status, 400);
+  } finally { await rm(f.directory, { recursive: true, force: true }); }
+});
+
+test('billing starts independent wallet and capacity reads together', { timeout: 3000 }, async () => {
+  const f = await fixture();
+  let release!: () => void, walletStarted!: () => void;
+  const wait = new Promise<void>(resolve => { release = resolve; });
+  const entered = new Promise<void>(resolve => { walletStarted = resolve; });
+  let capacityStarted = false;
+  const store = { ...f.store, wallet: async (uid: string) => { walletStarted(); await wait; return f.store.wallet(uid); },
+    capacity: async (policy: Parameters<typeof f.store.capacity>[0]) => { capacityStarted = true; await wait; return f.store.capacity(policy); } };
+  const api = createPaidApi({ accounts: f.accounts, store, enabled: true, fixtures: true, voiceReady: () => true });
+  const response = api.billingGET(req('/api/billing', 'GET', undefined, f.cookie));
+  try { await entered; assert.equal(capacityStarted, true); }
+  finally { release(); await response; await rm(f.directory, { recursive: true, force: true }); }
+});
+
+test('published startup overlaps approval and identity reads and reuses identity only within that request', { timeout: 3000 }, async () => {
+  const f = await fixture(); await f.publishing(true);
+  let release!: () => void, approvalStarted!: () => void;
+  const wait = new Promise<void>(resolve => { release = resolve; });
+  const entered = new Promise<void>(resolve => { approvalStarted = resolve; });
+  let identityCalls = 0;
+  const store = { ...f.store, approvedPublication: async (id: string) => { approvalStarted(); await wait; return f.store.approvedPublication(id); } };
+  const accounts = { ...f.accounts, resolveIdentity: async (request: Request) => { identityCalls++; return f.accounts.resolveIdentity(request); } };
+  const api = createPaidApi({ accounts, store, enabled: true, fixtures: true, voiceReady: () => true });
+  const response = api.publishedGET(req(`/api/published?id=${f.savedWave.id}`));
+  try { await entered; assert.equal(identityCalls, 1); release(); assert.equal((await response).status, 200); assert.equal(identityCalls, 1); }
+  finally { release(); await response; await rm(f.directory, { recursive: true, force: true }); }
+});
+
+test('draft preview is owner-only and keeps the published projection unchanged until explicit update', async () => {
+  const f = await fixture();
+  try {
+    await f.publishing(true);
+    const before = (await (await f.api.publishedGET(req(`/api/published?id=${f.savedWave.id}`))).json()).waveform;
+    const draft = { ...f.savedWave, name: 'Private new name', initialPrompt: 'Private new instructions', updatedAt: new Date().toISOString() };
+    assert.equal((await f.accounts.waveformPUT(req('/api/waveform', 'PUT', { name: draft.name, initialPrompt: draft.initialPrompt }, f.cookie))).status, 200);
+    const current = (await f.accounts.resolveWaveform(req('/api/waveform', 'GET', undefined, f.cookie)))!;
+    await f.store.saveWaveform({ uid: 'local-owner-a', visitorId: 'owner' }, current);
+    assert.deepEqual((await (await f.api.publishedGET(req(`/api/published?id=${f.savedWave.id}`))).json()).waveform, before);
+    assert.equal((await f.api.publishedGET(req(`/api/published?id=${f.savedWave.id}&preview=draft`))).status, 404);
+    const own = await (await f.api.publishedGET(req(`/api/published?id=${f.savedWave.id}&preview=draft`, 'GET', undefined, f.cookie))).json();
+    assert.equal(own.waveform.name, 'Private new name');
+    assert.equal(own.waveform.initialPrompt, undefined);
+    await f.publishing(true);
+    assert.equal((await (await f.api.publishedGET(req(`/api/published?id=${f.savedWave.id}`))).json()).waveform.name, 'Private new name');
   } finally { await rm(f.directory, { recursive: true, force: true }); }
 });

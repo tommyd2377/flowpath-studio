@@ -4,7 +4,7 @@ October 26 implementation. Knowledge is a reviewed, built-in capability alongsid
 
 ## Creator flow
 
-1. Use the normal Google/email account and save a waveform. In waveform settings choose **Plugins → Knowledge → Manage Knowledge**.
+1. Use the normal Google/email account and save a waveform. In waveform settings choose **Plugins → Knowledge → Manage documents**.
 2. Upload a text-based PDF, DOCX or UTF-8 TXT. Status progresses through Uploading, Preparing and Ready; preparation continues at the provider while the creator edits elsewhere. Reopening Knowledge resumes status checks without re-uploading. Ready files default to **Use in my waveform**; uncheck to disable them.
 3. Start a new conversation on the private waveform. Ask a specific question about a document. GPT-Live delegates to GPT-6 Luna, which calls the app's server-authorized retrieval function and answers from returned passages. General knowledge remains available but must be identified separately from document evidence.
 4. With Text Box applied/saved, ask **Show the relevant passages and sources about [topic]**. Exact extracted excerpts appear with filenames and expandable source details. Ordinary spoken Q&A leaves the panel closed. Stop/Hide/Undo/Copy retain their existing behavior. Copy includes filenames. Generated edits clear source attribution; Undo restores the corresponding text/source snapshot.

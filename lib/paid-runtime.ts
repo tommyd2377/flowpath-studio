@@ -17,15 +17,19 @@ export const paidEnabled = paidFixtures || !!localStripeOrigin || process.env.FL
 // No live processing or paid voice switch: a documented bounded provider cutoff is still required.
 export const paidVoiceReady = () => paidFixtures;
 const shared = globalThis as typeof globalThis & { flowpathPaidStore?: PaidStore; flowpathPaidSafetyVersion?: string };
-if (localAppOrigin() && shared.flowpathPaidSafetyVersion !== 'creation-safety-v3') {
+if (localAppOrigin() && shared.flowpathPaidSafetyVersion !== 'creation-safety-v3-draft-snapshots-v1') {
   shared.flowpathPaidStore = undefined;
-  shared.flowpathPaidSafetyVersion = 'creation-safety-v3';
+  shared.flowpathPaidSafetyVersion = 'creation-safety-v3-draft-snapshots-v1';
 }
 export function getPaidStore() {
   if (!paidEnabled) throw new Error('Paid test preview is disabled');
   return shared.flowpathPaidStore ??= createPaidStore(applicationDatabase(), Date.now, {
-    assertWaveformAllowed: async (tx, uid, waveform) => {
-      if (creationSafetyEnabled()) await creationReviewStore().requireAllowed(tx, uid, waveform);
+    assertWaveformAllowed: async (tx, uid, waveform, scope) => {
+      if (creationSafetyEnabled()) {
+        const reviews = creationReviewStore();
+        if (scope === 'published') await reviews.requireSnapshotAllowed(tx, uid, waveform);
+        else await reviews.requireAllowed(tx, uid, waveform);
+      }
       else if (waveform.textPanel?.version === 1) throw new CreationSafetyError('Creator text display is paused until safety review is available.', 503);
     },
   });

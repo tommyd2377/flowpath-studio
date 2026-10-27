@@ -1,3 +1,4 @@
+import { settingsSection } from './settings-navigation';
 import { expect, test, type Page } from '@playwright/test';
 
 test.beforeEach(async ({ context }) => {
@@ -19,6 +20,7 @@ async function syntheticPhoto(page: Page) {
 }
 
 async function uploadSyntheticPhoto(page: Page) {
+  await settingsSection(page, 'appearance');
   await page.getByLabel('Profile photo', { exact: true }).setInputFiles(await syntheticPhoto(page));
   await expect(page.getByRole('img', { name: 'Profile photo preview', exact: true })).toHaveAttribute('src', /^data:image\/jpeg;base64,/);
 }
@@ -30,13 +32,17 @@ async function saveWaveform(page: Page, owner: 'A' | 'B', name: string, prompt: 
   await expect(page.getByRole('status').filter({ hasText: 'Loading your account' })).toHaveCount(0);
   if (await signOut.isVisible()) await signOut.click();
   await page.getByRole('button', { name: `Use test owner ${owner}`, exact: true }).click();
+  await settingsSection(page, 'appearance');
   await page.getByLabel('Waveform name', { exact: true }).fill(name);
+  await settingsSection(page, 'appearance');
   await page.getByLabel('Voice', { exact: true }).selectOption(voice);
+  await settingsSection(page, 'instructions');
   await page.getByLabel('What should your voice know about itself?', { exact: true }).fill(prompt);
-  await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
-  await expect(page.locator('.account-status')).toContainText('Saved. Your settings will apply to your next conversation.');
-  const address = await page.getByRole('link', { name: 'Open waveform', exact: true }).getAttribute('href');
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
+  await expect(page.locator('.account-status')).toContainText('Saved. Your draft is private until you publish it.');
+  const address = await page.getByRole('link', { name: 'Preview draft', exact: true }).getAttribute('href');
   expect(address).toMatch(/^\/w\/[a-f0-9-]+$/);
+  await settingsSection(page, 'appearance');
   return address!;
 }
 
@@ -45,10 +51,11 @@ test('one local test account saves one waveform and recovers it after signing ou
   const prompt = 'You are Tom’s assistant. Speak warmly and keep answers concise.';
   const address = await saveWaveform(page, 'A', name, prompt, 'meridian');
   await expect(page.getByLabel('Waveform color', { exact: true })).toHaveAttribute('type', 'color');
+  await settingsSection(page, 'appearance');
   await page.getByLabel('Color hex code', { exact: true }).fill('#5B8DEF');
   await uploadSyntheticPhoto(page);
   await expect(page.getByRole('img', { name: 'Profile photo preview', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.locator('.account-status')).toContainText('Saved.');
   const savedPhoto = await page.getByRole('img', { name: 'Profile photo preview', exact: true }).getAttribute('src');
   expect(savedPhoto).toMatch(/^data:image\/webp;base64,/);
@@ -60,18 +67,20 @@ test('one local test account saves one waveform and recovers it after signing ou
   await expect(page.getByRole('img', { name: 'Profile photo preview', exact: true })).toHaveAttribute('src', savedPhoto!);
   await expect(page.locator('#voice-help')).toContainText('North American English');
   await expect(page.getByLabel('What should your voice know about itself?', { exact: true })).toHaveValue(prompt);
-  await expect(page.getByRole('link', { name: 'Open waveform', exact: true })).toHaveAttribute('href', address);
+  await expect(page.getByRole('link', { name: 'Preview draft', exact: true })).toHaveAttribute('href', address);
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.screenshot({ path: 'test-results/account-settings-desktop.png', fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: 'test-results/account-settings-mobile.png', fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
   await page.setViewportSize({ width: 1280, height: 900 });
+  await settingsSection(page, 'appearance');
   await page.getByLabel('Waveform name', { exact: true }).fill('Tom’s updated assistant');
+  await settingsSection(page, 'appearance');
   await page.getByLabel('Voice', { exact: true }).selectOption('marin');
-  await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.locator('.account-status')).toContainText('Saved.');
-  await expect(page.getByRole('link', { name: 'Open waveform', exact: true })).toHaveAttribute('href', address);
+  await expect(page.getByRole('link', { name: 'Preview draft', exact: true })).toHaveAttribute('href', address);
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Use test owner A', exact: true })).toBeVisible();
   await expect(page.getByLabel('What should your voice know about itself?', { exact: true })).toHaveCount(0);
@@ -85,7 +94,7 @@ test('one local test account saves one waveform and recovers it after signing ou
   await expect(page.getByLabel('Color hex code', { exact: true })).toHaveValue('#5b8def');
   await expect(page.getByRole('img', { name: 'Profile photo preview', exact: true })).toHaveAttribute('src', savedPhoto!);
   await expect(page.getByLabel('What should your voice know about itself?', { exact: true })).toHaveValue(prompt);
-  await page.getByRole('link', { name: 'Open waveform', exact: true }).click();
+  await page.getByRole('link', { name: 'Preview draft', exact: true }).click();
   await expect(page.locator('.voice-navigation')).toContainText('Tom’s updated assistant');
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Live voice is paused for this local preview.');
@@ -93,9 +102,10 @@ test('one local test account saves one waveform and recovers it after signing ou
 
 test('another account cannot load the owner’s settings or private waveform', async ({ page }) => {
   const addressA = await saveWaveform(page, 'A', 'Owner A private name', 'Owner A private instructions.');
+  await settingsSection(page, 'appearance');
   await page.getByLabel('Color hex code', { exact: true }).fill('#7e30c6');
   await uploadSyntheticPhoto(page);
-  await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.locator('.account-status')).toContainText('Saved.');
   const privatePhoto = await page.getByRole('img', { name: 'Profile photo preview', exact: true }).getAttribute('src');
   const addressB = await saveWaveform(page, 'B', 'Owner B assistant', 'Owner B instructions.');
@@ -139,31 +149,37 @@ test('a failed save keeps the edited prompt available for retry', async ({ page 
   await saveWaveform(page, 'A', 'Retry assistant', 'A saved starting prompt.');
   await page.route('**/api/waveform', route => route.request().method() === 'PUT'
     ? route.fulfill({ status: 503, json: { error: 'Your waveform could not be saved. Please try again.' } }) : route.continue());
+  await settingsSection(page, 'instructions');
   await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('These are my unsaved changes.');
+  await settingsSection(page, 'appearance');
   await page.getByLabel('Voice', { exact: true }).selectOption('meridian');
+  await settingsSection(page, 'appearance');
   await page.getByLabel('Color hex code', { exact: true }).fill('#6f84e8');
   await uploadSyntheticPhoto(page);
   const unsavedPhoto = await page.getByRole('img', { name: 'Profile photo preview', exact: true }).getAttribute('src');
-  await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.getByRole('main').getByRole('alert')).toContainText('Your waveform could not be saved.');
   await expect(page.getByLabel('What should your voice know about itself?', { exact: true })).toHaveValue('These are my unsaved changes.');
   await expect(page.getByLabel('Voice', { exact: true })).toHaveValue('meridian');
   await expect(page.getByLabel('Color hex code', { exact: true })).toHaveValue('#6f84e8');
   await expect(page.getByRole('img', { name: 'Profile photo preview', exact: true })).toHaveAttribute('src', unsavedPhoto!);
-  await expect(page.getByRole('button', { name: 'Save waveform', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Save draft', exact: true })).toBeEnabled();
 });
 
 test('an invalid color keeps the draft and removing a photo persists without changing the waveform address', async ({ page }) => {
   const address = await saveWaveform(page, 'A', 'Appearance settings', 'A synthetic prompt for appearance tests.');
+  await settingsSection(page, 'appearance');
   await page.getByLabel('Color hex code', { exact: true }).fill('36a489');
   await uploadSyntheticPhoto(page);
-  await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.locator('.account-status')).toContainText('Saved.');
   await expect(page.getByLabel('Color hex code', { exact: true })).toHaveValue('#36a489');
   const savedPhoto = await page.getByRole('img', { name: 'Profile photo preview', exact: true }).getAttribute('src');
+  await settingsSection(page, 'appearance');
   await page.getByLabel('Waveform name', { exact: true }).fill('Unsaved appearance name');
+  await settingsSection(page, 'appearance');
   await page.getByLabel('Color hex code', { exact: true }).fill('#nope');
-  await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.getByLabel('Waveform name', { exact: true })).toHaveValue('Unsaved appearance name');
   await expect(page.getByLabel('Color hex code', { exact: true })).toHaveValue('#nope');
   await expect(page.getByRole('img', { name: 'Profile photo preview', exact: true })).toHaveAttribute('src', savedPhoto!);
@@ -172,21 +188,23 @@ test('an invalid color keeps the draft and removing a photo persists without cha
   expect(waveform.name).toBe('Appearance settings');
   expect(waveform.accentColor).toBe('#36a489');
   expect(waveform.profilePhoto).toBe(savedPhoto);
+  await settingsSection(page, 'appearance');
   await page.getByLabel('Color hex code', { exact: true }).fill('#36a489');
   await page.getByRole('button', { name: 'Remove photo', exact: true }).click();
   await expect(page.getByRole('img', { name: 'Profile photo preview', exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.locator('.account-status')).toContainText('Saved.');
   await page.reload();
   await expect(page.getByRole('img', { name: 'Profile photo preview', exact: true })).toHaveCount(0);
   await expect(page.getByLabel('Color hex code', { exact: true })).toHaveValue('#36a489');
-  await expect(page.getByRole('link', { name: 'Open waveform', exact: true })).toHaveAttribute('href', address);
+  await expect(page.getByRole('link', { name: 'Preview draft', exact: true })).toHaveAttribute('href', address);
 });
 
 test('an invalid photo keeps the previous preview and settings available', async ({ page }) => {
   await saveWaveform(page, 'B', 'Photo validation', 'A synthetic prompt for photo validation.');
   await uploadSyntheticPhoto(page);
   const previousPhoto = await page.getByRole('img', { name: 'Profile photo preview', exact: true }).getAttribute('src');
+  await settingsSection(page, 'appearance');
   await page.getByLabel('Profile photo', { exact: true }).setInputFiles({ name: 'invalid.png', mimeType: 'image/png', buffer: Buffer.from('Not image pixels') });
   await expect(page.getByRole('main').getByRole('alert')).toContainText('That photo could not be opened. Try another image.');
   await expect(page.getByRole('img', { name: 'Profile photo preview', exact: true })).toHaveAttribute('src', previousPhoto!);
@@ -197,24 +215,29 @@ test('long prompt drafts stay intact past 15,000 characters and saving the full 
   const address = await saveWaveform(page, 'A', 'Long prompt fixture', 'L'.repeat(4000));
   await page.reload();
   const prompt = page.getByLabel('What should your voice know about itself?', { exact: true });
+  await settingsSection(page, 'instructions');
   await expect(page.getByText('This saved prompt reaches the previous 4,000-character limit.', { exact: false })).toBeVisible();
   await expect(prompt).not.toHaveAttribute('maxlength', /.+/);
   const tooLong = `${'x'.repeat(15493)}THE END`;
+  await settingsSection(page, 'instructions');
   await prompt.fill(tooLong);
   await expect(prompt).toHaveValue(tooLong);
   await expect(prompt).toHaveAttribute('aria-invalid', 'true');
   await expect(page.locator('#prompt-count')).toHaveText('15,500 / 15,000 characters');
   await expect(page.getByRole('main').getByRole('alert')).toContainText('Your full text is preserved');
-  await expect(page.getByRole('button', { name: 'Save waveform', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Save draft', exact: true })).toBeDisabled();
   const complete = `${'y'.repeat(14993)}THE END`;
+  await settingsSection(page, 'instructions');
   await prompt.fill(complete);
-  await expect(page.getByRole('button', { name: 'Save waveform', exact: true })).toBeEnabled();
-  await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Save draft', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.locator('.account-status')).toContainText('Saved.');
   await page.reload();
   await expect(prompt).toHaveValue(complete);
+  await settingsSection(page, 'instructions');
   await expect(page.locator('#prompt-count')).toHaveText('15,000 / 15,000 characters');
-  await expect(page.getByRole('link', { name: 'Open waveform', exact: true })).toHaveAttribute('href', address);
+  await expect(page.getByRole('link', { name: 'Preview draft', exact: true })).toHaveAttribute('href', address);
+  await settingsSection(page, 'instructions');
   await expect(page.getByText('This saved prompt reaches the previous 4,000-character limit.', { exact: false })).toHaveCount(0);
 });
 
@@ -234,17 +257,22 @@ test('admin-only testing switch saves on and off across reloads while regular ac
   });
   await page.reload();
   const mode = page.getByRole('switch', { name: 'Admin testing', exact: true });
+  await settingsSection(page, 'account');
   await expect(mode).not.toBeChecked();
+  await settingsSection(page, 'account');
   await mode.check();
-  await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.locator('.account-status')).toContainText('Saved.');
   await page.reload();
+  await settingsSection(page, 'account');
   await expect(mode).toBeChecked();
   await expect(page.getByLabel('What should your voice know about itself?', { exact: true })).toHaveValue('Keep the saved persona intact.');
+  await settingsSection(page, 'account');
   await mode.uncheck();
-  await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.locator('.account-status')).toContainText('Saved.');
   await page.reload();
+  await settingsSection(page, 'account');
   await expect(mode).not.toBeChecked();
   admin = false;
   await page.reload();

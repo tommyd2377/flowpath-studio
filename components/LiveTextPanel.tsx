@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { ArrowDown, Copy, EyeOff, Pause, Trash2, Undo2 } from 'lucide-react';
 import type { KnowledgePassage } from '@/lib/plugin-contract';
+import BrandLoader from './BrandLoader';
 
 export type LiveTextPanelProps = {
   text: string;
@@ -40,11 +41,12 @@ export default function LiveTextPanel({ text, sources = [], pending = false, wri
   return <section className="live-text-panel" aria-labelledby={titleId}>
     <div className="live-text-panel__heading">
       <h2 id={titleId}>Text Box</h2>
-      <span className="live-text-panel__state" role="status" aria-live="polite">{pending ? 'Finding sources…' : writing ? 'Writing' : 'Paused'}</span>
+      <span className="live-text-panel__state" role="status" aria-live="polite">{pending && !!text && <BrandLoader variant="inline" />}{pending ? 'Finding sources…' : writing ? 'Writing' : 'Paused'}</span>
     </div>
     <div ref={content} className="live-text-panel__content" role="region" aria-label="Text Box content" aria-busy={pending} tabIndex={0}
       onScroll={event => { const node = event.currentTarget; setFollowing(node.scrollHeight - node.scrollTop - node.clientHeight < 32); }}>
-      {text || <span className="live-text-panel__placeholder">{pending ? 'Finding relevant passages in your documents…' : 'Say “Start writing” to dictate, or ask the waveform to put text here.'}</span>}
+      {text || (pending ? <BrandLoader label="Finding relevant passages in your documents…" />
+        : <span className="live-text-panel__placeholder">Say “Start writing” to dictate, or ask the waveform to put text here.</span>)}
       {sources.length > 0 && <aside className="knowledge-sources" aria-label="Sources">
         <h3>Sources</h3>
         {sources.map((source, i) => <details key={source.id}>
