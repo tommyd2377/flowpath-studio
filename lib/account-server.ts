@@ -228,17 +228,18 @@ export function createAccountServer(options: Options = {}) {
     return identity && await identity.isCurrent() ? identity.owner : null;
   }
   function store() { return mode() === 'firebase' ? options.firebase! : localStore; }
-  async function resolveVoiceWaveform(request: Request, id?: string, purpose: 'admission' | 'cleanup' = 'admission') {
+  async function resolveVoiceWaveform(request: Request, id?: string, purpose: 'admission' | 'cleanup' | 'voice' = 'admission') {
     const identity = await resolveIdentity(request);
     if (!identity) return null;
     const waveform = await (identity.mode === 'firebase' ? options.firebase! : localStore).readWaveform(identity.owner.uid);
-    if (waveform && options.checkWaveform && request.method !== 'DELETE' && purpose !== 'cleanup') {
-      try { await options.checkWaveform(request, waveform); } catch { return null; }
+    if (!waveform || !await identity.isCurrent() || id !== undefined && waveform.id !== id) return null;
+    if (options.checkWaveform && request.method !== 'DELETE' && purpose !== 'cleanup') {
+      try { await options.checkWaveform(request, waveform); } catch (error) { if (purpose === 'voice') throw error; return null; }
     }
     return waveform && await identity.isCurrent() && (id === undefined || waveform.id === id)
       ? { ownerUid: identity.owner.uid, waveform, accountSessionId: identity.accountSessionId,
         isCurrent: options.checkWaveform && request.method !== 'DELETE' && purpose !== 'cleanup'
-          ? async () => { if (!await identity.isCurrent()) return false; try { await options.checkWaveform!(request, waveform); return true; } catch { return false; } }
+          ? async () => { if (!await identity.isCurrent()) return false; try { await options.checkWaveform!(request, waveform); return true; } catch (error) { if (purpose === 'voice') throw error; return false; } }
           : identity.isCurrent } : null;
   }
   async function resolveWaveform(request: Request, id?: string): Promise<Waveform | null> {

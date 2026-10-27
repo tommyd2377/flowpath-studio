@@ -30,6 +30,7 @@ type VoiceSession = {
   handledDelegations?: Set<string>;
   heartbeat?: ReturnType<typeof setTimeout>;
   admissionLimit?: boolean;
+  reviewRequired?: boolean;
   peer?: RTCPeerConnection;
   channel?: RTCDataChannel;
   microphone?: MediaStream;
@@ -64,6 +65,7 @@ async function deleteSession(id: string, endpoint: string, requestHeaders: Recor
 async function errorMessage(response: Response, session?: VoiceSession) {
   try {
     const body: unknown = await response.json();
+    if (body && typeof body === 'object' && session && 'reviewRequired' in body && body.reviewRequired === true) session.reviewRequired = true;
     if (body && typeof body === 'object' && session && 'adminLimit' in body && body.adminLimit === true) session.admissionLimit = true;
     if (body && typeof body === 'object' && 'error' in body && typeof body.error === 'string') return body.error;
   } catch { /* A gateway can return a non-JSON failure. */ }
@@ -129,6 +131,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
   const [phase, setPhase] = useState<VoicePhase>('idle');
   const [active, setActive] = useState(false);
   const [status, setStatus] = useState('');
+  const [reviewRequired, setReviewRequired] = useState(false);
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
   const [inputAnalyser, setInputAnalyser] = useState<AnalyserNode | null>(null);
   const [outputAnalyser, setOutputAnalyser] = useState<AnalyserNode | null>(null);
@@ -207,6 +210,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
     }
 
     // Consent is for this conversation only; a new attempt replaces any previous local report.
+    setReviewRequired(false);
     diagnostic.current?.clear();
     diagnostic.current = recordDiagnostics ? createVoiceDiagnostics({ surface: waveformId ? 'personal' : 'public' }) : null;
     setHasDiagnostic(Boolean(diagnostic.current));
@@ -467,6 +471,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
       const notice = error instanceof DOMException && error.name === 'NotAllowedError'
         ? 'Microphone access was denied. Allow microphone access to start a conversation.'
         : error instanceof Error ? error.message : 'The voice connection is unavailable. Tap the wave to try again.';
+      setReviewRequired(session.reviewRequired === true);
       fail(session, notice);
     }
   }, [fail, stop, waveformId, paidPayer, textBoxEnabled, draftPreview, publishedPreview]);
@@ -525,7 +530,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
     setDiagnosticVersion(value => value + 1);
   }, []);
 
-  return { phase, active, status, remainingSeconds, inputAnalyser, outputAnalyser, needsAudioResume, start, stop, settledVersion,
+  return { phase, active, status, reviewRequired, remainingSeconds, inputAnalyser, outputAnalyser, needsAudioResume, start, stop, settledVersion,
     textState, stopWriting, clearText, undoText, hideText, showText,
     hasDiagnostic, diagnosticRecording, diagnosticVersion, getDiagnostic, markDiagnostic, stopDiagnostic, clearDiagnostic };
 }

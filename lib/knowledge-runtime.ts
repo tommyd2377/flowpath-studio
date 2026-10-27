@@ -49,7 +49,7 @@ export async function withWaveformKnowledge(request: Request, id: string) {
     return paidEnabled ? resolvePublishedPreview(request, id, { resolveAdmin: accountServer.resolveAdmin,
       approvedPublication: getPaidStore().approvedPublication }) : null;
   }
-  const resolved = await accountServer.resolveVoiceWaveform(request, id);
+  const resolved = await accountServer.resolveVoiceWaveform(request, id, 'voice');
   if (!resolved) return null;
   const knowledge = request.method !== 'DELETE' && available() && await knowledgeStore.enabled({
     uid: resolved.ownerUid, waveformId: id, isCurrent: resolved.isCurrent,

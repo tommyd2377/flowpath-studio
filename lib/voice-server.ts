@@ -2,7 +2,7 @@ import WebSocket from 'ws';
 import { PUBLIC_GREETING_INSTRUCTIONS, VOICE_SESSION_SECONDS, voiceSessionConfig, type WaveformPrompt } from './voice-config';
 import { isAllowedRequest } from './request-origin';
 import { isUnmeteredLocalTest, VoiceAdmissionError, type ProductionVoiceStore, type StoredVoice, type VoiceOwner, type VoicePolicy } from './production-voice-store';
-import { creationContentDigest } from './creation-safety';
+import { CreationSafetyError, creationContentDigest } from './creation-safety';
 import { serverAnalytics } from './analytics-runtime';
 
 type Socket = Pick<WebSocket, 'readyState' | 'send' | 'terminate'> & {
@@ -235,6 +235,10 @@ export function createVoiceServer(options: Options = {}) {
   const budgetMessage = 'This local test has reached its three-conversation limit.';
   const pausedMessage = options.production ? 'Live voice is paused while launch is configured.' : 'Live voice is paused for this local preview.';
 
+  const waveformFailure = (error: unknown) => error instanceof CreationSafetyError
+    ? json({ error: error.status === 409 ? 'This saved version needs an approved safety review. Open waveform settings to review this version.' : error.message, reviewRequired: true }, error.status)
+    : json({ error: 'Your waveform could not be loaded. Try again later.' }, 503);
+
   async function scope(request: Request) {
     const params = new URL(request.url).searchParams;
     const demoGrant = options.demoGrant?.(request);
@@ -273,7 +277,7 @@ export function createVoiceServer(options: Options = {}) {
       }
       if (!personal || !await personal.isCurrent()) return { error: json({ error: 'Sign in as this waveform’s owner to continue.' }, 403) };
       return { demoGrant, waveformId: id, personal, visitor: undefined, admin, isAdminCurrent: identity?.isCurrent };
-    } catch { return { error: json({ error: 'Your waveform could not be loaded. Try again later.' }, 503) }; }
+    } catch (error) { return { error: waveformFailure(error) }; }
   }
 
   const reservationKey = (id: string, ownerUid?: string, waveformId?: string) => JSON.stringify([ownerUid, waveformId, id]);
@@ -424,7 +428,7 @@ export function createVoiceServer(options: Options = {}) {
   }
   const accessMessage = (access: Awaited<ReturnType<typeof scope>>) => !access.waveformId && options.production?.policy()?.publicDemoSeconds
     ? options.requestScopedDemo ? 'Sign in with an invited account to try the introduction.' : 'Allow cookies to try the public voice, then tap the waveform again.' : 'Sign in and open your waveform to talk.';
-  const failure = (error: unknown, admin = false) => error instanceof VoiceAdmissionError
+  const failure = (error: unknown, admin = false) => error instanceof CreationSafetyError ? waveformFailure(error) : error instanceof VoiceAdmissionError
     ? json({ error: error.message, ...(admin && error.normalLimit ? { adminLimit: true } : {}) }, error.status) : json({ error: 'Voice admission is temporarily unavailable.' }, 503);
 
   return {
@@ -463,7 +467,7 @@ export function createVoiceServer(options: Options = {}) {
         if (!policy) return json({ enabled: false, message: 'Live voice is paused while launch allowances are configured.' });
         if (access.visitor && !policy.publicDemoSeconds) return json({ enabled: false, message: 'Public voice is paused.' });
         try { await options.production.store.available(productionOwner(access)!, policy); }
-        catch (error) { return json({ enabled: false, message: error instanceof VoiceAdmissionError ? error.message : 'Voice admission is temporarily unavailable.',
+        catch (error) { if (error instanceof CreationSafetyError) return waveformFailure(error); return json({ enabled: false, message: error instanceof VoiceAdmissionError ? error.message : 'Voice admission is temporarily unavailable.',
           ...(error instanceof VoiceAdmissionError && error.normalLimit && access.admin && !access.admin.override ? { adminLimit: true } : {}) }); }
         const configured = Boolean(key());
         return json({ enabled: configured, ...((options.requestScopedDemo ? productionOwner(access)?.tester?.founder : access.admin) ? { adminEligible: true } : {}), ...(!configured ? { message: 'The voice connection is not configured.' } : {}) });
@@ -501,8 +505,10 @@ export function createVoiceServer(options: Options = {}) {
       if (request.signal.aborted || recent.has(reservationKey(body.sessionId, owner?.ownerUid ?? access.personal?.ownerUid, access.waveformId))) return json({ error: 'The conversation was canceled or already used.' }, 409);
       // Auth/store reads and the streamed body can outlive sign-out in another tab.
       // Public admission also rechecks the durable lease inside its reservation transaction.
-      if (access.admin && !await access.isAdminCurrent?.()) return json({ error: 'Sign in again to continue as admin.' }, 403);
-      if (access.personal && !await access.personal.isCurrent()) return json({ error: 'Sign in as this waveform’s owner to continue.' }, 403);
+      try {
+        if (access.admin && !await access.isAdminCurrent?.()) return json({ error: 'Sign in again to continue as admin.' }, 403);
+        if (access.personal && !await access.personal.isCurrent()) return json({ error: 'Sign in as this waveform’s owner to continue.' }, 403);
+      } catch (error) { return waveformFailure(error); }
       // Recheck after reading the body so concurrent tabs cannot reserve two calls.
       if (blocked) return json({ error: cleanupMessage }, 503);
       if (!options.production && active.size) return json({ error: 'A conversation is already open.' }, 409);

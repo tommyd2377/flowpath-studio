@@ -105,3 +105,34 @@ for (const change of ['sign-out', 'account switch'] as const) for (const phase o
     }
   });
 }
+
+test('a signed-in owner receives a review action instead of a false sign-in error; direct starts stay blocked', async t => {
+  const { CreationSafetyError } = await import('../lib/creation-safety');
+  const directory = await mkdtemp(join(tmpdir(), 'flowpath-owner-review-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let needsReview = true, reviewsChecked = 0, providerCalls = 0;
+  const accounts = createAccountServer({ mode: 'local', development: () => true, localDirectory: directory,
+    checkWaveform: async () => { reviewsChecked++; if (needsReview) throw new CreationSafetyError('Exact version needs review'); } });
+  const login = await accounts.accountPOST(request('account', 'POST', { localAccount: 'owner-a' }));
+  const cookie = login.headers.get('set-cookie')!.split(';')[0];
+  const saved = await accounts.waveformPUT(request('waveform', 'PUT', { name: 'Franklin fixture', initialPrompt: 'A historical character.' }, cookie));
+  const waveform = (await saved.json()).waveform;
+  const voice = createVoiceServer({ enabled: () => true, apiKey: () => 'fixture',
+    resolveWaveform: (req, id) => accounts.resolveVoiceWaveform(req, id, 'voice'),
+    requestProvider: (async () => { providerCalls++; throw new Error('Must not start'); }) as typeof fetch });
+  assert.equal((await accounts.waveformGET(request('waveform', 'GET', undefined, cookie))).status, 200);
+  for (const method of ['GET', 'POST']) {
+    const response = await voice[method as 'GET' | 'POST'](request(`session?waveformId=${waveform.id}`, method, method === 'POST' ? { sessionId: randomUUID(), sdp } : undefined, cookie));
+    assert.equal(response.status, 409); const body = await response.json();
+    assert.equal(body.reviewRequired, true); assert.match(body.error, /approved safety review/); assert.doesNotMatch(body.error, /Sign in/);
+  }
+  assert.equal(providerCalls, 0);
+  const checked = reviewsChecked;
+  const wrongId = await voice.GET(request(`session?waveformId=${randomUUID()}`, 'GET', undefined, cookie));
+  assert.equal(wrongId.status, 403); assert.equal((await wrongId.json()).reviewRequired, undefined); assert.equal(reviewsChecked, checked);
+  const cleanup = await voice.DELETE(request(`session?waveformId=${waveform.id}`, 'DELETE', { sessionId: randomUUID() }, cookie));
+  assert.equal(cleanup.status, 200);
+  needsReview = false;
+  assert.equal((await (await voice.GET(request(`session?waveformId=${waveform.id}`, 'GET', undefined, cookie))).json()).enabled, true);
+  assert.equal((await accounts.resolveOwner(request('account', 'GET', undefined, cookie)))?.uid, 'local-owner-a');
+});

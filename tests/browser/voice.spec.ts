@@ -1164,3 +1164,18 @@ test('hosted connection handshake applies SDP only after the observer is ready, 
   expect(methods.slice(0, 3)).toEqual(['GET', 'POST', 'PATCH']);
   await page.getByRole('button', { name: 'End conversation', exact: true }).click();
 });
+
+test('a signed-in waveform review blocker shows settings guidance without asking for sign-in or microphone access', async ({ page }) => {
+  await fakeMedia(page);
+  const id = '00000000-0000-4000-8000-000000000077'; let starts = 0;
+  await page.route('**/api/waveform*', route => route.fulfill({ json: { waveform: { id, name: 'Benjamin Franklin' } } }));
+  await page.route('**/api/session*', route => {
+    if (route.request().method() === 'POST') starts++;
+    return route.fulfill({ status: 409, json: { error: 'This saved version needs an approved safety review. Open waveform settings to review this version.', reviewRequired: true } });
+  });
+  await page.goto(`/w/${id}`); await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.locator('#voice-status')).toContainText('approved safety review');
+  await expect(page.getByRole('link', { name: 'Open waveform settings', exact: true })).toHaveAttribute('href', '/account');
+  await expect(page.locator('#voice-status')).not.toContainText('Sign in');
+  expect((await tracker(page)).microphoneCalls).toBe(0); expect(starts).toBe(0);
+});

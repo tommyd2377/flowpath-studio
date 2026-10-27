@@ -111,7 +111,7 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
       </button>
       {!voice.active && !docked && <DemoCodeGate formId="voice-demo-code-form" waveformTrigger onState={setDemoCodeRequired} onAccess={setDemoCodeAccepted} onUnlocked={beginConversation} />}
       <p className="voice-hint" id="voice-hint" aria-hidden={connected || docked}>{nextConversation ? 'Copy your text, then tap the wave to choose your next conversation' : codeLocked ? 'Enter the code and tap the waveform to begin.' : 'Tap the waveform to begin.'}</p>
-      <p className="voice-status" id="voice-status" role="status" aria-live="polite" aria-atomic="true">{voice.phase === 'connecting' && <BrandLoader variant="inline" />}{showStatus ? status : ''}</p>
+      <p className="voice-status" id="voice-status" role="status" aria-live="polite" aria-atomic="true">{voice.phase === 'connecting' && <BrandLoader variant="inline" />}{showStatus ? status : ''}{voice.reviewRequired && waveformId && <><br /><Link href="/account" className="voice-review-link">Open waveform settings</Link></>}</p>
       {paidPayer && <p className="paid-session-meter" aria-live="polite">{paidPayer === 'creator' ? 'Creator pays' : 'You pay from your prepaid balance'}{voice.remainingSeconds !== null ? ` · ${voice.remainingSeconds} seconds remaining${voice.remainingSeconds <= 30 ? ' — ending soon' : ''}` : ''}</p>}
       <span className="sr-only">{connected ? 'Conversation connected. Tap the waveform or press Escape to end.' : ''}</span>
       {textVisible ? <div ref={panel} className="voice-text-panel voice-text-panel--live"><LiveTextPanel {...voice.textState}
