@@ -8,6 +8,8 @@ Application source `68007e69fe21a72a8619b9e51f10d618d1a9bca0` was pushed to main
 
 `npm run check` passed (374 tests, lint, types and build); the complete mocked browser suite passed 84/84. Non-paid HTTPS checks verified homepage/account 200, the served review-guidance bundle, code-required admission, disabled billing and private/auth/cross-site rejection. The user confirmed Franklin's settings showed Needs review. Signed-in Brave inspection was blocked by the saved origin permission; no paid review or voice call was made, so actual owner voice remains pending the user's review and manual acceptance. Local servers are off.
 
+Later owner acceptance: the user ran the hosted review, received manual review, approved Franklin's current version through the founder queue, and reported that the waveform started working. This confirms the review-approval startup path through user verification, not Codex-controlled browser or audio testing. No category labels were captured. Codex made no paid call or content change; broader live voice/deadline acceptance remains separate.
+
 The rollout's service-wide maximum was restored from 20 to the existing 2. Service/revision limits remain minimum 0, maximum 2, request-only CPU. Existing tags, secrets, auth providers and the separate native monthly cap were unchanged. Logs: `/private/tmp/flowpath-owner-review-release-68007e6-deploy.log`, `/private/tmp/flowpath-owner-review-{check,browser}.log` and `/private/tmp/flowpath-owner-review-readiness-68007e6.log`.
 
 ## October 27 waveform-triggered code field update
