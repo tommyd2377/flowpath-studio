@@ -1,5 +1,6 @@
 # Hosted voice lifecycle candidate — October 27, 2026
 
+October 27 follow-up: [the hosted tester demo candidate](hosted-beta.md) uses browser-primary controls, short authenticated liveness requests and the existing independent cleanup queue. It supersedes the permanent hosted admission closure only under its explicit checked configuration. The older gated candidate and its evidence below remain historical; no hard provider cutoff is claimed.
 Local candidate based on `a236516c5bbde0410958be50231dac43571122a2`. This is a safety/recovery change, **not hosted voice activation**. The existing Firebase App Hosting architecture, accounts, UI, Text Box, Knowledge, Luna delegation and billing fixtures remain. No infrastructure, permission, credential or live service changes are included.
 
 ## Decision and implemented boundary

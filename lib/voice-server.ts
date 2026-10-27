@@ -26,16 +26,19 @@ type Options = {
   trustedProxyHost?: string;
   /** Hosted recovery only: never rely on a controller continuing after its HTTP response. */
   requestOwnedCleanup?: boolean;
+  /** Browser primary controls + short authenticated requests; no orphan server sideband. */
+  requestScopedDemo?: boolean;
   production?: {
     store: ProductionVoiceStore;
     policy: () => VoicePolicy | null;
     scheduleDeadline: (id: string, expiresAt: number) => Promise<void>;
+    heartbeat?: (owner: VoiceOwner, id: string, scheduledUntil?: number) => Promise<{ expiresAt: number; controlExpiresAt: number; schedule: boolean }>;
   };
   resolveWaveform?: (request: Request, id: string) => Promise<{
     ownerUid: string; waveform: WaveformPrompt; accountSessionId?: string; isCurrent: () => boolean | Promise<boolean>;
     paid?: VoiceOwner['paid']; publishedRevision?: number;
   } | null>;
-  resolvePublicVisitor?: (request: Request) => VoiceOwner | null;
+  resolvePublicVisitor?: (request: Request) => VoiceOwner | null | Promise<VoiceOwner | null>;
   resolveAdmin?: (request: Request) => Promise<{ uid: string; accountSessionId?: string; testing?: boolean; isCurrent: () => boolean | Promise<boolean> } | null>;
 };
 type Conversation = {
@@ -251,7 +254,7 @@ export function createVoiceServer(options: Options = {}) {
     }
     if (!params.has('waveformId')) {
       // A known visitor can still close an existing conversation after new starts are paused.
-      const visitor = options.production ? options.resolvePublicVisitor?.(request) : null;
+      const visitor = options.production ? await options.resolvePublicVisitor?.(request) : null;
       return { waveformId: undefined, personal: undefined, visitor: visitor?.kind === 'visitor' ? visitor : undefined, admin, isAdminCurrent: identity?.isCurrent };
     }
     const id = params.get('waveformId');
@@ -354,18 +357,32 @@ export function createVoiceServer(options: Options = {}) {
     } catch { return close(session); }
   }
 
+  async function closeCreatedDemo(session: Conversation) {
+    // A provider ID can be known even if its first database write failed. Close
+    // that exact ID within this request; never release a hold on an unknown result.
+    const canceled = await options.production!.store.cancel(session.ownerUid!, session.waveformId, session.id).catch(() => null);
+    if (canceled?.providerId) return closeStored(canceled);
+    const control = attachControl(session, { ...options, connected: undefined, connectMs: 4_000, closeMs: 4_000 }, () => {});
+    let result: Finalization = { finalized: false };
+    try { await control.ready; result = await control.close(); } catch { /* Retain uncertainty. */ }
+    finally { control.dispose(); }
+    await options.production!.store.finish(session.id, { ...result, providerId: session.providerId }).catch(() => undefined);
+    return result.finalized;
+  }
+
   function productionOwner(access: Awaited<ReturnType<typeof scope>>): VoiceOwner | null {
-    if (access.visitor) return { ...access.visitor, ...(access.admin ? { admin: access.admin } : {}) };
+    if (access.visitor) return { ...access.visitor, ...(!options.requestScopedDemo && access.admin ? { admin: access.admin } : {}) };
     return access.personal?.accountSessionId && access.waveformId ? {
       ownerUid: access.personal.ownerUid, waveformId: access.waveformId, accountSessionId: access.personal.accountSessionId,
       contentDigest: creationContentDigest(access.personal.waveform),
+      ...(options.requestScopedDemo ? { tester: { uid: access.personal.ownerUid, accountSessionId: access.personal.accountSessionId, founder: access.admin?.uid === access.personal.ownerUid } } : {}),
       ...(access.personal.publishedRevision !== undefined ? { publishedRevision: access.personal.publishedRevision } : {}),
       ...(access.personal.paid ? { paid: access.personal.paid } : {}),
-      ...(access.admin ? { admin: access.admin } : {}),
+      ...(!options.requestScopedDemo && access.admin ? { admin: access.admin } : {}),
     } : null;
   }
   const accessMessage = (access: Awaited<ReturnType<typeof scope>>) => !access.waveformId && options.production?.policy()?.publicDemoSeconds
-    ? 'Allow cookies to try the public voice, then tap the waveform again.' : 'Sign in and open your waveform to talk.';
+    ? options.requestScopedDemo ? 'Sign in with an invited account to try the introduction.' : 'Allow cookies to try the public voice, then tap the waveform again.' : 'Sign in and open your waveform to talk.';
   const failure = (error: unknown, admin = false) => error instanceof VoiceAdmissionError
     ? json({ error: error.message, ...(admin && error.normalLimit ? { adminLimit: true } : {}) }, error.status) : json({ error: 'Voice admission is temporarily unavailable.' }, 503);
 
@@ -407,7 +424,7 @@ export function createVoiceServer(options: Options = {}) {
         catch (error) { return json({ enabled: false, message: error instanceof VoiceAdmissionError ? error.message : 'Voice admission is temporarily unavailable.',
           ...(error instanceof VoiceAdmissionError && error.normalLimit && access.admin && !access.admin.override ? { adminLimit: true } : {}) }); }
         const configured = Boolean(key());
-        return json({ enabled: configured, ...(access.admin ? { adminEligible: true } : {}), ...(!configured ? { message: 'The voice connection is not configured.' } : {}) });
+        return json({ enabled: configured, ...((options.requestScopedDemo ? productionOwner(access)?.tester?.founder : access.admin) ? { adminEligible: true } : {}), ...(!configured ? { message: 'The voice connection is not configured.' } : {}) });
       }
       if (blocked) return json({ enabled: false, message: cleanupMessage });
       if (active.size) return json({ enabled: false, message: 'A conversation is already open.' });
@@ -436,7 +453,7 @@ export function createVoiceServer(options: Options = {}) {
         || !validId(body.sessionId) || !audioSdp(body.sdp)) return json({ error: 'Invalid audio connection request.' }, 400);
       // The explicit browser opt-in only widens its event subscription. Nothing is retained here.
       // Snapshot saved instructions once. Edits only affect subsequent conversations.
-      const config = voiceSessionConfig(access.personal?.waveform, body.diagnostics === true);
+      const config = voiceSessionConfig(access.personal?.waveform, body.diagnostics === true, options.requestScopedDemo);
       if (request.signal.aborted || recent.has(reservationKey(body.sessionId, owner?.ownerUid ?? access.personal?.ownerUid, access.waveformId))) return json({ error: 'The conversation was canceled or already used.' }, 409);
       // Auth/store reads and the streamed body can outlive sign-out in another tab.
       // Public admission also rechecks the durable lease inside its reservation transaction.
@@ -456,7 +473,7 @@ export function createVoiceServer(options: Options = {}) {
       if (options.production) {
         try {
           session.durable = await options.production.store.reserve(owner!, session.id, policy!);
-          try { if (!session.durable.admin?.unmeteredLocal) await options.production.scheduleDeadline(session.id, session.durable.expiresAt); }
+          try { if (!session.durable.admin?.unmeteredLocal) await options.production.scheduleDeadline(session.id, session.durable.controlExpiresAt ?? session.durable.expiresAt); }
           catch {
             await options.production.store.finish(session.id, { finalized: true, rejected: true });
             return json({ error: 'The voice deadline could not be scheduled. No conversation was started.' }, 503);
@@ -511,6 +528,22 @@ export function createVoiceServer(options: Options = {}) {
           const canceled = await options.production!.store.created(session.id, providerId, expiresAt);
           session.canceled ||= canceled;
         }
+        if (options.requestScopedDemo) {
+          if (!options.production?.heartbeat) throw new Error('Voice supervision is unavailable');
+          await options.production.heartbeat(owner!, session.id);
+          // The provider primary/data channel owns greeting and local tools. No
+          // socket or timer is left running after this request returns.
+          if (session.canceled || request.signal.aborted || access.personal && !await access.personal.isCurrent()
+            || !audioSdp(record(payload.transport).sdp)) {
+            await closeCreatedDemo(session);
+            release(session);
+            return json({ error: 'The conversation was canceled.' }, 409);
+          }
+          release(session);
+          return json({ sdp: record(payload.transport).sdp, sessionId: session.id, expiresAt,
+            browserControl: true, heartbeatMs: 10_000,
+            adminOverride: owner?.tester?.founder === true, adminEligible: owner?.tester?.founder === true }, 201);
+        }
         if (!session.durable?.admin?.unmeteredLocal) {
           session.timer = setTimeout(() => { void close(session); }, Math.max(0, expiresAt - now()));
           session.timer.unref?.();
@@ -535,7 +568,10 @@ export function createVoiceServer(options: Options = {}) {
         return json({ sdp: record(payload.transport).sdp, sessionId: session.id, expiresAt,
           ...(access.admin ? { adminEligible: true, adminOverride: access.admin.override, adminDeadline: session.durable?.admin?.deadline ?? expiresAt } : {}) }, 201);
       } catch {
-        if (session.providerId) await close(session);
+        if (session.providerId && options.requestScopedDemo && session.durable) {
+          await closeCreatedDemo(session).catch(() => undefined);
+          release(session);
+        } else if (session.providerId) await close(session);
         else {
           if (session.durable) await options.production!.store.finish(session.id, { finalized: false }).catch(() => undefined);
           else blocked = true;
@@ -546,6 +582,24 @@ export function createVoiceServer(options: Options = {}) {
       } finally {
         request.signal.removeEventListener('abort', abort);
       }
+    },
+    async PATCH(request: Request) {
+      if (!isAllowedRequest(request, true, options.publicOrigin, options.trustedProxyHost)) return json({ error: 'Only same-origin requests are allowed.' }, 403);
+      if (!options.requestScopedDemo || !options.production?.heartbeat) return json({ error: 'Voice supervision is unavailable.' }, 503);
+      const access = await scope(request);
+      if (access.error) return access.error;
+      const owner = productionOwner(access);
+      if (!owner) return json({ error: 'Sign in with an invited account.' }, 403);
+      try {
+        const body = await readBody(request);
+        if (Object.keys(body).length !== 1 || !validId(body.sessionId)) return json({ error: 'Invalid conversation identifier.' }, 400);
+        const lease = await options.production.heartbeat(owner, body.sessionId);
+        if (lease.schedule) {
+          await options.production.scheduleDeadline(body.sessionId, lease.controlExpiresAt);
+          await options.production.heartbeat(owner, body.sessionId, lease.controlExpiresAt);
+        }
+        return json({ expiresAt: lease.expiresAt });
+      } catch (error) { return failure(error); }
     },
     async DELETE(request: Request) {
       if (!isAllowedRequest(request, true, options.publicOrigin, options.trustedProxyHost)) return json({ error: 'Only same-origin requests are allowed.' }, 403);

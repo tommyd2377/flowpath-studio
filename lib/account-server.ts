@@ -38,6 +38,7 @@ type Options = {
   creationSafetyEnabled?: () => boolean;
   safetyAdminFixture?: boolean;
   localUnmeteredTesting?: () => boolean;
+  hostedTesterDemo?: () => boolean;
   localDirectory?: string;
   development?: () => boolean;
   publicOrigin?: () => string | undefined;
@@ -293,6 +294,7 @@ export function createAccountServer(options: Options = {}) {
       const autoFirebaseConfig = currentMode === 'firebase' && options.firebaseAutoConfig?.();
       return json({ mode: currentMode, user: await resolveOwner(request),
         ...(options.localUnmeteredTesting?.() ? { localUnmeteredTesting: true } : {}),
+        ...(options.hostedTesterDemo?.() ? { hostedTesterDemo: true } : {}),
         ...(options.creationSafetyEnabled?.() ? { creationSafetyEnabled: true } : {}),
         ...(currentMode === 'local' && options.safetyAdminFixture ? { safetyAdminFixture: true } : {}),
         ...(options.openRegistration?.() ? { openRegistration: true } : {}),

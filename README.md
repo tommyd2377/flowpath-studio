@@ -2,7 +2,9 @@
 
 **Save draft** keeps edits private. **Preview draft** opens your saved private version; **Publish / Update published version** explicitly updates the visitor-facing snapshot, opened through **View published version**. Saving alone does not change an existing publication.
 
-The October 27 [voice lifecycle candidate](docs/voice-lifecycle.md) keeps hosted starts closed pending cutoff/recovery acceptance and adds request-owned, fenced cleanup for known sessions. The full localhost experience and unmetered founder testing remain unchanged. This branch is not deployment or hosted reactivation approval.
+The new [hosted tester demo candidate](docs/hosted-beta.md) uses request-based heartbeats/cleanup, a three-minute daily account allowance and an owner-only founder exemption that never applies to the introduction. It has no daily OpenAI spending guard. Its source activation profile is prepared; release and real-provider acceptance remain pending. Payments and hosted Knowledge remain off.
+
+The earlier October 27 [voice lifecycle candidate](docs/voice-lifecycle.md) keeps hosted starts closed pending cutoff/recovery acceptance and adds request-owned, fenced cleanup for known sessions. The full localhost experience and unmetered founder testing remain unchanged. This branch is not deployment or hosted reactivation approval.
 
 The selected [desktop experience](docs/experience-design.md) places the portrait left of the raised waveform. Text Box remains absent until requested and reveals over 800 ms, with its toolbar visible inside the viewport. Stop writing pauses capture; Hide dismisses without ending voice or erasing text. News appears only on the Studio homepage. Mobile reflow is protected; further mobile visual tuning remains separate.
 

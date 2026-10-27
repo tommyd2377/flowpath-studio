@@ -19,6 +19,8 @@ export const UNMETERED_LOCAL_DEADLINE = Number.MAX_SAFE_INTEGER;
 export const isUnmeteredLocalTest = (owner: VoiceOwner, policy: VoicePolicy) => policy.unmeteredAdminTesting === true
   && owner.kind === undefined && owner.admin?.override === true && owner.admin.uid === owner.ownerUid;
 export type VoiceOwner = { ownerUid: string; waveformId: string; accountSessionId: string; kind?: 'visitor'; admin?: AdminVoice;
+  /** Derived by hosted tester admission from verified server identity, never request JSON. */
+  tester?: { uid: string; accountSessionId: string; founder: boolean };
   demoVisitorId?: string; contentDigest?: string; publishedRevision?: number;
   paid?: { actor: { visitorId: string; uid?: string; accountSessionId?: string }; choice: 'creator' | 'self'; preview?: boolean; expectedContentDigest?: string } };
 export type StoredVoice = VoiceOwner & {
@@ -26,6 +28,9 @@ export type StoredVoice = VoiceOwner & {
   createdAt: number; expiresAt: number; canceled: boolean; providerId?: string; seconds?: number;
   /** Cleanup-only ownership. Expiry permits another closer, never a new provider or released usage. */
   cleanup?: { epoch: number; until: number };
+  controlExpiresAt?: number;
+  allowancePath?: string;
+  allowanceSeconds?: number;
 };
 export const VOICE_CLEANUP_LEASE_MS = 20_000;
 export type VoiceTransaction = {

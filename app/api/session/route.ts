@@ -29,3 +29,5 @@ export const GET = async (request: Request) => unpaid(request) && !await adminRe
 });
 export const POST = async (request: Request) => unpaid(request) && !await adminRequest(request) ? paidRequired() : server.POST(request);
 export const DELETE = server.DELETE;
+
+export const PATCH = server.PATCH;

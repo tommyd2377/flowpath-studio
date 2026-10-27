@@ -33,3 +33,5 @@ Studio's exact source and Git history are in the verified local archive at archi
 - Retain the existing approval requirements for live paid tests and all existing privacy, credential, deployment, cancellation, and cleanup safeguards.
 
 - Latest owner operating preference (October 27): stop local development/test servers when active testing ends. Keep them off during deployment and other work that does not require them; earlier keep-running requests are superseded.
+
+October 27 hosted tester follow-up: see docs/hosted-beta.md. The user confirmed three minutes per day for regular accounts, a separate capped introduction including the founder, and no daily OpenAI spending guard. Only the verified founder's own waveform has no personal duration quota. Preserve minInstances 0, maxInstances 2 and request-only CPU. The new browser-primary/heartbeat/deadline candidate must not inherit the older intro admin bypass. Candidate activation is not evidence of a completed rollout or live provider test; resolve the pending intro-access choice before deployment. Keep local servers off outside active tests.

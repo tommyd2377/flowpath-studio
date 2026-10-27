@@ -7,6 +7,7 @@ import { localAppOrigin, localAppPath } from './local-app-runtime';
 import { cancelProductionOwnerVoice } from './production-voice-runtime';
 import { creationActor, creationReviewStore, creationSafetyEnabled, creationSafetyFixtures } from './creation-runtime';
 import { applicationDatabase } from './application-database';
+import { hostedTesterDemo } from './tester-voice-config';
 import { CreationSafetyError } from './creation-safety';
 
 function firebaseConfig(): FirebasePublicConfig | undefined {
@@ -42,6 +43,7 @@ if (localAppOrigin() && state.flowpathAccountSafetyVersion !== 'creation-safety-
 export const accountServer = state.flowpathAccounts ??= createAccountServer({
   mode,
   creationSafetyEnabled,
+  hostedTesterDemo,
   safetyAdminFixture: creationSafetyFixtures,
   localUnmeteredTesting: () => !!localAppOrigin(),
   validateWaveform: async (request, waveform) => {

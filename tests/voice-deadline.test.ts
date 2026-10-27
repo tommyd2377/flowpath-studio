@@ -160,3 +160,11 @@ test('expiry accepts the exact configured proxy and canonical forwarded host whi
   assert.equal(verified, 1);
   assert.equal(expired, 1);
 });
+
+test('rolling tester leases create distinct deterministic deadline tasks without changing the authenticated endpoint', async () => {
+  const id = randomUUID(), names: string[] = [];
+  const deadline = createVoiceDeadline(config, { now: () => now, verifyIdentity: async () => identity,
+    createTask: async (_url, body) => { names.push(body.task.name); assert.equal(body.task.httpRequest.url, config.endpoint); } }, true);
+  await deadline.schedule(id, now + 45_000); await deadline.schedule(id, now + 75_000); await deadline.schedule(id, now + 75_000);
+  assert.notEqual(names[0], names[1]); assert.equal(names[1], names[2]);
+});

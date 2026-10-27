@@ -96,3 +96,13 @@ test('keyboard navigation reaches section controls and only the visible editor',
   await page.keyboard.press('Tab'); await page.keyboard.press('Tab'); await page.keyboard.press('Tab');
   await expect(page.getByRole('button', { name: 'Apply plugin', exact: true })).toBeFocused();
 });
+
+for (const founder of [false, true]) test(`hosted beta explains ${founder ? 'founder ownership' : 'daily free demo'} without obsolete admin limits`, async ({ page }) => {
+  await workspace(page);
+  await page.route('**/api/account', route => route.fulfill({ json: { mode: 'firebase', hostedTesterDemo: true,
+    user: { uid: 'workspace-fixture', displayName: 'Creator', ...(founder ? { role: 'admin' } : {}) } } }));
+  await page.reload(); await settingsSection(page, 'account');
+  await expect(page.getByRole('switch', { name: 'Admin testing', exact: true })).toHaveCount(0);
+  await expect(page.getByText(founder ? 'Founder access: no personal time limit on your own waveform. The Studio introduction still has a three-minute daily limit.'
+    : 'Your private waveform includes three minutes of voice per day during this free beta. Payments are disabled.', { exact: true })).toBeVisible();
+});

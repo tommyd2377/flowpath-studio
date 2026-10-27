@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { VoicePhase } from '@/components/Waveform';
+import { PUBLIC_GREETING_INSTRUCTIONS } from './voice-config';
 import { monitorAudio, waitForIce } from './voice-session';
 import { createVoiceDiagnostics, type VoiceDiagnosticFinishReason } from './voice-diagnostics';
 import { createLiveTextSession, type LiveTextState } from './live-text-session';
@@ -23,6 +24,9 @@ type VoiceSession = {
   adminEligible?: boolean;
   adminOverride?: boolean;
   adminDeadline?: number;
+  browserControl?: boolean;
+  handledDelegations?: Set<string>;
+  heartbeat?: ReturnType<typeof setTimeout>;
   admissionLimit?: boolean;
   peer?: RTCPeerConnection;
   channel?: RTCDataChannel;
@@ -86,13 +90,14 @@ function dispose(session: VoiceSession, leaving = false): Promise<boolean> {
   clearTimeout(session.setupTimer);
   clearTimeout(session.disconnectTimer);
   clearInterval(session.tick);
+  clearTimeout(session.heartbeat);
   session.stopMonitor?.();
   // End capture immediately, while the event connection can finish its close.
   session.microphone?.getTracks().forEach(track => { track.onended = null; track.enabled = false; track.stop(); });
   if (session.audio) { session.audio.muted = true; session.audio.pause(); }
 
   if (leaving) {
-    if (session.ready && session.channel?.readyState === 'open') {
+    if (!session.browserControl && session.ready && session.channel?.readyState === 'open') {
       try { session.channel.send(JSON.stringify({ type: 'session.close' })); } catch { /* Server closes below. */ }
     }
     session.closePromise = session.requested ? deleteSession(session.id, session.endpoint, session.headers) : Promise.resolve(true);
@@ -102,7 +107,7 @@ function dispose(session: VoiceSession, leaving = false): Promise<boolean> {
 
   session.closePromise = (async () => {
     let finalized = session.finalized;
-    if (!finalized && session.ready && session.channel?.readyState === 'open' && !leaving) {
+    if (!session.browserControl && !finalized && session.ready && session.channel?.readyState === 'open' && !leaving) {
       finalized = await new Promise<boolean>(resolve => {
         const timer = setTimeout(() => resolve(false), 15_000);
         session.acknowledgeClose = () => { clearTimeout(timer); resolve(true); };
@@ -111,7 +116,7 @@ function dispose(session: VoiceSession, leaving = false): Promise<boolean> {
       });
     }
     const serverClosed = session.requested ? await deleteSession(session.id, session.endpoint, session.headers) : true;
-    return session.endpoint.includes('/paid-session') ? serverClosed : finalized || serverClosed;
+    return session.endpoint.includes('/paid-session') || session.browserControl ? serverClosed : finalized || serverClosed;
   })().finally(() => releaseMedia(session));
   return session.closePromise;
 }
@@ -340,8 +345,28 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
           session.acknowledgeClose?.();
           if (alive()) stop('Conversation ended.', 'session_closed');
         } else if (alive() && event.type === 'session.started') {
+          const firstStart = !session.started;
           session.started = true;
+          if (firstStart && session.browserControl) channel.send(JSON.stringify({ type: 'session.instructions.append', event_id: 'flowpath_greeting', delegation_id: null,
+            content: waveformId ? 'Greet the visitor now in English using the saved waveform identity and conversational style. Keep it brief, invite them to talk, then pause and listen. Do not claim unavailable capabilities.' : PUBLIC_GREETING_INSTRUCTIONS }));
           becomeReady();
+        } else if (alive() && session.browserControl && event.type === 'session.delegation.created' && 'delegation' in event) {
+          const delegation = event.delegation as { target?: unknown; id?: unknown };
+          if (delegation?.target === 'client' && typeof delegation.id === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(delegation.id)) {
+            session.handledDelegations ??= new Set();
+            if (!session.handledDelegations.has(delegation.id)) {
+              if (session.handledDelegations.size >= 64) { fail(session, 'The conversation reached its action limit.'); return; }
+              session.handledDelegations.add(delegation.id);
+              channel.send(JSON.stringify({ type: 'session.commentary.append', delegation_id: delegation.id,
+                content: 'That capability is unavailable in this version. No lookup or action was performed. You can continue a conversation using my general knowledge.' }));
+            }
+          }
+        } else if (alive() && session.browserControl && event.type === 'response.event' && 'event' in event) {
+          const backend = event.event as { type?: string; response?: { status?: string } } | null;
+          if (backend && (['error', 'response.failed', 'response.incomplete'].includes(backend.type ?? '')
+            || backend.type === 'response.completed' && ['failed', 'incomplete'].includes(backend.response?.status ?? ''))) {
+            fail(session, 'The voice connection encountered an error. Tap the wave to reconnect.');
+          }
         } else if (alive() && event.type === 'error') {
           fail(session, 'The voice connection encountered an error. Tap the wave to reconnect.');
         }
@@ -388,6 +413,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
         throw new Error('The server returned an invalid voice connection.');
       }
       session.expiresAt = result.expiresAt;
+      session.browserControl = 'browserControl' in result && result.browserControl === true;
       session.adminEligible = 'adminEligible' in result && result.adminEligible === true;
       session.adminOverride = 'adminOverride' in result && result.adminOverride === true;
       session.adminDeadline = 'adminDeadline' in result && typeof result.adminDeadline === 'number' ? result.adminDeadline : undefined;
@@ -402,6 +428,18 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
         if (!remaining) stop('The conversation limit has been reached.', 'limit');
         else if (!session.adminOverride && session.ready && Date.now() - session.lastActivity >= 45_000) stop('Conversation ended after 45 seconds of silence.', 'idle');
       };
+      if (session.browserControl) {
+        const heartbeat = async () => {
+          if (!alive()) return;
+          try {
+            const reply = await fetch(session.endpoint, { method: 'PATCH', headers: { ...session.headers, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sessionId: session.id }), signal: AbortSignal.timeout(10_000) });
+            if (!reply.ok) throw new Error('The voice connection needs to close. Tap the wave to try again after cleanup.');
+            if (alive()) session.heartbeat = setTimeout(() => { void heartbeat(); }, 10_000);
+          } catch { if (alive()) fail(session, 'The voice connection was lost. Tap the wave to try again after cleanup.'); }
+        };
+        session.heartbeat = setTimeout(() => { void heartbeat(); }, 10_000);
+      }
       session.tick = setInterval(tick, 1_000);
       tick();
     } catch (error) {

@@ -1085,3 +1085,40 @@ for (const viewport of [
   await page.getByRole('button', { name: 'End conversation', exact: true }).click();
   await expect(page.locator('#voice-status')).toHaveText('');
 });
+
+test('hosted browser control greets once, keeps voice during heartbeats and waits for server-confirmed close', async ({ page }) => {
+  await fakeMedia(page); await page.clock.install();
+  const calls: string[] = [];
+  await page.route('**/api/session*', async route => {
+    const method = route.request().method(); calls.push(method);
+    if (method === 'GET') return route.fulfill({ json: { enabled: true } });
+    if (method === 'POST') return route.fulfill({ json: { sessionId: route.request().postDataJSON().sessionId, sdp: 'v=0\r\n',
+      expiresAt: Date.now() + 180_000, browserControl: true, heartbeatMs: 10_000, adminOverride: false } });
+    return route.fulfill({ json: method === 'DELETE' ? { closed: true } : { expiresAt: Date.now() + 150_000 } });
+  });
+  await page.goto('/'); await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await emit(page, { type: 'session.started' });
+  expect((await tracker(page)).sentEvents.map(value => JSON.parse(value).type).filter(type => type === 'session.instructions.append')).toHaveLength(1);
+  await page.clock.fastForward(11_000); await expect.poll(() => calls.filter(value => value === 'PATCH').length).toBe(1);
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  await expect.poll(() => calls.filter(value => value === 'DELETE').length).toBe(1);
+  await expect.poll(async () => (await tracker(page)).stoppedTracks).toBeGreaterThan(0);
+  await page.clock.fastForward(30_000); expect(calls.filter(value => value === 'PATCH')).toHaveLength(1);
+  expect((await tracker(page)).sentEvents.map(value => JSON.parse(value).type)).not.toContain('session.close');
+});
+
+test('failed hosted heartbeat stops capture and requests cleanup without creating a replacement session', async ({ page }) => {
+  await fakeMedia(page); await page.clock.install(); const calls: string[] = [];
+  await page.route('**/api/session*', route => {
+    const method = route.request().method(); calls.push(method);
+    if (method === 'GET') return route.fulfill({ json: { enabled: true } });
+    if (method === 'POST') return route.fulfill({ json: { sessionId: route.request().postDataJSON().sessionId, sdp: 'v=0\r\n', expiresAt: Date.now() + 180_000, browserControl: true } });
+    return route.fulfill({ status: method === 'PATCH' ? 503 : 200, json: { closed: true } });
+  });
+  await page.goto('/'); await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await page.clock.fastForward(11_000); await expect.poll(() => calls.filter(value => value === 'DELETE').length).toBe(1);
+  await expect(page.locator('#voice-status')).toContainText('voice connection was lost');
+  expect((await tracker(page)).stoppedTracks).toBeGreaterThan(0); expect(calls.filter(value => value === 'POST')).toHaveLength(1);
+});

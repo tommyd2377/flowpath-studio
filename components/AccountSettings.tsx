@@ -20,7 +20,7 @@ import BrandLoader from './BrandLoader';
 import WaveformSettingsPreview from './WaveformSettingsPreview';
 import { AudioLines, BookOpen, LockKeyhole, MessageSquareText, Puzzle, Settings2, SlidersHorizontal, TextCursorInput, ArrowUpRight } from 'lucide-react';
 
-type Account = { mode: AccountMode; user: AccountUser | null; openRegistration?: boolean; creationSafetyEnabled?: boolean; safetyAdminFixture?: boolean; localUnmeteredTesting?: boolean };
+type Account = { mode: AccountMode; user: AccountUser | null; openRegistration?: boolean; creationSafetyEnabled?: boolean; safetyAdminFixture?: boolean; localUnmeteredTesting?: boolean; hostedTesterDemo?: boolean };
 
 function normalizedColor(value: string): string | null {
   const match = /^#?([0-9a-f]{6})$/i.exec(value.trim());
@@ -292,7 +292,8 @@ export default function AccountSettings() {
           </form>
           <section className="settings-panel" hidden={section !== 'sharing'} aria-labelledby="sharing-heading"><div className="settings-section-heading"><h2 id="sharing-heading">Sharing & usage</h2><p>Control access and manage the existing publishing options.</p></div><div className="settings-private-note"><LockKeyhole aria-hidden="true" /><div><strong>Your personal waveform is private.</strong><p className="field-help">Your settings and personal address stay private. Publishing is a separate, explicit choice when available.</p></div></div>{waveform ? <PaidSettings key={waveform.id} waveformId={waveform.id} unsavedDraft={dirty} /> : <p className="field-help">Save your draft to see its available usage controls.</p>}</section>
           <section className="settings-panel" hidden={section !== 'account'} aria-labelledby="account-heading"><div className="settings-section-heading"><h2 id="account-heading">Account & tools</h2><p>{account.user.role === 'admin' ? 'Your account and founder controls.' : 'Manage your account.'}</p></div><p>Signed in as {account.user.displayName}.</p>
-        {account.user.role === 'admin' && <div>
+        {account.hostedTesterDemo && <p className="field-help">{account.user.role === 'admin' ? 'Founder access: no personal time limit on your own waveform. The Studio introduction still has a three-minute daily limit.' : 'Your private waveform includes three minutes of voice per day during this free beta. Payments are disabled.'}</p>}
+        {account.user.role === 'admin' && !account.hostedTesterDemo && <div>
           <label className="admin-testing-toggle" htmlFor="admin-testing"><input id="admin-testing" type="checkbox" role="switch" checked={adminTesting} disabled={busy} onChange={event => setAdminTesting(event.target.checked)} aria-describedby="admin-testing-help" /> Admin testing</label>
           <p id="admin-testing-help" className="field-help">{account.localUnmeteredTesting
             ? 'Local founder testing has no daily, start-count, elapsed-time or silence quota. End conversations when finished. Turn off to experience regular-user limits. Save to apply on your next conversation.'

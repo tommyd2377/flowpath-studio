@@ -1,6 +1,6 @@
 # This launch profile is for the new FlowPath Studio project only.
-# Authorized website/settings release: zero idle instances; hosted voice stays disabled.
-# Hosted voice also remains gated in code pending cutoff/recovery acceptance.
+# Hosted tester-demo candidate: zero idle instances; browser-primary voice control.
+# Deployment requires the final intro-access choice and approved release verification.
 runConfig:
   cpu: 1
   memoryMiB: 512
@@ -35,11 +35,20 @@ env:
     value: standard
     availability: [RUNTIME]
   - variable: FLOWPATH_LIVE_ENABLED
-    value: "0"
+    value: "1"
     availability: [RUNTIME]
-  # This release has no hosted inference, ingestion, checkout or paid voice activation.
+  - variable: FLOWPATH_HOSTED_TESTER_DEMO
+    value: "1"
+    availability: [RUNTIME]
+  - variable: FLOWPATH_TESTER_ALLOWANCE_PERIOD
+    value: daily
+    availability: [RUNTIME]
+  # Existing creation policy/budget; Knowledge ingestion and customer charging remain off.
   - variable: FLOWPATH_CREATION_SAFETY_ENABLED
-    value: "0"
+    value: "1"
+    availability: [RUNTIME]
+  - variable: FLOWPATH_CREATION_POLICY_PRESET
+    value: conservative-v3
     availability: [RUNTIME]
   - variable: FLOWPATH_PAID_TEST_ENABLED
     value: "0"
@@ -51,6 +60,9 @@ env:
   - variable: FLOWPATH_VOICE_ACCESS
     value: signed-in
     availability: [RUNTIME]
+  # Legacy-policy configuration is retained for cleanup/local compatibility.
+  # Hosted tester admission uses its separate 180-second daily UID allowance;
+  # these historical reservation totals do not impose a daily OpenAI guard.
   - variable: FLOWPATH_VOICE_OWNER_DAILY_SECONDS
     value: "900"
     availability: [RUNTIME]

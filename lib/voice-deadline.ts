@@ -73,7 +73,7 @@ async function sessionBody(request: Request): Promise<string> {
 }
 
 /** The queue survives process restarts. It only retries closure, never paid creation. */
-export function createVoiceDeadline(config: DeadlineConfig | null, dependencies: Dependencies) {
+export function createVoiceDeadline(config: DeadlineConfig | null, dependencies: Dependencies, rolling = false) {
   const now = dependencies.now ?? Date.now;
   return {
     async schedule(id: string, expiresAt: number) {
@@ -81,7 +81,7 @@ export function createVoiceDeadline(config: DeadlineConfig | null, dependencies:
         || expiresAt <= now() || expiresAt > now() + VOICE_SESSION_SECONDS * 1000) throw new Error('Voice deadline is unavailable');
       await dependencies.createTask(`https://cloudtasks.googleapis.com/v2/${config.queuePath}/tasks`, {
         task: {
-          name: `${config.queuePath}/tasks/voice-${id.toLowerCase()}`,
+          name: `${config.queuePath}/tasks/voice-${id.toLowerCase()}${rolling ? `-${expiresAt}` : ''}`,
           scheduleTime: new Date(expiresAt).toISOString(), dispatchDeadline: '30s',
           httpRequest: {
             url: config.endpoint, httpMethod: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -115,20 +115,26 @@ export function createVoiceDeadline(config: DeadlineConfig | null, dependencies:
 
 let taskAuth: GoogleAuth | undefined;
 let verifier: OAuth2Client | undefined;
-function productionDeadline() {
+function productionDeadline(rolling = false) {
   const config = process.env.NODE_ENV === 'production' ? voiceDeadlineConfig(process.env) : null;
   return createVoiceDeadline(config, {
     async createTask(url, task) {
       taskAuth ??= new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
       // ADC stays inside Google's client. No token or credential is copied or logged.
-      await taskAuth.request({ url, method: 'POST', data: task, timeout: 10_000, retry: false });
+      try { await taskAuth.request({ url, method: 'POST', data: task, timeout: 10_000, retry: false }); }
+      catch (error) {
+        // A concurrent identical lease task is already durable, not a new attempt.
+        if (!rolling || (error as { response?: { status?: number } }).response?.status !== 409) throw error;
+      }
     },
     async verifyIdentity(token, audience) {
       verifier ??= new OAuth2Client();
       return (await verifier.verifyIdToken({ idToken: token, audience })).getPayload();
     },
-  });
+  }, rolling);
 }
 export const productionVoiceDeadlineConfigured = () => process.env.NODE_ENV === 'production' && !!voiceDeadlineConfig(process.env);
 export const scheduleProductionVoiceDeadline = (id: string, expiresAt: number) => productionDeadline().schedule(id, expiresAt);
 export const handleProductionVoiceExpiry = (request: Request, expire: (id: string) => Promise<boolean>) => productionDeadline().handle(request, expire);
+
+export const scheduleTesterVoiceDeadline = (id: string, expiresAt: number) => productionDeadline(true).schedule(id, expiresAt);
