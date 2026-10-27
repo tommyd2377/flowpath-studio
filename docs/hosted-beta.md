@@ -1,6 +1,6 @@
 # Invitation-only hosted beta
 
-October 27, 2026. The deployed website/settings release is `53a3ede`; `20e054f` records its verification. The `codex/hosted-tester-demo` candidate below is separate until a rollout is recorded.
+October 27, 2026. The code-gated demo source `3b93a6e` is deployed as `flowpath-studio-build-2026-10-27-002`. See [the release receipt](firebase-launch.md) for exact source, validation, cost configuration and manual acceptance. The earlier website-only release was `53a3ede`.
 
 ## Current requested policy
 
@@ -46,3 +46,5 @@ Final `npm run check` passed **373 tests**, lint, types and the production build
 One receiver is attached before SDP is released, so a client cannot simply omit a later connection notification to evade metering. The provider’s `session.started` is the trigger; only after its replacement deadline exists is that observation durably committed and sent to the browser. A second request to claim startup is rejected, and heartbeat JSON cannot assert a successful connection. The HTTP body remains open through this short startup, then the sideband is disposed. This relies on streaming delivery through App Hosting, which is still a manual hosted acceptance item. No provider hard expiry is invented.
 
 The separate coordinator reported approximately $14.46/$20 gross calendar-month Cloud Run cap consumption and about $5.54 reported headroom at its last inspection. These are delayed month-to-date figures, not this release’s cost or a live remaining-balance guarantee. The existing cap must remain unchanged; it can pause the service, and it excludes Firestore, builds, storage, tasks and OpenAI. No daily OpenAI spend guard is added.
+
+Final rollout: `3b93a6e`, 100% traffic on `flowpath-studio-build-2026-10-27-002`; 373 source tests, 83 standard browser checks and eight synthetic paid-preview checks passed. Unpaid readiness passed. Real voice/audio and hosted provider acceptance are manual and unverified. No local server remains running.
