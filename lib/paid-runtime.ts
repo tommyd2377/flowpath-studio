@@ -16,7 +16,11 @@ const localStripeOrigin = localStripeSandboxOrigin(process.env);
 export const paidEnabled = paidFixtures || !!localStripeOrigin || process.env.FLOWPATH_PAID_TEST_ENABLED === '1' && process.env.FLOWPATH_ACCOUNT_MODE === 'firebase';
 // No live processing or paid voice switch: a documented bounded provider cutoff is still required.
 export const paidVoiceReady = () => paidFixtures;
-const shared = globalThis as typeof globalThis & { flowpathPaidStore?: PaidStore };
+const shared = globalThis as typeof globalThis & { flowpathPaidStore?: PaidStore; flowpathPaidSafetyVersion?: string };
+if (localAppOrigin() && shared.flowpathPaidSafetyVersion !== 'creation-safety-v3') {
+  shared.flowpathPaidStore = undefined;
+  shared.flowpathPaidSafetyVersion = 'creation-safety-v3';
+}
 export function getPaidStore() {
   if (!paidEnabled) throw new Error('Paid test preview is disabled');
   return shared.flowpathPaidStore ??= createPaidStore(applicationDatabase(), Date.now, {

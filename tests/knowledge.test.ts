@@ -1,11 +1,44 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createKnowledgeStore, type KnowledgeScope } from '../lib/knowledge-store';
+import { createKnowledgeStore, knowledgeDocumentForReview, knowledgeReviewCandidate, type KnowledgeScope } from '../lib/knowledge-store';
+import { createCreationReviewStore } from '../lib/creation-review';
+import { CONSERVATIVE_CREATION_POLICY } from '../lib/creation-policy';
+import { CREATION_SAFETY_CATEGORIES, CreationSafetyError, type CreationReviewerResult } from '../lib/creation-safety';
 import { createKnowledgeServer } from '../lib/knowledge-server';
 import { openAIKnowledgeProvider, type KnowledgeProvider } from '../lib/knowledge-provider';
 import type { VoiceDatabase } from '../lib/production-voice-store';
 
 const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', second = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+
+test('legacy documents require explicit review; exact approvals guard selection/search and policy changes', async () => {
+  const db = database(), h = setup(); let calls = 0, policy = structuredClone(CONSERVATIVE_CREATION_POLICY);
+  const reviews = createCreationReviewStore(db, { mode: 'fixture', policy: () => policy,
+    verifyOwner: async () => {}, verifyAdmin: async () => {},
+    validateCandidate: async (tx, uid, candidate) => { if (candidate.document && !await knowledgeDocumentForReview(tx, uid, candidate.document)) throw new CreationSafetyError('Removed'); },
+    reviewer: { mode: 'fixture', review: async () => { calls++; return { findings: Object.fromEntries(CREATION_SAFETY_CATEGORIES.map(key => [key, 'clear'])) as CreationReviewerResult['findings'] }; } },
+  });
+  const legacy = createKnowledgeStore(db, h.provider, () => 100000);
+  await legacy.upload(h.scope, id, h.file()); await legacy.refresh(h.scope);
+  const store = createKnowledgeStore(db, h.provider, () => 200000, {
+    review: async (scope, doc) => { const requested = await reviews.request({ uid: scope.uid, accountSessionId: 'synthetic' }, knowledgeReviewCandidate(doc));
+      return (requested.needsReview ? await reviews.runReview(requested.record) : requested.record).status; },
+    assertAllowed: async (tx, scope, doc) => { await reviews.requireAllowed(tx, scope.uid, knowledgeReviewCandidate(doc)); },
+  });
+  assert.equal((await store.view(h.scope)).documents[0].status, 'review-required');
+  assert.equal(await store.enabled(h.scope), false);
+  await assert.rejects(store.select(h.scope, id, true)); await assert.rejects(store.search(h.scope, 'hours'));
+  assert.equal((await store.refresh(h.scope)).documents[0].status, 'review-required'); assert.equal(calls, 0, 'background refresh does not bill for old documents');
+  assert.equal((await store.refresh(h.scope, true)).documents[0].status, 'ready'); assert.equal(calls, 1);
+  assert.equal(await store.enabled(h.scope), true); assert.equal((await store.search(h.scope, 'hours')).passages.length, 1);
+  policy = { ...policy, version: 'changed-policy' };
+  assert.equal(await store.enabled(h.scope), false); await assert.rejects(store.search(h.scope, 'hours'));
+  assert.equal(calls, 1);
+  await store.upload(h.scope, second, new File(['A new approved reference.'], 'new.txt', { type: 'text/plain' }));
+  await store.refresh(h.scope);
+  const result = await store.search(h.scope, 'reference');
+  assert.equal(result.passages.length, 1); assert.equal(result.passages[0].filename, 'new.txt');
+  assert.equal(calls, 2, 'upload review is reused after indexing, and old unreviewed files remain excluded');
+});
 function database(): VoiceDatabase {
   let rows = new Map<string, Record<string, unknown>>(), pending = Promise.resolve();
   return { async transaction(work) {

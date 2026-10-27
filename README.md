@@ -14,6 +14,8 @@ GPT-Live handles speech and delegates factual questions and text actions to **GP
 
 ## Local preview
 
+The full localhost app also runs [creation review](docs/creation-safety.md) for names, instructions, portraits and Knowledge. Disclosed historical characters can be for conversation or fun; no teaching role is required. Real people must have been dead for at least five years. GPT-6 Luna checks exact versions; uncertain cases wait for the founder. This local activation includes existing content and has its own 50¢ cumulative review budget per waveform. It does not restore local voice-testing quotas or activate hosted enforcement.
+
 Use Node.js 24:
 
 ```sh

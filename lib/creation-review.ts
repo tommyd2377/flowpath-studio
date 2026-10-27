@@ -3,7 +3,7 @@ import type { VoiceDatabase, VoiceTransaction } from './production-voice-store';
 import {
   canonicalCreationCandidate, CreationSafetyError, creationContentDigest, creationPolicyDigest, creationSafetyBinding, evaluateCreationReview, sameCreationBinding,
   type CanonicalCreationCandidate, type CreationCandidate, type CreationReviewerResult, type CreationSafetyBinding,
-  CREATION_SAFETY_CATEGORIES, type CreationSafetyCategory, type CreationSafetyPolicy, type CreationSafetyStatus,
+  CREATION_SAFETY_CATEGORIES, CreationReviewUnavailable, type ReviewIssue, type CreationSafetyCategory, type CreationSafetyPolicy, type CreationSafetyStatus,
 } from './creation-safety';
 
 export type CreationActor = { uid: string; accountSessionId: string };
@@ -13,20 +13,23 @@ export type CreationReviewRecord = CreationReviewProof & {
   attemptedAt: number | null; categories: CreationSafetyCategory[];
   reason: 'review-pending' | 'reviewed' | 'review-unavailable' | 'manual-decision';
   decision?: { actorUid: string; decision: 'allowed' | 'blocked'; decidedAt: number };
+  issue?: ReviewIssue;
 };
 export type CreationReviewer = {
   mode: 'production' | 'fixture';
-  review(candidate: CanonicalCreationCandidate, policy: CreationSafetyPolicy): Promise<CreationReviewerResult>;
+  review(candidate: CanonicalCreationCandidate, policy: CreationSafetyPolicy, context?: { ownerUid: string; reviewId: string }): Promise<CreationReviewerResult>;
 };
 export type CreationReviewOptions = {
   mode: 'production' | 'fixture'; policy(): CreationSafetyPolicy | null;
   verifyOwner(tx: VoiceTransaction, actor: CreationActor): Promise<void>;
   verifyAdmin(tx: VoiceTransaction, actor: CreationActor): Promise<void>;
   reviewer?: CreationReviewer | null; now?: () => number;
+  validateCandidate?(tx: VoiceTransaction, ownerUid: string, candidate: CanonicalCreationCandidate): Promise<void>;
 };
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
-const headPath = (uid: string) => `creationSafetyOwners/${hash(uid)}`;
+const headPath = (uid: string, documentId?: string) => `creationSafetyOwners/${hash(documentId ? `${uid}:document:${documentId}` : uid)}`;
 const reviewPath = (id: string) => `creationSafetyReviews/${id}`;
+const approvedVersionPath = (uid: string, binding: CreationSafetyBinding) => `creationSafetyVersions/${hash(`${uid}:${binding.digest}:${binding.policyDigest}`)}`;
 const queuePath = 'creationSafetyQueue/manual';
 const queueLimit = 200;
 const validId = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f-]{36}$/.test(value);
@@ -75,12 +78,12 @@ export function createCreationReviewStore(database: VoiceDatabase, options: Crea
     // Snapshot policy so an in-flight reviewer cannot mutate or inherit later configuration.
     return structuredClone(selected);
   }
-  async function current(tx: VoiceTransaction, ownerUid: string) {
-    const head = await tx.get(headPath(ownerUid));
+  async function current(tx: VoiceTransaction, ownerUid: string, documentId?: string) {
+    const head = await tx.get(headPath(ownerUid, documentId));
     if (!head) return null;
     if (!validId(head.reviewId)) throw new CreationSafetyError('Invalid creation safety owner state.', 503);
     const record = recordFrom(await tx.get(reviewPath(head.reviewId)));
-    if (!record || record.ownerUid !== ownerUid || record.reviewId !== head.reviewId) {
+    if (!record || record.ownerUid !== ownerUid || record.reviewId !== head.reviewId || record.candidate.document?.id !== documentId) {
       throw new CreationSafetyError('Invalid creation safety ownership.', 503);
     }
     return record;
@@ -88,7 +91,8 @@ export function createCreationReviewStore(database: VoiceDatabase, options: Crea
   async function requireAllowed(tx: VoiceTransaction, ownerUid: string, candidate: CreationCandidate,
     expectedBinding?: CreationSafetyBinding): Promise<CreationReviewProof> {
     const binding = creationSafetyBinding(candidate, policy());
-    const record = await current(tx, ownerUid);
+    await options.validateCandidate?.(tx, ownerUid, canonicalCreationCandidate(candidate));
+    const record = await current(tx, ownerUid, candidate.document?.id);
     if (!record || record.status !== 'allowed' || !sameCreationBinding(record, binding)
       || expectedBinding && !sameCreationBinding(expectedBinding, binding)) {
       throw new CreationSafetyError('This exact content needs an allowed safety review before continuing.');
@@ -97,25 +101,57 @@ export function createCreationReviewStore(database: VoiceDatabase, options: Crea
   }
   return {
     requireAllowed,
-    async get(actor: CreationActor) {
+    async get(actor: CreationActor, documentId?: string) {
       actorValid(actor);
-      return database.transaction(async tx => { await options.verifyOwner(tx, actor); return current(tx, actor.uid); });
+      if (documentId !== undefined && !validId(documentId)) throw new CreationSafetyError('Invalid document.', 400);
+      return database.transaction(async tx => {
+        await options.verifyOwner(tx, actor); const record = await current(tx, actor.uid, documentId);
+        if (record && !sameCreationBinding(record, creationSafetyBinding(record.candidate, policy()))) throw new CreationSafetyError('The review policy changed. Review this version again.');
+        return record;
+      });
+    },
+    async getForAdmin(actor: CreationActor, id: string) {
+      actorValid(actor);
+      return database.transaction(async tx => {
+        await options.verifyAdmin(tx, actor);
+        if (!validId(id)) throw new CreationSafetyError('Invalid review.', 400);
+        const record = recordFrom(await tx.get(reviewPath(id)));
+        if (!record || !['pending', 'manual-review'].includes(record.status)
+          || (await current(tx, record.ownerUid, record.candidate.document?.id))?.reviewId !== id) throw new CreationSafetyError('This review is no longer current.', 409);
+        return record;
+      });
     },
     async request(actor: CreationActor, input: CreationCandidate) {
       actorValid(actor);
       const candidate = canonicalCreationCandidate(input);
       return database.transaction(async tx => {
         await options.verifyOwner(tx, actor);
-        const binding = creationSafetyBinding(candidate, policy());
-        const prior = await current(tx, actor.uid);
+        await options.validateCandidate?.(tx, actor.uid, candidate);
+        const selected = policy(), binding = creationSafetyBinding(candidate, selected);
+        const prior = await current(tx, actor.uid, candidate.document?.id);
         if (prior && sameCreationBinding(prior, binding)) return { record: prior, needsReview: false };
+        const reference = await tx.get(approvedVersionPath(actor.uid, binding));
+        if (reference && !validId(reference.reviewId)) throw new CreationSafetyError('Invalid saved review reference.', 503);
+        const reusable = reference && recordFrom(await tx.get(reviewPath(reference.reviewId as string)));
+        if (reference && (!reusable || reusable.ownerUid !== actor.uid || reusable.candidate.document?.id !== candidate.document?.id
+          || !sameCreationBinding(reusable, binding))) throw new CreationSafetyError('Invalid saved review binding.', 503);
+        if (reusable && reusable.status !== 'allowed') throw new CreationSafetyError('The previous approval is no longer valid.');
         const queue = queueFrom(await tx.get(queuePath)).filter(id => id !== prior?.reviewId);
-        if (queue.length >= queueLimit) throw new CreationSafetyError('The creation review queue is full. Please try later.', 503);
+        if (!reusable && queue.length >= queueLimit) throw new CreationSafetyError('The creation review queue is full. Please try later.', 503);
+        // Index only an actual completed approval, never a client verdict or missing legacy review.
+        if (prior?.status === 'allowed' && sameCreationBinding(prior, creationSafetyBinding(prior.candidate, selected))) {
+          tx.set(approvedVersionPath(actor.uid, prior), { reviewId: prior.reviewId });
+        }
+        if (reusable) {
+          tx.set(headPath(actor.uid, candidate.document?.id), { reviewId: reusable.reviewId });
+          tx.set(queuePath, { reviewIds: queue });
+          return { record: reusable, needsReview: false };
+        }
         const timestamp = now();
         const record: CreationReviewRecord = { ...binding, ownerUid: actor.uid, reviewId: randomUUID(), candidate,
           status: 'pending', createdAt: timestamp, updatedAt: timestamp, attemptedAt: null, categories: [], reason: 'review-pending' };
         tx.set(reviewPath(record.reviewId), record);
-        tx.set(headPath(actor.uid), { reviewId: record.reviewId });
+        tx.set(headPath(actor.uid, candidate.document?.id), { reviewId: record.reviewId });
         tx.set(queuePath, { reviewIds: [...queue, record.reviewId] });
         return { record, needsReview: true };
       });
@@ -126,11 +162,12 @@ export function createCreationReviewStore(database: VoiceDatabase, options: Crea
       const claim = await database.transaction(async tx => {
         if (!validId(expected.reviewId)) throw new CreationSafetyError('Unknown creation review.', 404);
         const record = recordFrom(await tx.get(reviewPath(expected.reviewId)));
-        const active = record && await current(tx, record.ownerUid);
+        const active = record && await current(tx, record.ownerUid, record.candidate.document?.id);
         if (!record || record.ownerUid !== expected.ownerUid || !sameCreationBinding(record, expected)
           || active?.reviewId !== record.reviewId || !sameCreationBinding(record, creationSafetyBinding(record.candidate, selected))) {
           throw new CreationSafetyError('This review is stale.');
         }
+        await options.validateCandidate?.(tx, record.ownerUid, record.candidate);
         if (record.status !== 'pending' || record.attemptedAt !== null) return { record, claimed: false };
         const claimed = { ...record, attemptedAt: now(), updatedAt: now() };
         tx.set(reviewPath(record.reviewId), claimed);
@@ -140,23 +177,25 @@ export function createCreationReviewStore(database: VoiceDatabase, options: Crea
       const reviewer = options.reviewer && (options.mode === 'fixture' || options.reviewer.mode !== 'fixture') ? options.reviewer : null;
       let result: unknown = null;
       let unavailable = !reviewer;
+      let issue: ReviewIssue | undefined;
       if (reviewer) {
-        try { result = await reviewer.review(structuredClone(claim.record.candidate), structuredClone(selected)); }
-        catch { unavailable = true; }
+        try { result = await reviewer.review(structuredClone(claim.record.candidate), structuredClone(selected), { ownerUid: claim.record.ownerUid, reviewId: claim.record.reviewId }); }
+        catch (error) { unavailable = true; issue = error instanceof CreationReviewUnavailable ? error.issue : 'provider'; }
       }
       return database.transaction(async tx => {
         const record = recordFrom(await tx.get(reviewPath(expected.reviewId)));
-        const active = record && await current(tx, record.ownerUid);
+        const active = record && await current(tx, record.ownerUid, record.candidate.document?.id);
         const queue = queueFrom(await tx.get(queuePath));
         if (!record || active?.reviewId !== record.reviewId || record.ownerUid !== expected.ownerUid
           || !sameCreationBinding(record, expected)
           || !sameCreationBinding(record, creationSafetyBinding(record.candidate, policy()))) {
           throw new CreationSafetyError('This review is stale.');
         }
+        await options.validateCandidate?.(tx, record.ownerUid, record.candidate);
         if (record.status !== 'pending') return record;
         const decision = evaluateCreationReview(result, selected);
         const completed: CreationReviewRecord = { ...record, ...decision, updatedAt: now(),
-          reason: unavailable ? 'review-unavailable' : 'reviewed' };
+          reason: unavailable ? 'review-unavailable' : 'reviewed', ...(issue ? { issue } : {}) };
         tx.set(reviewPath(record.reviewId), completed);
         tx.set(queuePath, { reviewIds: completed.status === 'manual-review' ? queue : queue.filter(id => id !== record.reviewId) });
         return completed;
@@ -164,12 +203,20 @@ export function createCreationReviewStore(database: VoiceDatabase, options: Crea
     },
     async listManual(actor: CreationActor): Promise<CreationReviewRecord[]> {
       actorValid(actor);
+      const selected = policy();
       return database.transaction(async tx => {
         await options.verifyAdmin(tx, actor);
         const queue = queueFrom(await tx.get(queuePath));
         const rows = await Promise.all(queue.map(id => tx.get(reviewPath(id))));
-        return rows.map(recordFrom).filter((record): record is CreationReviewRecord => !!record
-          && (record.status === 'pending' || record.status === 'manual-review'));
+        const records = rows.map(recordFrom).filter((record): record is CreationReviewRecord => !!record
+          && (record.status === 'pending' || record.status === 'manual-review')
+          && sameCreationBinding(record, creationSafetyBinding(record.candidate, selected)));
+        if (records.length !== queue.length) tx.set(queuePath, { reviewIds: records.map(record => record.reviewId) });
+        return records.map(record => {
+          if (record.status !== 'pending' || now() - (record.attemptedAt ?? record.createdAt) < 120_000) return record;
+          const recovered: CreationReviewRecord = { ...record, status: 'manual-review', issue: 'abandoned', reason: 'review-unavailable', updatedAt: now() };
+          tx.set(reviewPath(record.reviewId), recovered); return recovered;
+        });
       });
     },
     async decide(actor: CreationActor, expected: CreationReviewProof & { decision: 'allowed' | 'blocked' }) {
@@ -179,11 +226,12 @@ export function createCreationReviewStore(database: VoiceDatabase, options: Crea
         await options.verifyAdmin(tx, actor);
         if (!validId(expected.reviewId)) throw new CreationSafetyError('Unknown creation review.', 404);
         const record = recordFrom(await tx.get(reviewPath(expected.reviewId)));
-        const active = record && await current(tx, record.ownerUid);
+        const active = record && await current(tx, record.ownerUid, record.candidate.document?.id);
         const queue = queueFrom(await tx.get(queuePath));
         if (!record || record.ownerUid !== expected.ownerUid || active?.reviewId !== record.reviewId
           || !sameCreationBinding(record, expected)
           || !sameCreationBinding(record, creationSafetyBinding(record.candidate, policy()))) throw new CreationSafetyError('This review is stale.');
+        await options.validateCandidate?.(tx, record.ownerUid, record.candidate);
         if (record.status !== 'manual-review') throw new CreationSafetyError('Only content awaiting manual review can receive a manual decision.');
         const timestamp = now();
         const completed: CreationReviewRecord = { ...record, status: expected.decision, updatedAt: timestamp,

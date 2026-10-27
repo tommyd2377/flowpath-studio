@@ -5,10 +5,15 @@ import { createCreationReviewStore, type CreationActor } from './creation-review
 import { createFixtureCreationReviewer } from './creation-safety-fixtures';
 import { CREATION_SAFETY_CATEGORIES, CreationSafetyError, type CreationSafetyPolicy } from './creation-safety';
 import type { VoiceTransaction } from './production-voice-store';
+import { localAppOrigin } from './local-app-runtime';
+import { CONSERVATIVE_CREATION_POLICY } from './creation-policy';
+import { createLunaCreationReviewer, type ReviewFile } from './creation-luna-reviewer';
+import { createReviewBudget } from './creation-review-budget';
+import { knowledgeDocumentForReview } from './knowledge-store';
 
 export type CreationIdentity = { owner: AccountUser; mode: AccountMode; cookie: string; accountSessionId?: string; isCurrent(): boolean | Promise<boolean> };
 export const creationSafetyFixtures = process.env.NODE_ENV === 'development' && process.env.FLOWPATH_ACCOUNT_MODE === 'local' && process.env.FLOWPATH_SAFETY_FIXTURES === '1';
-export const creationSafetyEnabled = () => creationSafetyFixtures || process.env.FLOWPATH_CREATION_SAFETY_ENABLED === '1';
+export const creationSafetyEnabled = () => creationSafetyFixtures || !!localAppOrigin() || process.env.FLOWPATH_CREATION_SAFETY_ENABLED === '1';
 export const creationActor = (identity: CreationIdentity): CreationActor => ({ uid: identity.owner.uid, accountSessionId: identity.accountSessionId ?? accountSessionId(identity.cookie) });
 
 function policy(): CreationSafetyPolicy | null {
@@ -16,14 +21,17 @@ function policy(): CreationSafetyPolicy | null {
   if (creationSafetyFixtures) return { version: 'local-fixture-v1', categories: Object.fromEntries(CREATION_SAFETY_CATEGORIES.map(key => [key, 'block'])) as CreationSafetyPolicy['categories'] };
   try { return process.env.FLOWPATH_CREATION_POLICY_JSON ? JSON.parse(process.env.FLOWPATH_CREATION_POLICY_JSON) : null; } catch { return null; }
 }
-export function creationReviewStore(identity?: CreationIdentity) {
+export function creationReviewStore(identity?: CreationIdentity, file?: ReviewFile) {
   const verifyOwner = async (tx: VoiceTransaction, actor: CreationActor) => {
     if (!identity || identity.owner.uid !== actor.uid || creationActor(identity).accountSessionId !== actor.accountSessionId
       || !await identity.isCurrent()) throw new CreationSafetyError('Sign in again to continue.', 403);
     if (identity.mode === 'firebase' && !activeAccountSession(await tx.get(`${ACCOUNT_SESSION_COLLECTION}/${actor.accountSessionId}`), actor.uid)) throw new CreationSafetyError('Sign in again to continue.', 403);
   };
   return createCreationReviewStore(applicationDatabase(), {
-    mode: creationSafetyFixtures ? 'fixture' : 'production', policy,
+    mode: creationSafetyFixtures ? 'fixture' : 'production', policy: () => localAppOrigin() ? CONSERVATIVE_CREATION_POLICY : policy(),
+    validateCandidate: async (tx, uid, candidate) => {
+      if (candidate.document && !await knowledgeDocumentForReview(tx, uid, candidate.document)) throw new CreationSafetyError('This document was removed or changed. A new review is required.');
+    },
     verifyOwner,
     verifyAdmin: async (tx, actor) => {
       await verifyOwner(tx, actor);
@@ -35,6 +43,7 @@ export function creationReviewStore(identity?: CreationIdentity) {
       if (/\[fixture:blocked\]|\b(?:Adolf Hitler|Osama bin Laden)\b/i.test(text)) findings['extremist-impersonation'] = 'violation';
       else if (/\[fixture:manual\]/i.test(text)) findings['fraud-impersonation'] = 'uncertain';
       return { findings };
-    }) : null,
+    }) : localAppOrigin() ? createLunaCreationReviewer({ key: () => process.env.OPENAI_API_KEY,
+      budget: createReviewBudget(applicationDatabase()), file }) : null,
   });
 }

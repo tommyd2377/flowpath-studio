@@ -36,7 +36,7 @@ export default function KnowledgeSettings() {
     const invalidate = () => { generation.current++; };
     return () => { invalidate(); channel?.close(); window.removeEventListener('flowpath-account-change', load); };
   }, [accept]);
-  const preparing = !!view?.documents.some(d => d.status === 'preparing' || d.status === 'uploading');
+  const preparing = !!view?.documents.some(d => d.status === 'preparing' || d.status === 'uploading' || d.status === 'reviewing');
   useEffect(() => {
     if (!preparing || busy) return;
     const controller = new AbortController(), expected = generation.current;
@@ -98,7 +98,7 @@ export default function KnowledgeSettings() {
         {!view.documents.length && <div className="knowledge-empty"><FileText aria-hidden="true" /><p>Your knowledge library starts here.</p><span>Ready documents become available in your next conversation.</span></div>}
         {view.documents.map(doc => <article className="knowledge-document" key={doc.id}>
           <FileText aria-hidden="true" /><div className="knowledge-document__body"><h2>{doc.filename}</h2>
-            <p role="status">{doc.status === 'ready' ? 'Ready' : doc.status === 'preparing' ? 'Preparing' : doc.status === 'uploading' ? 'Uploading' : doc.status === 'removing' ? 'Removal pending' : 'Needs attention'} · {Math.ceil(doc.bytes / 1024)} KB</p>
+            <p role="status">{doc.status === 'ready' ? 'Ready' : doc.status === 'preparing' ? 'Preparing' : doc.status === 'uploading' ? 'Uploading' : doc.status === 'reviewing' ? 'Reviewing safety' : doc.status === 'review-required' ? 'Safety review required' : doc.status === 'manual-review' ? 'Founder review required' : doc.status === 'blocked' ? 'Blocked by safety policy' : doc.status === 'removing' ? 'Removal pending' : 'Needs attention'} · {Math.ceil(doc.bytes / 1024)} KB</p>
             <p className="field-help">{doc.message}</p>
             {doc.status === 'ready' && <label><input type="checkbox" checked={doc.selected} disabled={busy} onChange={event => {
               const selected = event.target.checked;
@@ -108,7 +108,8 @@ export default function KnowledgeSettings() {
           </div><button type="button" className="secondary-button" disabled={busy || doc.status === 'uploading'} aria-label={`Remove ${doc.filename}`} onClick={() => void mutation(() => fetch('/api/knowledge', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: doc.id }) }).then(read<KnowledgeView>), 'Document removed.')}><Trash2 aria-hidden="true" /><span>Remove</span></button>
         </article>)}
       </div>
-      {preparing && <button type="button" className="secondary-button" disabled={busy} onClick={() => void mutation(() => fetch('/api/knowledge/refresh', { method: 'POST' }).then(read<KnowledgeView>), 'Document status refreshed.')}>Refresh preparation status</button>}
+      {(preparing || view.documents.some(d => d.status === 'review-required' || d.status === 'manual-review')) && <button type="button" className="secondary-button" disabled={busy} onClick={() => void mutation(() => fetch('/api/knowledge/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reviewExisting: true }) }).then(read<KnowledgeView>), 'Document status refreshed.')}>{view.documents.some(d => d.status === 'review-required') ? 'Review document safety' : 'Refresh preparation status'}</button>}
+      <p className="field-help">Documents must pass safety review before use. DOCX files require founder review because embedded images are not covered by the automatic check; a PDF can include those pages in automatic review.</p>
       {view.documents.some(d => d.status === 'ready' && d.selected) && <form className="knowledge-preview" onSubmit={event => void preview(event)}>
         <h2>Try a question</h2><label htmlFor="knowledge-question">What would you like to find?</label>
         <input id="knowledge-question" value={query} onChange={e => setQuery(e.target.value)} maxLength={1000} required disabled={busy} />

@@ -67,7 +67,12 @@ export function createKnowledgeServer(options: Options) {
       if (Object.keys(body).length !== 1 || !knowledgeId(body.id)) throw new KnowledgeError('Choose a document to remove.');
       return json(await options.store.remove(scope, body.id));
     }),
-    refresh: handle(async (_request, scope) => { requireAvailable(); return json(await options.store.refresh(scope)); }),
+    refresh: handle(async (request, scope) => {
+      requireAvailable();
+      const body = request.headers.get('content-type')?.includes('application/json') ? await readBody(request) : {};
+      if (Object.keys(body).some(key => key !== 'reviewExisting') || body.reviewExisting !== undefined && typeof body.reviewExisting !== 'boolean') throw new KnowledgeError('Invalid refresh request.');
+      return json(await options.store.refresh(scope, body.reviewExisting === true));
+    }),
     search: handle(async (request, scope) => {
       requireAvailable();
       const body = await readBody(request, 6_000);

@@ -2,12 +2,13 @@ import { WAVEFORM_NAME_LIMIT, WAVEFORM_PROMPT_LIMIT } from './account-model';
 import { validateTextPanelConfiguration, type TextPanelConfiguration } from './text-panel';
 
 export type CreationReviewStatus = 'pending' | 'allowed' | 'blocked' | 'manual-review' | 'stale' | 'unavailable';
-export type CreationReviewCandidate = { name: string; initialPrompt: string; textPanel?: TextPanelConfiguration | null };
-export type CanonicalCreationReviewCandidate = { name: string; initialPrompt: string; textPanel: TextPanelConfiguration | null };
+export type CreationReviewCandidate = { name: string; initialPrompt: string; textPanel?: TextPanelConfiguration | null; profilePhoto?: string | null };
+export type CanonicalCreationReviewCandidate = { name: string; initialPrompt: string; textPanel: TextPanelConfiguration | null; profilePhoto?: string;
+  document?: { id: string; digest: string; filename: string } };
 export type CreationReviewProof = { ownerUid: string; reviewId: string; digest: string; policyVersion: string; policyDigest: string };
 export type CreationReviewQueueRecord = { proof: CreationReviewProof; candidate: CanonicalCreationReviewCandidate;
-  status: CreationReviewStatus; categories: string[] };
-export type CreationReviewClientResult = { ownerKey: string; key: string; status: CreationReviewStatus };
+  status: CreationReviewStatus; categories: string[]; issue?: 'budget' | 'coverage' | 'provider' | 'abandoned' };
+export type CreationReviewClientResult = { ownerKey: string; key: string; status: CreationReviewStatus; categories?: string[] };
 
 export const canDecideCreationReview = (status: CreationReviewStatus): boolean => status === 'manual-review';
 export function creationReviewDecisionPayload(review: CreationReviewQueueRecord, decision: 'allowed' | 'blocked') {
@@ -28,7 +29,9 @@ export function canonicalCreationReviewCandidate(input: CreationReviewCandidate)
       || !initialPrompt || initialPrompt.length > WAVEFORM_PROMPT_LIMIT || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(initialPrompt)) return null;
     const text = validateTextPanelConfiguration(input.textPanel);
     if (!text.ok) return null;
-    const candidate = { name, initialPrompt, textPanel: text.value };
+    if (input.profilePhoto != null && (typeof input.profilePhoto !== 'string' || input.profilePhoto.length > 180_000
+      || !/^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/.test(input.profilePhoto))) return null;
+    const candidate = { name, initialPrompt, textPanel: text.value, ...(input.profilePhoto ? { profilePhoto: input.profilePhoto } : {}) };
     return { candidate, key: JSON.stringify(candidate) };
   } catch { return null; }
 }
@@ -42,16 +45,26 @@ export function creationReviewResponseStatus(input: unknown): CreationReviewStat
   } catch { return 'unavailable'; }
 }
 
+/** Bounded display labels only; category strings never grant approval. */
+export function creationReviewResponseCategories(input: unknown): string[] {
+  try {
+    if (creationReviewResponseStatus(input) === 'unavailable') return [];
+    const categories = object(object(input)?.review)?.categories;
+    return Array.isArray(categories) && categories.length <= 20
+      && categories.every(value => typeof value === 'string' && /^[a-z][a-z-]{0,79}$/.test(value)) ? [...categories] : [];
+  } catch { return []; }
+}
+
 /** A response for another edit/owner never enables Save, even before effect cleanup runs. */
 export function creationReviewView({ enabled, ownerKey, key, result }: {
   enabled: boolean; ownerKey: string; key: string | null; result: CreationReviewClientResult | null;
-}): { status: CreationReviewStatus | null; canSave: boolean } {
+}): { status: CreationReviewStatus | null; canSave: boolean; categories?: string[] } {
   if (!enabled) return { status: null, canSave: true };
   if (!ownerKey) return { status: 'unavailable', canSave: false };
   if (!key) return { status: null, canSave: false };
   const current = result?.ownerKey === ownerKey && result.key === key;
   const status = current ? result.status : result ? 'stale' : 'pending';
-  return { status, canSave: current && status === 'allowed' };
+  return { status, canSave: current && status === 'allowed', ...(current && result.categories?.length ? { categories: [...result.categories] } : {}) };
 }
 
 /** Select only bounded review display/proof fields from the same-origin admin response. */
@@ -67,9 +80,16 @@ export function creationReviewQueueRecords(input: unknown): CreationReviewQueueR
         || !row.categories.every(category => typeof category === 'string' && category.length <= 80)) return null;
       const normalized = canonicalCreationReviewCandidate(content as CreationReviewCandidate);
       if (!normalized) return null;
+      if (content.document !== undefined) {
+        const doc = object(content.document);
+        if (!doc || typeof doc.id !== 'string' || !/^[a-f0-9-]{36}$/.test(doc.id) || typeof doc.digest !== 'string' || !/^[a-f0-9]{64}$/.test(doc.digest)
+          || typeof doc.filename !== 'string' || !doc.filename || doc.filename.length > 160 || /[\u0000-\u001f\u007f/\\]/.test(doc.filename)) return null;
+        normalized.candidate.document = { id: doc.id, digest: doc.digest, filename: doc.filename };
+      }
       records.push({ proof: { ownerUid: proof.ownerUid as string, reviewId: proof.reviewId as string, digest: proof.digest as string,
         policyVersion: proof.policyVersion as string, policyDigest: proof.policyDigest as string },
-      candidate: normalized.candidate, status: row.status as CreationReviewStatus, categories: [...row.categories] });
+      candidate: normalized.candidate, status: row.status as CreationReviewStatus, categories: [...row.categories],
+      ...(['budget', 'coverage', 'provider', 'abandoned'].includes(String(row.issue)) ? { issue: row.issue as CreationReviewQueueRecord['issue'] } : {}) });
     }
     return records;
   } catch { return null; }

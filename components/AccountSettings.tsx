@@ -56,7 +56,9 @@ export default function AccountSettings() {
   const accountRevision = useRef(0);
   const photoRevision = useRef<symbol | null>(null);
   const safety = useCreationReview({ enabled: !!account?.creationSafetyEnabled && !!account.user,
-    candidate: { name, initialPrompt, textPanel }, ownerKey: account?.user?.uid ?? '' });
+    candidate: { name, initialPrompt, textPanel, profilePhoto }, ownerKey: account?.user?.uid ?? '',
+    automatic: !waveform || name !== waveform.name || initialPrompt !== waveform.initialPrompt
+      || JSON.stringify(textPanel) !== JSON.stringify(waveform.textPanel ?? null) || profilePhoto !== waveform.profilePhoto });
   useEffect(() => { observeVisit('account'); clientAnalytics.record({ eventName: 'creation_step', properties: { step: 'opened', outcome: 'success' } }); }, []);
   useEffect(() => {
     if (safety.status) clientAnalytics.record({ eventName: 'creation_step', properties: {
@@ -245,7 +247,8 @@ export default function AccountSettings() {
         <p id="plugin-help" className="field-help">{pluginChoice === 'knowledge' ? 'Upload private documents so your waveform can answer from them. Pair Knowledge with Text Box to show relevant passages and sources.' : 'Add a voice-controlled text panel below your waveform. Say “Start writing,” “Stop writing,” or ask the waveform to put an answer in the box. Each conversation has its own text.'}</p>
         {textPanel?.version === 2 && <p className="field-help">Text Box is enabled. Save changes, then open your waveform to try it.</p>}
         {textPanel?.version === 1 && <p className="field-help">Your existing saved text is preserved. Apply Text Box to replace it with an empty, voice-controlled panel.</p>}
-        <CreationSafetyStatus status={safety.status} />
+        <CreationSafetyStatus status={safety.status} categories={safety.categories} />
+        {account.creationSafetyEnabled && !safety.canSave && <button type="button" className="secondary-button" disabled={busy || preparingPhoto || safety.status === 'pending'} onClick={safety.requestReview}>Review this version</button>}
         {account.safetyAdminFixture && <p className="local-account-note">Safety decisions in this local preview are synthetic.</p>}
         {account.user.role === 'admin' && <div>
           <label className="admin-testing-toggle" htmlFor="admin-testing"><input id="admin-testing" type="checkbox" role="switch" checked={adminTesting} disabled={busy} onChange={event => setAdminTesting(event.target.checked)} aria-describedby="admin-testing-help" /> Admin testing</label>

@@ -1,5 +1,7 @@
 # FlowPath waveform architecture
 
+The full localhost runtime now enforces [creation safety](creation-safety.md) for names, instructions, portraits and Knowledge documents using GPT-6 Luna and a separate 50¢ cumulative waveform review budget. Existing Franklin content is included explicitly; saved data and Google sessions are preserved. Exact-version approval gates save/publication/admission, and document approval gates retrieval. Uncertainty requires the founder. Hosted activation and runtime conversation safety remain separate decisions.
+
 The selected [waveform experience](experience-design.md) implements a compact desktop portrait/waveform row, on-demand Text Box mounting and homepage-only News navigation. Saved plugin capability is independent of ephemeral presentation state. Future multi-plugin compatibility remains a design proposal.
 
 The October 25 local paid-MVP implementation is documented in [paid-mvp.md](paid-mvp.md). It is opt-in and test-only, with a separate durable ledger and public `/p/<id>` snapshots. The deployed pilot behavior described below is unchanged when that preview is off. Paid upstream enforcement and real Stripe sandbox acceptance remain launch blockers; source implementation is not activation evidence.

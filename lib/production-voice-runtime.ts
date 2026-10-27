@@ -27,9 +27,9 @@ export function getProductionVoiceServer(resolveWaveform?: Resolver, resolveAdmi
   const local = !!localAppOrigin();
   // Dev hot reload may change registered tools while keeping the process online.
   // Old calls keep their sideband/timers; durable cleanup supports either instance.
-  if (process.env.NODE_ENV === 'development' && shared.flowpathProductionVoiceConfigVersion !== 'knowledge-v1') {
+  if (process.env.NODE_ENV === 'development' && shared.flowpathProductionVoiceConfigVersion !== 'creation-safety-v3') {
     shared.flowpathProductionVoiceServer = undefined;
-    shared.flowpathProductionVoiceConfigVersion = 'knowledge-v1';
+    shared.flowpathProductionVoiceConfigVersion = 'creation-safety-v3';
   }
   return shared.flowpathProductionVoiceServer ??= createVoiceServer({
     publicOrigin: local ? undefined : configuredPublicOrigin(process.env.FLOWPATH_PUBLIC_ORIGIN),

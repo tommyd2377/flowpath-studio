@@ -40,10 +40,12 @@ test('blocked content cannot save through the UI or direct API, including after 
   await page.getByLabel('Waveform name', { exact: true }).fill('[fixture:blocked]');
   await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('Synthetic blocked review.');
   await expect(page.locator('[data-creation-safety]')).toHaveAttribute('data-creation-safety', 'blocked');
+  await expect(page.locator('[data-creation-safety]')).toContainText('Review flags: extremist-impersonation.');
   await expect(page.getByRole('button', { name: 'Save waveform', exact: true })).toBeDisabled();
   const denied = await page.request.put('/api/waveform', { headers: { origin: 'http://127.0.0.1:3225' }, data: { name: '[fixture:blocked]', initialPrompt: 'Synthetic blocked review.' } });
   expect(denied.status()).toBe(409);
   await page.getByLabel('Waveform name', { exact: true }).fill('Allowed changed name');
+  await expect(page.locator('[data-creation-safety]')).not.toContainText('extremist-impersonation');
   await expect(page.getByRole('button', { name: 'Save waveform', exact: true })).toBeDisabled();
   await expect(page.locator('[data-creation-safety]')).toHaveAttribute('data-creation-safety', 'allowed');
 });
@@ -59,4 +61,54 @@ test('manual review queue requires an explicit admin decision for the reviewed v
   await expect(page.getByRole('heading', { name: 'Creation review queue', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Approve reviewed version', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Approve reviewed version', exact: true })).toHaveCount(0);
+});
+
+test('discarding a blocked draft restores the identical saved approval without changing settings', async ({ page }) => {
+  await page.goto('/account');
+  await page.getByRole('button', { name: 'Use test owner B', exact: true }).click();
+  await page.getByLabel('Waveform name', { exact: true }).fill('Discard draft authority');
+  await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('Original fictional guide for a discard test.');
+  await expect(page.locator('[data-creation-safety]')).toHaveAttribute('data-creation-safety', 'allowed');
+  await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
+  await expect(page.locator('.account-status')).toContainText('Saved.');
+  const saved = await (await page.request.get('/api/waveform')).json();
+  const original = await (await page.request.get('/api/creation-review')).json();
+  await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('[fixture:blocked] Synthetic rejected instructions.');
+  await expect(page.locator('[data-creation-safety]')).toHaveAttribute('data-creation-safety', 'blocked');
+  await expect(page.getByRole('button', { name: 'Save waveform', exact: true })).toBeDisabled();
+  await page.reload();
+  await expect(page.locator('[data-creation-safety]')).toHaveAttribute('data-creation-safety', 'stale');
+  await page.getByRole('button', { name: 'Review this version', exact: true }).click();
+  await expect(page.locator('[data-creation-safety]')).toHaveAttribute('data-creation-safety', 'allowed');
+  expect((await (await page.request.get('/api/creation-review')).json()).review.reviewId).toBe(original.review.reviewId);
+  expect(await (await page.request.get('/api/waveform')).json()).toEqual(saved);
+});
+
+test('saved settings load without paid review; a portrait edit is reviewed before save and normalized proof survives reload', async ({ page }) => {
+  await page.goto('/account');
+  await page.getByRole('button', { name: 'Use test owner B', exact: true }).click();
+  await page.getByLabel('Waveform name', { exact: true }).fill('Portrait version check');
+  await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('An original fictional guide.');
+  await expect(page.locator('[data-creation-safety]')).toHaveAttribute('data-creation-safety', 'allowed');
+  await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
+  await expect(page.locator('.account-status')).toContainText('Saved.');
+  let reviews = 0;
+  page.on('request', request => { if (new URL(request.url()).pathname === '/api/creation-review' && request.method() === 'POST') reviews++; });
+  await page.reload();
+  await expect(page.locator('[data-creation-safety]')).toHaveAttribute('data-creation-safety', 'allowed');
+  expect(reviews).toBe(0);
+  const encoded = await page.evaluate(() => {
+    const canvas = document.createElement('canvas'); canvas.width = 12; canvas.height = 12;
+    const context = canvas.getContext('2d')!; context.fillStyle = '#129a99'; context.fillRect(0, 0, 12, 12);
+    return canvas.toDataURL('image/png').split(',')[1];
+  });
+  await page.getByLabel('Profile photo', { exact: true }).setInputFiles({ name: 'abstract.png', mimeType: 'image/png', buffer: Buffer.from(encoded, 'base64') });
+  await expect(page.locator('[data-creation-safety]')).toHaveAttribute('data-creation-safety', 'allowed');
+  expect(reviews).toBe(1);
+  await page.getByRole('button', { name: 'Save waveform', exact: true }).click();
+  await expect(page.locator('.account-status')).toContainText('Saved.');
+  expect(reviews).toBe(1);
+  await page.reload();
+  await expect(page.locator('[data-creation-safety]')).toHaveAttribute('data-creation-safety', 'allowed');
+  expect(reviews).toBe(1);
 });

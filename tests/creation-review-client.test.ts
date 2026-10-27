@@ -5,10 +5,26 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import CreationReviewQueue from '../components/CreationReviewQueue';
 import { useCreationReview } from '../lib/use-creation-review';
 import { canDecideCreationReview, canonicalCreationReviewCandidate, creationReviewDecisionPayload, creationReviewQueueRecords,
-  creationReviewResponseStatus, creationReviewView, type CreationReviewCandidate, type CreationReviewClientResult, type CreationReviewStatus } from '../lib/creation-review-client';
+  creationReviewResponseCategories, creationReviewResponseStatus, creationReviewView, type CreationReviewCandidate, type CreationReviewClientResult, type CreationReviewStatus } from '../lib/creation-review-client';
+import CreationSafetyStatus from '../components/CreationSafetyStatus';
 
 const candidate = { name: 'Waveform', initialPrompt: 'Helpful instructions' };
 const proof = { ownerUid: 'synthetic-owner', reviewId: 'synthetic-review', digest: 'synthetic-digest', policyVersion: 'policy-v1', policyDigest: 'synthetic-policy' };
+
+test('review flags are bounded display data and disappear for a different version or owner', () => {
+  const body = { enabled: true, review: { ...proof, status: 'blocked', categories: ['controversial-identity', 'portrait-provenance'] } };
+  assert.deepEqual(creationReviewResponseCategories(body), body.review.categories);
+  for (const categories of [['<script>'], ['x'.repeat(81)], Array(21).fill('privacy-abuse'), [1]]) {
+    assert.deepEqual(creationReviewResponseCategories({ ...body, review: { ...body.review, categories } }), []);
+  }
+  const key = canonicalCreationReviewCandidate(candidate)!.key;
+  const result = { ownerKey: 'owner-a', key, status: 'blocked' as const, categories: body.review.categories };
+  assert.deepEqual(creationReviewView({ enabled: true, ownerKey: 'owner-b', key, result }), { status: 'stale', canSave: false });
+  assert.deepEqual(creationReviewView({ enabled: true, ownerKey: 'owner-a', key: 'another version', result }), { status: 'stale', canSave: false });
+  const view = creationReviewView({ enabled: true, ownerKey: 'owner-a', key, result });
+  assert.equal(view.canSave, false);
+  assert.match(renderToStaticMarkup(createElement(CreationSafetyStatus, view)), /Review flags: controversial-identity, portrait-provenance/);
+});
 
 test('review keys match server trim rules while preserving internal newlines and exact text-panel whitespace', () => {
   const first = canonicalCreationReviewCandidate({ name: '  Waveform  ', initialPrompt: '\r\n Helpful\r\ninstructions\n ' });

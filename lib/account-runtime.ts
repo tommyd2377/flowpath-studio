@@ -32,7 +32,13 @@ const mode: AccountMode = process.env.NODE_ENV === 'development' && process.env.
 const state = globalThis as typeof globalThis & {
   flowpathAccounts?: ReturnType<typeof createAccountServer>;
   flowpathVoiceServer?: ReturnType<typeof createVoiceServer>;
+  flowpathAccountSafetyVersion?: string;
 };
+// Refresh callbacks on the running local server; Firebase sessions/data stay durable.
+if (localAppOrigin() && state.flowpathAccountSafetyVersion !== 'creation-safety-v3') {
+  state.flowpathAccounts = undefined;
+  state.flowpathAccountSafetyVersion = 'creation-safety-v3';
+}
 export const accountServer = state.flowpathAccounts ??= createAccountServer({
   mode,
   creationSafetyEnabled,

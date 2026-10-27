@@ -33,6 +33,7 @@ const other: CreationActor = { uid: 'owner-b', accountSessionId: 'owner-b-sessio
 const admin: CreationActor = { uid: 'admin', accountSessionId: 'admin-session' };
 const candidate: CreationCandidate = { name: 'Example', initialPrompt: 'A synthetic test persona.' };
 const policy = (): CreationSafetyPolicy => ({ version: 'fixture-v1', categories: {
+  ...Object.fromEntries(CREATION_SAFETY_CATEGORIES.map(key => [key, 'block'])) as CreationSafetyPolicy['categories'],
   'extremist-impersonation': 'block', 'violent-extremism': 'block', 'sexual-content-minors': 'block',
   'hateful-abuse': 'manual-review', 'credible-harm': 'block', 'fraud-impersonation': 'manual-review', 'privacy-abuse': 'manual-review',
 } });
@@ -65,6 +66,82 @@ const allowed = async (s: ReturnType<typeof setup>, input = candidate) => {
   const requested = await s.store.request(owner, input);
   return s.store.runReview(requested.record);
 };
+
+test('discarding an unsafe draft restores only an identical completed approval without another reviewer call', async () => {
+  let calls = 0;
+  const s = setup({ reviewer: reviewer(async value => { calls++; return evidence(value.initialPrompt === candidate.initialPrompt ? {} : { 'self-harm': 'violation' }); }) });
+  const original = await allowed(s);
+  const unsafe = { ...candidate, initialPrompt: 'Synthetic prohibited draft.' };
+  assert.equal((await allowed(s, unsafe)).status, 'blocked');
+  await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, candidate)), denied());
+  const restored = await s.store.request(owner, candidate);
+  assert.equal(restored.needsReview, false); assert.equal(restored.record.reviewId, original.reviewId);
+  await s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, candidate));
+  await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, unsafe)), denied());
+  assert.equal(calls, 2);
+  assert.equal((await s.store.request(owner, { ...candidate, initialPrompt: 'A material edit.' })).needsReview, true);
+});
+
+test('historical approval reuse cannot cross owners, policy changes or revoked records', async () => {
+  const s = setup(); const original = await allowed(s);
+  await s.store.request(owner, { ...candidate, name: 'New draft' });
+  assert.equal((await s.store.request(other, candidate)).needsReview, true);
+  s.setPolicy({ ...policy(), version: 'changed-policy' });
+  assert.equal((await s.store.request(owner, candidate)).needsReview, true);
+  s.setPolicy(policy());
+  s.db.rows.set(`creationSafetyReviews/${original.reviewId}`, { ...original, status: 'blocked' });
+  await assert.rejects(s.store.request(owner, candidate), denied());
+});
+
+test('portrait edits invalidate approval and document heads cannot replace waveform authority', async () => {
+  const s = setup(); await allowed(s);
+  const photo = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
+  await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, { ...candidate, profilePhoto: photo })), denied());
+  const doc = { ...candidate, document: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', digest: 'a'.repeat(64), filename: 'reference.txt' } };
+  await allowed(s, doc);
+  assert.equal((await s.store.get(owner))?.candidate.document, undefined);
+  assert.equal((await s.store.get(owner, doc.document.id))?.status, 'allowed');
+  await s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, candidate));
+  await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, { ...doc, document: { ...doc.document, digest: 'b'.repeat(64) } })), denied());
+});
+
+test('removed document cannot complete, receive a founder decision or reuse approval', async () => {
+  let present = true;
+  const s = setup({ validateCandidate: async (_tx, _uid, value) => { if (value.document && !present) throw new CreationSafetyError('Removed'); },
+    reviewer: reviewer(async () => evidence({ 'incomplete-coverage': 'uncertain' })) });
+  const doc = { ...candidate, document: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', digest: 'a'.repeat(64), filename: 'reference.docx' } };
+  const record = await allowed(s, doc); assert.equal(record.status, 'manual-review');
+  present = false;
+  await assert.rejects(s.store.decide(admin, { ...record, decision: 'allowed' }), denied());
+  await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, doc)), denied());
+});
+
+test('a confirmed death under five years blocks use and cannot be overridden through the founder queue', async () => {
+  const s = setup({ reviewer: reviewer(async () => evidence({ 'recently-deceased-person': 'violation' })) });
+  const record = await allowed(s);
+  assert.equal(record.status, 'blocked');
+  await assert.rejects(s.store.decide(admin, { ...record, decision: 'allowed' }), denied());
+  await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, candidate)), denied());
+});
+
+test('abandoned pending work enters the founder queue without retrying the model', async () => {
+  let time = 1000; const s = setup({ now: () => time });
+  await s.store.request(owner, candidate); time += 120001;
+  const queue = await s.store.listManual(admin);
+  assert.equal(queue[0].status, 'manual-review'); assert.equal(queue[0].issue, 'abandoned');
+});
+
+test('a policy change removes obsolete queue actions while retaining exact-version decision enforcement', async () => {
+  let calls = 0;
+  const s = setup({ reviewer: reviewer(async () => { calls++; return evidence({ 'privacy-abuse': 'uncertain' }); }) });
+  const old = await allowed(s); assert.equal(old.status, 'manual-review');
+  assert.equal((await s.store.listManual(admin)).length, 1);
+  s.setPolicy({ ...policy(), version: 'updated-policy' });
+  assert.equal((await s.store.listManual(admin)).length, 0);
+  await assert.rejects(s.store.decide(admin, { ...old, decision: 'allowed' }), denied());
+  assert.equal(calls, 1, 'queue refresh never replays a paid review');
+  assert.equal((await s.store.request(owner, candidate)).needsReview, true);
+});
 
 test('canonical name/prompt match saved trim rules; text is exact, bounded and never clipped', () => {
   const canonical = canonicalCreationCandidate({ ...candidate, name: '  Example ', initialPrompt: ' A synthetic test persona.\n',

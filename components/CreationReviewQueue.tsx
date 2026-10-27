@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import Image from 'next/image';
 import { canDecideCreationReview, creationReviewDecisionPayload, creationReviewQueueRecords, type CreationReviewQueueRecord } from '@/lib/creation-review-client';
 
 function AdminReviewQueue() {
@@ -83,9 +84,12 @@ function AdminReviewQueue() {
       style={{ marginTop: '1rem', padding: '1rem', border: '1px solid currentColor', borderRadius: '0.75rem' }}>
       <h3>{review.candidate.name}</h3>
       <p>Status: {review.status} · Categories: {review.categories.length ? review.categories.join(', ') : 'None'}</p>
+      {review.issue && <p>Automatic review needs a human decision: {review.issue === 'coverage' ? 'complete file coverage was unavailable' : review.issue === 'budget' ? 'review budget unavailable' : review.issue === 'abandoned' ? 'the attempt was interrupted' : 'the provider result could not be confirmed'}. No automatic retry was made.</p>}
       <p>Owner: {review.proof.ownerUid}</p>
       <h4>Instructions</h4>
       <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{review.candidate.initialPrompt}</div>
+      {review.candidate.profilePhoto && <><h4>Portrait</h4><Image src={review.candidate.profilePhoto} alt="Portrait submitted for review" width={160} height={160} unoptimized /></>}
+      {review.candidate.document && <><p>Document: <a href={`/api/creation-review/admin/${encodeURIComponent(review.proof.reviewId)}/file`}>Download {review.candidate.document.filename} for full review</a>. Read the complete original before deciding. If retrieval is unavailable, keep it blocked until you can inspect a matching original.</p><p style={{ overflowWrap: 'anywhere' }}>Original SHA-256: {review.candidate.document.digest}</p></>}
       {review.candidate.textPanel?.version === 1 && <><h4>Creator text</h4><div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{review.candidate.textPanel.text}</div></>}
       {review.candidate.textPanel?.version === 2 && <p>Text Box plugin enabled. Conversation text is not saved with this waveform.</p>}
       <div className="account-actions">

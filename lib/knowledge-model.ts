@@ -1,7 +1,7 @@
 export const KNOWLEDGE_FILE_BYTES = 10 * 1024 * 1024;
 export const KNOWLEDGE_DOCUMENTS = 20;
 export type KnowledgeDocument = {
-  id: string; filename: string; bytes: number; status: 'uploading' | 'preparing' | 'ready' | 'failed' | 'removing';
+  id: string; filename: string; bytes: number; status: 'uploading' | 'preparing' | 'review-required' | 'reviewing' | 'manual-review' | 'blocked' | 'ready' | 'failed' | 'removing';
   selected: boolean; createdAt: number; message: string;
 };
 export type KnowledgeView = { waveformId: string; revision: number; documents: KnowledgeDocument[]; available: boolean };
