@@ -33,4 +33,4 @@ Official documentation checked October 27: [session close/final usage](https://d
 
 [OpenAI pricing](https://developers.openai.com/api/docs/pricing) lists GPT-Live at $0.05/minute, with backend models/tools separate. That means a three-minute conversation is $0.15 in voice alone; backend work, documents and hosting are additional. WebRTC starts have a 15-second initialization charge credited against running-session usage, rather than added on top of it. No price is hard-coded into customer products by this document.
 
-Use mocks and test-mode fixtures for source work. Any live acceptance needs explicit app/host/task/call-budget approval. Keep the code admission gate and the actual hosting pause until the agreed beta is ready.
+Use mocks and test-mode fixtures for source work. Any live acceptance needs explicit app/host/task/call-budget approval. Keep hosted AI admission closed until the agreed beta is ready. The separately authorized website/settings release restored request-based hosting with zero minimum instances; this does not activate voice or other inference.
