@@ -1122,3 +1122,41 @@ test('failed hosted heartbeat stops capture and requests cleanup without creatin
   await expect(page.locator('#voice-status')).toContainText('voice connection was lost');
   expect((await tracker(page)).stoppedTracks).toBeGreaterThan(0); expect(calls.filter(value => value === 'POST')).toHaveLength(1);
 });
+
+test('demo code unlocks the intro without starting voice or revealing the code, and fits a phone', async ({ page }) => {
+  await fakeMedia(page); const calls = await mockSession(page);
+  let accepted = false, entries = 0;
+  await page.route('**/api/demo-access', route => {
+    if (route.request().method() === 'POST') { entries++; accepted = route.request().postDataJSON().code === 'synthetic'; return route.fulfill({ status: accepted ? 200 : 403, json: accepted ? { allowed: true } : { error: 'Incorrect demo code.' } }); }
+    return route.fulfill({ json: { enabled: true, allowed: accepted } });
+  });
+  await page.setViewportSize({ width: 390, height: 844 }); await page.goto('/');
+  const input = page.getByLabel('Demo code', { exact: true }); await expect(input).toBeVisible();
+  const entry = await page.locator('.demo-code-gate').boundingBox(), guidance = await page.locator('#voice-hint').boundingBox();
+  expect(entry!.y + entry!.height).toBeLessThan(guidance!.y);
+  await page.screenshot({ path: 'test-results/demo-code-mobile.png' });
+  await input.fill('wrong'); await page.getByRole('button', { name: 'Unlock demo', exact: true }).click();
+  await expect(page.locator('.demo-code-gate').getByRole('alert')).toContainText('Incorrect');
+  await input.fill('synthetic'); await page.getByRole('button', { name: 'Unlock demo', exact: true }).click();
+  await expect(page.getByText('Demo unlocked', { exact: true })).toBeVisible();
+  expect(calls.filter(value => value.method === 'POST')).toHaveLength(0); expect((await tracker(page)).microphoneCalls).toBe(0);
+  await page.reload(); await expect(page.getByText('Demo unlocked', { exact: true })).toBeVisible(); expect(entries).toBe(2);
+  const hint = await page.locator('#voice-hint').boundingBox(); expect(hint!.y + hint!.height).toBeLessThan(844);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test('hosted connection handshake applies SDP only after the observer is ready, then starts the three-minute display', async ({ page }) => {
+  await fakeMedia(page); const methods: string[] = [];
+  await page.route('**/api/session*', route => {
+    const method = route.request().method(); methods.push(method);
+    if (method === 'GET') return route.fulfill({ json: { enabled: true } });
+    if (method === 'POST') return route.fulfill({ json: { sessionId: route.request().postDataJSON().sessionId, sdp: 'v=0\r\n', expiresAt: Date.now() + 45_000, browserControl: true, connectionConfirmation: true } });
+    if (method === 'PATCH' && route.request().postDataJSON().connect) return route.fulfill({ contentType: 'application/x-ndjson', body: JSON.stringify({ ready: true }) + '\n' + JSON.stringify({ expiresAt: Date.now() + 180_000 }) + '\n' });
+    return route.fulfill({ json: { closed: true } });
+  });
+  await page.goto('/'); await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await expect.poll(async () => (await tracker(page)).sentEvents.filter(value => JSON.parse(value).type === 'session.instructions.append').length).toBe(1);
+  expect(methods.slice(0, 3)).toEqual(['GET', 'POST', 'PATCH']);
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+});

@@ -5,10 +5,10 @@ import { createProductionVoiceStore, firestoreVoiceDatabase, type VoiceOwner, ty
 import { productionVoiceDeadlineConfigured, scheduleProductionVoiceDeadline } from './voice-deadline';
 import { activePaidAdminCall, previousPaidAdminCall } from './paid-voice-store';
 import { localAppOrigin, localFirebaseDatabase, localTestingVoicePolicy } from './local-app-runtime';
-import { hostedTesterDemo } from './tester-voice-config';
+import { demoGrantId } from './demo-access';
+import { demoAccess } from './demo-access-runtime';
+import { hostedTesterDemo, hostedTesterRuntime } from './tester-voice-config';
 import { createTesterVoiceStore } from './tester-voice-store';
-import { createHash } from 'node:crypto';
-import { PUBLIC_WAVEFORM_ID } from './public-voice-identity';
 import { scheduleTesterVoiceDeadline } from './voice-deadline';
 import { scheduleLocalVoiceDeadline } from './local-voice-deadline';
 import { publicVoiceOwner } from './public-voice-identity';
@@ -31,7 +31,7 @@ export function getProductionVoiceServer(resolveWaveform?: Resolver, resolveAdmi
   if (resolveAdmin) shared.flowpathProductionAdminResolver = resolveAdmin;
   if (resolveWaveform) shared.flowpathProductionWaveformResolver = resolveWaveform;
   const local = !!localAppOrigin();
-  const testerDemo = hostedTesterDemo();
+  const testerDemo = hostedTesterRuntime();
   // Dev hot reload may change registered tools while keeping the process online.
   // Old calls keep their sideband/timers; durable cleanup supports either instance.
   if (process.env.NODE_ENV === 'development' && shared.flowpathProductionVoiceConfigVersion !== 'creation-safety-v3-draft-publication-v1') {
@@ -53,33 +53,31 @@ export function getProductionVoiceServer(resolveWaveform?: Resolver, resolveAdmi
     if (!waveform || waveform.id !== owner.waveformId || creationContentDigest(waveform) !== owner.contentDigest) throw new CreationSafetyError('Waveform content changed. Start again after its review.');
     await creationReviewStore().requireAllowed(tx, owner.ownerUid, waveform);
   };
-  const store = testerDemo ? createTesterVoiceStore(database, Date.now, 'daily', assertContentAllowed) : createProductionVoiceStore(database, Date.now, previousPaidAdminCall, activePaidAdminCall, assertContentAllowed);
+  const store = testerDemo ? createTesterVoiceStore(database, Date.now, 'daily', assertContentAllowed, true) : createProductionVoiceStore(database, Date.now, previousPaidAdminCall, activePaidAdminCall, assertContentAllowed);
   return shared.flowpathProductionVoiceServer ??= createVoiceServer({
     publicOrigin: local ? undefined : configuredPublicOrigin(process.env.FLOWPATH_PUBLIC_ORIGIN),
     trustedProxyHost: process.env.FLOWPATH_TRUSTED_PROXY_HOST,
     // Explicit invitation-only demo uses request-owned heartbeats/cleanup.
     // An old live flag alone cannot reactivate hosted sessions.
-    enabled: () => (local || testerDemo)
+    enabled: () => (local || hostedTesterDemo())
       && process.env.FLOWPATH_ACCOUNT_MODE === 'firebase' && process.env.FLOWPATH_FIRESTORE_EDITION === 'standard'
       && Boolean(configuredFirebaseProjectId()) && (local || Boolean(configuredPublicOrigin(process.env.FLOWPATH_PUBLIC_ORIGIN)))
       && (local || productionVoiceDeadlineConfigured()) && Boolean(localTestingVoicePolicy()),
     requestOwnedCleanup: !local,
     requestScopedDemo: testerDemo,
+    ...(testerDemo ? { authorizeStart: demoAccess.allowed, demoGrant: demoGrantId } : {}),
     resolveWaveform: (request, id) => shared.flowpathProductionWaveformResolver?.(request, id) ?? Promise.resolve(null),
-    resolvePublicVisitor: async (request): Promise<VoiceOwner | null> => {
-      if (!testerDemo) return publicVoiceOwner(request);
-      const { accountServer } = await import('./account-runtime');
-      const identity = await accountServer.resolveIdentity(request);
-      if (!identity?.accountSessionId || !await identity.isCurrent()) return null;
-      // Intro is a separate UID-scoped allowance, even for the verified founder.
-      const accountSessionId = createHash('sha256').update(`intro:${identity.owner.uid}`).digest('hex');
-      return { kind: 'visitor', ownerUid: `visitor:${accountSessionId}`, waveformId: PUBLIC_WAVEFORM_ID, accountSessionId,
-        tester: { uid: identity.owner.uid, accountSessionId: identity.accountSessionId, founder: false } };
-    },
+    // The stable intro cookie keeps the same allowance across sign-in/out and code re-entry.
+    resolvePublicVisitor: publicVoiceOwner,
     resolveAdmin: request => shared.flowpathProductionAdminResolver?.(request) ?? Promise.resolve(null),
     production: {
       store,
-      ...(testerDemo && 'heartbeat' in store ? { heartbeat: store.heartbeat } : {}),
+      ...(testerDemo && 'heartbeat' in store ? { heartbeat: store.heartbeat, preCancel: store.preCancel, beginConnection: store.beginConnection,
+        confirmConnection: async (id: string) => {
+          const meter = await store.connectionDeadline(id);
+          await scheduleTesterVoiceDeadline(id, meter.controlExpiresAt);
+          return store.confirmConnection(id, meter);
+        } } : {}),
       policy: () => localTestingVoicePolicy(),
       scheduleDeadline: local ? scheduleLocalVoiceDeadline : testerDemo ? scheduleTesterVoiceDeadline : scheduleProductionVoiceDeadline,
     },

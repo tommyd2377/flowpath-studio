@@ -25,19 +25,25 @@ function fixture() {
     return { ...owner, kind: 'visitor' as const, ownerUid: `visitor:${token}`, accountSessionId: token, waveformId: PUBLIC_WAVEFORM_ID };
   };
   const store = () => createTesterVoiceStore(db, () => now);
-  const finish = async (s: ReturnType<typeof store>, id: string, seconds: number) => {
-    await s.created(id, `provider_${id}`, db.rows.get(`voiceConversations/${id}`)!.expiresAt as number);
-    await s.finish(id, { finalized: true, seconds, providerId: `provider_${id}` });
+  const connect = async (s: ReturnType<typeof store>, id: string) => {
+    const call = db.rows.get(`voiceConversations/${id}`)!;
+    if (!call.providerId) await s.created(id, `provider_${id}`, call.expiresAt as number);
+    await s.beginConnection(call as unknown as VoiceOwner, id);
+    return s.confirmConnection(id, await s.connectionDeadline(id));
   };
-  return { db, personal, intro, store, finish, now: () => now, advance: (ms: number) => { now += ms; } };
+  const finish = async (s: ReturnType<typeof store>, id: string, seconds: number) => {
+    if (db.rows.get(`voiceConversations/${id}`)!.connectedAt === undefined) await connect(s, id);
+    await s.finish(id, { finalized: true, seconds, providerId: db.rows.get(`voiceConversations/${id}`)!.providerId as string });
+  };
+  return { db, personal, intro, store, finish, connect, now: () => now, advance: (ms: number) => { now += ms; } };
 }
 
 test('tester allowance is cumulative by UID across refresh, login, waveform changes, restarts and days', async () => {
   const f = fixture(), owner = f.personal(), first = f.store();
-  const call = await first.reserve(owner, 'one'); assert.equal(call.expiresAt - f.now(), 180_000);
+  const call = await first.reserve(owner, 'one'); await f.connect(first, call.id); assert.equal(call.expiresAt - f.now(), 180_000);
   f.advance(60_000); await f.finish(first, call.id, 50);
   const second = f.store();
-  const resumed = await second.reserve(owner, 'two'); assert.equal(resumed.expiresAt - f.now(), 120_000);
+  const resumed = await second.reserve(owner, 'two'); await f.connect(second, resumed.id); assert.equal(resumed.expiresAt - f.now(), 120_000);
   f.advance(120_000); await f.finish(second, resumed.id, 110);
   f.advance(86_400_000); const again = f.personal();
   again.accountSessionId = 'new-session'; again.tester!.accountSessionId = 'new-session';
@@ -101,7 +107,7 @@ test('cross-instance races allow only one session per UID and retain unknown-pro
 
 test('heartbeat extends only a live authenticated lease; stale tasks skip; stopped clients expire across restart', async () => {
   const f = fixture(), owner = f.personal('founder', true), store = f.store();
-  const call = await store.reserve(owner, 'lease'); await store.created(call.id, 'provider_lease', call.expiresAt);
+  const call = await store.reserve(owner, 'lease'); await store.created(call.id, 'provider_lease', call.expiresAt); await f.connect(store, call.id);
   f.advance(20_000); const proposed = await store.heartbeat(owner, call.id);
   assert.equal(proposed.schedule, true);
   assert.equal(f.db.rows.get('voiceConversations/lease')!.controlExpiresAt, call.controlExpiresAt, 'proposal does not extend before task creation');
@@ -114,7 +120,7 @@ test('heartbeat extends only a live authenticated lease; stale tasks skip; stopp
 
 test('signout, revocation, other accounts and cleanup fencing prevent renewal or stale settlement', async () => {
   const f = fixture(), owner = f.personal('founder', true), store = f.store();
-  const call = await store.reserve(owner, 'revocation'); await store.created(call.id, 'provider_revocation', call.expiresAt);
+  const call = await store.reserve(owner, 'revocation'); await store.created(call.id, 'provider_revocation', call.expiresAt); await f.connect(store, call.id);
   await assert.rejects(store.heartbeat(f.personal('different'), call.id), /lease ended/);
   f.db.rows.set('ownerSessions/founder-session', { uid: 'founder', state: 'changing', expiresAt: f.now() + 60_000 });
   await assert.rejects(store.heartbeat(owner, call.id), /invited account/);
@@ -154,23 +160,25 @@ test('hosted start leaves no socket/timer after HTTP; deadline and close run on 
   const policy: VoicePolicy = { ownerDailySeconds: 900, globalDailySeconds: 3600, globalConcurrency: 2, access: 'signed-in', allowedUids: [] };
   class Socket extends EventEmitter {
     readyState: 0 | 1 | 2 | 3 = WebSocket.OPEN;
-    constructor() { super(); sockets++; queueMicrotask(() => this.emit('open')); }
+    constructor() { super(); sockets++; queueMicrotask(() => { this.emit('open'); this.emit('message', Buffer.from(JSON.stringify({ type: 'session.started', session: { id: 'provider' } }))); }); }
     send(value: string) { assert.equal(JSON.parse(value).type, 'session.close'); queueMicrotask(() => this.emit('message', Buffer.from(JSON.stringify({ type: 'session.closed', session: { id: 'provider' }, usage: { seconds: 2 } })))); }
     terminate() { this.readyState = WebSocket.CLOSED; }
   }
   const worker = () => createVoiceServer({ enabled: () => true, apiKey: () => 'fixture', publicOrigin: 'https://voice.example', requestScopedDemo: true, requestOwnedCleanup: true,
     now: f.now, resolveWaveform: async () => ({ ...owner, waveform, isCurrent: () => true }),
-    production: { store, policy: () => policy, heartbeat: store.heartbeat, scheduleDeadline: async () => { schedules++; if (scheduleFailure) throw new Error('task unavailable'); } },
+    production: { store, policy: () => policy, heartbeat: store.heartbeat, beginConnection: store.beginConnection, confirmConnection: async id => store.confirmConnection(id, await store.connectionDeadline(id)), scheduleDeadline: async () => { schedules++; if (scheduleFailure) throw new Error('task unavailable'); } },
     socketFactory: () => new Socket(), requestProvider: (async () => { providerStarts++; return Response.json({ session: { id: 'provider' }, transport: { sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n' } }); }) as typeof fetch });
-  const req = (method: string, body: object) => new Request(`https://voice.example/api/session?waveformId=${waveform.id}`, { method, headers: { host: 'voice.example', origin: 'https://voice.example', 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const req = (method: string, body: object) => new Request(`https://voice.example/api/session?waveformId=${waveform.id}`, { method, headers: { host: 'voice.example', origin: 'https://voice.example', 'content-type': 'application/json', accept: 'application/x-ndjson' }, body: JSON.stringify(body) });
   const response = await worker().POST(req('POST', { sessionId: id, sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n' }));
-  assert.equal(response.status, 201); assert.equal((await response.json()).browserControl, true);
-  assert.equal(sockets, 0); assert.equal(providerStarts, 1); assert.equal(schedules, 1);
+  assert.equal(response.status, 201);
+  const { voiceConnectionReader } = await import('../lib/voice-connection'); const frames = voiceConnectionReader(response);
+  assert.equal((await frames.next()).browserControl, true); await frames.next(); await frames.cancel();
+  assert.equal(sockets, 1); assert.equal(providerStarts, 1); assert.equal(schedules, 1);
   f.advance(20_000); scheduleFailure = true;
   assert.equal((await worker().PATCH(req('PATCH', { sessionId: id }))).status, 503);
   assert.equal(f.db.rows.get(`voiceConversations/${id}`)!.controlExpiresAt, f.now() + 25_000, 'failed scheduling cannot renew the hold');
   assert.equal((await worker().DELETE(req('DELETE', { sessionId: id }))).status, 200);
-  assert.equal(sockets, 1); assert.equal(providerStarts, 1);
+  assert.equal(sockets, 2); assert.equal(providerStarts, 1);
   assert.equal((await worker().DELETE(req('DELETE', { sessionId: id }))).status, 200);
 });
 
@@ -180,15 +188,101 @@ test('server scope never passes a founder admin override into the introductory a
   const server = createVoiceServer({ enabled: () => true, apiKey: () => 'fixture', publicOrigin: 'https://voice.example', requestScopedDemo: true, requestOwnedCleanup: true,
     now: f.now, resolvePublicVisitor: async () => intro,
     resolveAdmin: async () => ({ uid: 'founder', accountSessionId: 'founder-session', testing: true, isCurrent: () => true }),
-    production: { store, policy: () => policy, heartbeat: store.heartbeat, scheduleDeadline: async () => {} },
-    socketFactory: () => { throw new Error('No background socket'); },
+    production: { store, policy: () => policy, heartbeat: store.heartbeat, beginConnection: store.beginConnection, confirmConnection: async id => store.confirmConnection(id, await store.connectionDeadline(id)), scheduleDeadline: async () => {} },
+    socketFactory: () => {
+      const socket = new EventEmitter() as EventEmitter & { readyState: 0 | 1 | 2 | 3; send: () => void; terminate: () => void };
+      socket.readyState = WebSocket.OPEN; socket.send = () => {}; socket.terminate = () => { socket.readyState = WebSocket.CLOSED; };
+      queueMicrotask(() => { socket.emit('open'); socket.emit('message', Buffer.from(JSON.stringify({ type: 'session.started', session: { id: 'provider_intro' } }))); });
+      return socket;
+    },
     requestProvider: (async () => Response.json({ session: { id: 'provider_intro' }, transport: { sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n' } })) as typeof fetch });
-  const headers = { host: 'voice.example', origin: 'https://voice.example', 'content-type': 'application/json', 'X-FlowPath-Admin': 'continue' };
+  const headers = { host: 'voice.example', origin: 'https://voice.example', 'content-type': 'application/json', accept: 'application/x-ndjson', 'X-FlowPath-Admin': 'continue' };
   const ready = await (await server.GET(new Request('https://voice.example/api/session', { headers }))).json();
   assert.equal(ready.enabled, true); assert.equal(ready.adminEligible, undefined);
   const response = await server.POST(new Request('https://voice.example/api/session', { method: 'POST', headers,
     body: JSON.stringify({ sessionId: id, sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n' }) }));
-  assert.equal(response.status, 201); const body = await response.json();
-  assert.equal(body.expiresAt - f.now(), 180_000); assert.equal(body.adminOverride, false);
+  assert.equal(response.status, 201); const { voiceConnectionReader } = await import('../lib/voice-connection'); const frames = voiceConnectionReader(response); const body = await frames.next(); await frames.next(); await frames.cancel();
+  assert.ok(typeof body.expiresAt === 'number'); assert.equal(body.expiresAt - f.now(), 180_000); assert.equal(body.adminOverride, false);
   assert.equal(f.db.rows.get(`voiceConversations/${id}`)?.admin, undefined);
+});
+
+test('code grants unlock anonymous intro only; re-entry and new page IDs cannot replenish or duplicate daily time', async () => {
+  const f = fixture(), original = f.intro('browser'), guest = { ...original, tester: undefined, demoVisitorId: 'a'.repeat(64), demoGrant: 'b'.repeat(64) };
+  f.db.rows.set(`voiceDemoAccess/${guest.demoGrant}`, { state: 'active', expiresAt: f.now() + 86_400_000 });
+  const store = createTesterVoiceStore(f.db, f.now, 'daily', undefined, true);
+  await assert.rejects(store.reserve({ ...guest, demoGrant: undefined }, 'no-code'), /demo code/);
+  await store.available(guest); assert.equal([...f.db.rows.keys()].some(path => path.startsWith('voiceTesterAllowances/')), false);
+  const call = await store.reserve(guest, 'anonymous');
+  const otherPage = { ...guest, ownerUid: `visitor:${'c'.repeat(64)}`, accountSessionId: 'c'.repeat(64) };
+  await assert.rejects(store.reserve(otherPage, 'another-tab'), /previous conversation/);
+  await store.created(call.id, 'provider_anonymous', call.expiresAt);
+  await store.beginConnection(guest, call.id); await store.confirmConnection(call.id, await store.connectionDeadline(call.id));
+  f.advance(180_000); await store.finish(call.id, { finalized: true, seconds: 180, providerId: 'provider_anonymous' });
+  f.db.rows.set(`voiceDemoAccess/${'d'.repeat(64)}`, { state: 'active', expiresAt: f.now() + 86_400_000 });
+  await assert.rejects(store.reserve({ ...otherPage, demoGrant: 'd'.repeat(64) }, 're-entered'), /introduction allowance/);
+});
+
+test('meter begins on provider-confirmed connection, never on access, reservation or a client heartbeat', async () => {
+  const f = fixture(), owner = f.personal(), store = f.store(), call = await store.reserve(owner, 'delayed');
+  await store.created(call.id, 'provider_delayed', call.expiresAt);
+  f.advance(20_000); await assert.rejects(store.heartbeat(owner, call.id), /lease ended/);
+  await store.beginConnection(owner, call.id); const meter = await store.connectionDeadline(call.id);
+  assert.equal(meter.expiresAt - f.now(), 180_000); await store.confirmConnection(call.id, meter);
+  assert.equal(f.db.rows.get(`voiceConversations/${call.id}`)!.connectedAt, f.now());
+  f.advance(10_000); await store.finish(call.id, { finalized: true, seconds: 10, providerId: 'provider_delayed' });
+  assert.equal((await store.reserve(owner, 'remaining')).expiresAt - f.now(), 170_000);
+});
+
+test('pre-start cancellation has a bounded durable barrier and failed setup releases unused time', async () => {
+  const f = fixture(), owner = f.personal(), store = f.store();
+  await store.preCancel(owner, 'early'); await assert.rejects(store.reserve(owner, 'early'), /canceled/);
+  assert.equal([...f.db.rows.keys()].some(path => path.startsWith('voiceConversations/')), false);
+  f.advance(10_001); const call = await store.reserve(owner, 'failed');
+  await store.finish(call.id, { finalized: true, rejected: true });
+  assert.equal((await f.store().reserve(owner, 'retry-after-failure')).expiresAt - f.now(), 180_000);
+});
+
+test('connection confirmation waits for provider session.started inside the active request, then detaches', async () => {
+  const f = fixture(), owner = f.personal(), store = f.store(), id = randomUUID(), waveId = randomUUID();
+  owner.waveformId = waveId; f.db.rows.set('ownerWaveforms/tester', { id: waveId });
+  const call = await store.reserve(owner, id); await store.created(id, 'provider_connection', call.expiresAt);
+  const sockets: Socket[] = [];
+  class Socket extends EventEmitter {
+    readyState: 0 | 1 | 2 | 3 = WebSocket.OPEN;
+    constructor() { super(); sockets.push(this); queueMicrotask(() => this.emit('open')); }
+    send() { throw new Error('Startup observation must not issue a greeting or close'); }
+    terminate() { this.readyState = WebSocket.CLOSED; }
+  }
+  const server = createVoiceServer({ enabled: () => true, apiKey: () => 'fixture', publicOrigin: 'https://voice.example', requestScopedDemo: true, requestOwnedCleanup: true,
+    now: f.now, socketFactory: () => new Socket(), resolveWaveform: async () => ({ ...owner, waveform: { name: 'Fixture', initialPrompt: 'Be brief.' }, isCurrent: () => true }),
+    production: { store, policy: () => null, scheduleDeadline: async () => {}, heartbeat: store.heartbeat, beginConnection: store.beginConnection,
+      confirmConnection: async id => store.confirmConnection(id, await store.connectionDeadline(id)) },
+    requestProvider: (async () => { throw new Error('No new provider request'); }) as typeof fetch });
+  const response = await server.PATCH(new Request(`https://voice.example/api/session?waveformId=${waveId}`, { method: 'PATCH',
+    headers: { host: 'voice.example', origin: 'https://voice.example', 'content-type': 'application/json', accept: 'application/x-ndjson' }, body: JSON.stringify({ sessionId: id, connect: true }) }));
+  assert.equal(response.status, 200);
+  const { voiceConnectionReader } = await import('../lib/voice-connection'); const frames = voiceConnectionReader(response);
+  assert.equal((await frames.next()).ready, true); assert.equal(f.db.rows.get(`voiceConversations/${id}`)!.connectedAt, undefined);
+  f.advance(20_000);
+  sockets[0].emit('message', Buffer.from(JSON.stringify({ type: 'session.started', session: { id: 'provider_connection' } })));
+  assert.equal((await frames.next()).expiresAt, f.now() + 180_000);
+  assert.equal(f.db.rows.get(`voiceConversations/${id}`)!.connectedAt, f.now());
+  await frames.cancel(); assert.equal(sockets[0].readyState, WebSocket.CLOSED);
+});
+
+test('demo-code admission rejects direct readiness/start requests before provider or credential access', async () => {
+  const server = createVoiceServer({ authorizeStart: async () => false, enabled: () => true,
+    apiKey: () => { throw new Error('Must not inspect runtime key'); }, requestProvider: (async () => { throw new Error('No provider request'); }) as typeof fetch });
+  const origin = 'http://127.0.0.1:3220', headers = { host: '127.0.0.1:3220', origin };
+  assert.equal((await (await server.GET(new Request(`${origin}/api/session`, { headers }))).json()).enabled, false);
+  assert.equal((await server.POST(new Request(`${origin}/api/session`, { method: 'POST', headers, body: '{}' }))).status, 403);
+});
+
+
+test('provider initialization charge without a confirmed connection does not consume visitor demo time', async () => {
+  const f = fixture(), owner = f.personal(), store = f.store(), call = await store.reserve(owner, 'initialization-only');
+  await store.created(call.id, 'provider_initialization', call.expiresAt);
+  f.advance(20_000); await store.cancel(owner.ownerUid, owner.waveformId, call.id); const claim = await store.claimCleanup(call.id);
+  await store.finish(call.id, { finalized: true, seconds: 15, providerId: 'provider_initialization', cleanupEpoch: claim!.cleanup.epoch });
+  assert.equal((await store.reserve(owner, 'next')).expiresAt - f.now(), 180_000);
 });

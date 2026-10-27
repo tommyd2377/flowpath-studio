@@ -20,6 +20,7 @@ export const isUnmeteredLocalTest = (owner: VoiceOwner, policy: VoicePolicy) => 
   && owner.kind === undefined && owner.admin?.override === true && owner.admin.uid === owner.ownerUid;
 export type VoiceOwner = { ownerUid: string; waveformId: string; accountSessionId: string; kind?: 'visitor'; admin?: AdminVoice;
   /** Derived by hosted tester admission from verified server identity, never request JSON. */
+  demoGrant?: string;
   tester?: { uid: string; accountSessionId: string; founder: boolean };
   demoVisitorId?: string; contentDigest?: string; publishedRevision?: number;
   paid?: { actor: { visitorId: string; uid?: string; accountSessionId?: string }; choice: 'creator' | 'self'; preview?: boolean; expectedContentDigest?: string } };
@@ -29,6 +30,8 @@ export type StoredVoice = VoiceOwner & {
   /** Cleanup-only ownership. Expiry permits another closer, never a new provider or released usage. */
   cleanup?: { epoch: number; until: number };
   controlExpiresAt?: number;
+  connectedAt?: number;
+  connectionPending?: boolean;
   allowancePath?: string;
   allowanceSeconds?: number;
 };

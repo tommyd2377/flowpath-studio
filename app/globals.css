@@ -384,3 +384,16 @@ button { font: inherit; }
   .settings-plugin-heading h3 { font-size: 15px; }
   .settings-plugin-state { margin-left: 0; }
 }
+
+.demo-code-gate { font-size: 12px; color: var(--muted, #c5bba6); width: min(330px, calc(100% - 32px)); margin: 16px auto; }
+.demo-code-gate label { display: block; margin: 0 0 6px; font-size: 12px; }
+.demo-code-entry { display: flex; gap: 8px; align-items: center; }
+.demo-code-entry input { min-width: 0; flex: 1; width: 130px; border: 1px solid var(--border, #5f594e); border-radius: 8px; background: #ffffff04; padding: 9px 12px; color: inherit; font: inherit; line-height: 1.5; }
+.demo-code-entry button { padding: 9px 12px; white-space: nowrap; }
+.demo-code-gate p { margin: 6px 0; text-align: center; }
+.voice-page > .demo-code-gate { position: absolute; top: calc(50svh + 110px); left: 50%; transform: translateX(-50%); margin: 0; }
+[data-demo-code="true"] .voice-hint { top: calc(50svh + 205px); }
+[data-demo-code="true"] .voice-status { top: calc(50svh + 235px); }
+@media (max-height: 650px) { .voice-page > .demo-code-gate { top: calc(50svh + 80px); } [data-demo-code="true"] .voice-hint { top: calc(50svh + 175px); } [data-demo-code="true"] .voice-status { top: calc(50svh + 203px); } }
+[data-docked="true"][data-demo-code="true"] .voice-status { top: 132px; }
+@media (max-width: 600px) { [data-docked="true"][data-demo-code="true"] .voice-status { top: 162px; } }

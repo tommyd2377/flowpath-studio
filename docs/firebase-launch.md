@@ -2,6 +2,14 @@
 
 Prepared October 18, 2026. This is the new waveform product, not the archived Studio builder.
 
+## October 27 code-gated tester demo release preparation
+
+The user authorized the temporary shared-code demo and declined automated paid tests. This supersedes the website-only and earlier $5/day OpenAI-guard plan below. Hosted voice and the approved exact-version creation-review adapter are activated by the candidate profile; Knowledge ingestion and customer billing remain off. Anonymous intro access requires the server code grant and has 180 seconds per UTC day per stable browser cookie, including the founder. An invited account’s own waveform has 180 seconds per UTC day per UID; only the verified founder’s own waveform is exempt. Codes, sign-in/out and page refresh do not reset the existing browser allowance. Clearing cookies/devices can create a new anonymous identity.
+
+The code grant is checked on the server before voice admission, review submission or waveform saving. Real provider startup is observed only within a bounded streaming HTTP response, and a durable connected timestamp is committed after its replacement cleanup task exists. Waiting before tapping or a failed setup does not consume visitor time. Subsequent short heartbeat requests and the existing authenticated deadline queue preserve request-only CPU; there is no permanent background controller. Actual provider audio, streaming through the hosting proxy and real task closure remain the user’s manual acceptance.
+
+Release SHA, clean-export manifest, build/revision/traffic, final source checks, non-paid readiness and actual scaling will be recorded after rollout. No auth provider, secret, billing-account setting, queue, rules, always-on resource or old traffic tag is changed by this source release. The native $20/month Cloud Run cap was configured separately and is not raised or cleared here.
+
 ## October 27 website/settings release
 
 The user explicitly authorized deploying the current limited version while the next hosted beta is built. Scope: App Hosting website/settings, current UI/loaders and private drafts. Hosted voice, Knowledge ingestion/retrieval, creation-review inference and payments remain disabled. Existing auth providers, secrets, rules and production user data are unchanged. The website may return from its manual-zero pause to request-based autoscaling with a zero-instance idle minimum and existing maximum of two; no warm instance or always-allocated CPU is requested. The local server should be off whenever active local testing is finished, per the latest user instruction.

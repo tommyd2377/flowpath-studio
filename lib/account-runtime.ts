@@ -7,6 +7,7 @@ import { localAppOrigin, localAppPath } from './local-app-runtime';
 import { cancelProductionOwnerVoice } from './production-voice-runtime';
 import { creationActor, creationReviewStore, creationSafetyEnabled, creationSafetyFixtures } from './creation-runtime';
 import { applicationDatabase } from './application-database';
+import { demoAccess } from './demo-access-runtime';
 import { hostedTesterDemo } from './tester-voice-config';
 import { CreationSafetyError } from './creation-safety';
 
@@ -44,6 +45,7 @@ export const accountServer = state.flowpathAccounts ??= createAccountServer({
   mode,
   creationSafetyEnabled,
   hostedTesterDemo,
+  authorizeWaveformSave: demoAccess.allowed,
   safetyAdminFixture: creationSafetyFixtures,
   localUnmeteredTesting: () => !!localAppOrigin(),
   validateWaveform: async (request, waveform) => {

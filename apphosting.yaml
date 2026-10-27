@@ -1,6 +1,6 @@
 # This launch profile is for the new FlowPath Studio project only.
 # Hosted tester-demo candidate: zero idle instances; browser-primary voice control.
-# Deployment requires the final intro-access choice and approved release verification.
+# Authorized temporary shared-code demo; live voice testing is manual only.
 runConfig:
   cpu: 1
   memoryMiB: 512

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { activeAccountSession, ACCOUNT_SESSION_COLLECTION } from './production-account-session';
+import { validDemoGrant } from './demo-access';
 import { MEMBERS_COLLECTION } from './invitations';
 import { isPublicVoiceOwner } from './public-voice-identity';
 import { UNMETERED_LOCAL_DEADLINE, VOICE_CLEANUP_LEASE_MS, VoiceAdmissionError,
@@ -26,7 +27,7 @@ const count = (value: unknown) => {
 function stored(row: Record<string, unknown> | null): StoredVoice | null {
   if (!row || row.tombstone === true) return null;
   const call = row as unknown as StoredVoice;
-  if (!call.tester?.uid || !call.tester.accountSessionId || typeof call.tester.founder !== 'boolean'
+  if (!(call.tester?.uid && call.tester.accountSessionId && typeof call.tester.founder === 'boolean') && !(isPublicVoiceOwner(call) && !call.tester && call.demoVisitorId)
     || !call.id || !call.ownerUid || !call.waveformId || !Number.isSafeInteger(call.createdAt)
     || !Number.isSafeInteger(call.expiresAt) || !Number.isSafeInteger(call.controlExpiresAt)
     || !['creating', 'active', 'uncertain', 'closed', 'rejected'].includes(call.state)
@@ -34,6 +35,7 @@ function stored(row: Record<string, unknown> | null): StoredVoice | null {
     || call.providerId !== undefined && !/^[A-Za-z0-9_-]{1,200}$/.test(call.providerId)) throw new Error('Invalid tester conversation');
   return call;
 }
+const actor = (owner: VoiceOwner) => owner.tester?.uid ?? `anonymous:${owner.demoVisitorId}`;
 const terminal = (call: StoredVoice) => call.state === 'closed' || call.state === 'rejected';
 const sameActor = (call: StoredVoice, owner: VoiceOwner) => call.ownerUid === owner.ownerUid
   && call.waveformId === owner.waveformId && call.tester?.uid === owner.tester?.uid
@@ -41,9 +43,12 @@ const sameActor = (call: StoredVoice, owner: VoiceOwner) => call.ownerUid === ow
 
 /** Free invitation-only allowances; separate from wallets, analytics and historical daily holds. */
 export function createTesterVoiceStore(database: VoiceDatabase, now: () => number = Date.now,
-  period: 'beta' | 'daily' = 'beta', assertContentAllowed?: (tx: VoiceTransaction, owner: VoiceOwner) => Promise<void>) {
+  period: 'beta' | 'daily' = 'beta', assertContentAllowed?: (tx: VoiceTransaction, owner: VoiceOwner) => Promise<void>, requireDemoGrant = false) {
   async function authorize(tx: VoiceTransaction, owner: VoiceOwner) {
     const tester = owner.tester;
+    if (requireDemoGrant && (!owner.demoGrant || !/^[a-f0-9]{64}$/.test(owner.demoGrant)
+      || !validDemoGrant(await tx.get(`voiceDemoAccess/${owner.demoGrant}`), now()))) throw new VoiceAdmissionError('Enter the demo code first.', 403);
+    if (!owner.paid && !tester && isPublicVoiceOwner(owner) && owner.demoVisitorId) return;
     if (!tester || !tester.uid || !tester.accountSessionId || owner.paid
       || owner.kind !== undefined && !isPublicVoiceOwner(owner)
       || !owner.kind && (tester.uid !== owner.ownerUid || tester.accountSessionId !== owner.accountSessionId)
@@ -61,20 +66,21 @@ export function createTesterVoiceStore(database: VoiceDatabase, now: () => numbe
     const entry = owner.kind ? 'intro' : 'waveform';
     // The intro is always daily. Personal demos use the explicitly selected beta period.
     const key = owner.kind || period === 'daily' ? new Date(now()).toISOString().slice(0, 10) : 'beta-v1';
-    return `voiceTesterAllowances/${hash(`${owner.tester!.uid}:${entry}:${key}`)}`;
+    return `voiceTesterAllowances/${hash(`${actor(owner)}:${entry}:${key}`)}`;
   }
   async function admission(tx: VoiceTransaction, owner: VoiceOwner) {
     await authorize(tx, owner);
     const path = allowance(owner);
-    const [global, own, balance] = await Promise.all([tx.get(globalPath), tx.get(ownPath(owner.tester!.uid)), path ? tx.get(path) : null]);
+    const [global, own, balance] = await Promise.all([tx.get(globalPath), tx.get(ownPath(actor(owner))), path ? tx.get(path) : null]);
     const active = slots(global);
     if (Object.values(active).includes('uncertain')) throw new VoiceAdmissionError('A previous voice connection needs confirmed cleanup.', 503);
+    if (typeof own?.cancelUntil === 'number' && own.cancelUntil > now()) throw new VoiceAdmissionError('The previous start was canceled. Please wait a few seconds.');
     if (own?.active) throw new VoiceAdmissionError('Your previous conversation must close before starting another.');
     if (Object.keys(active).length >= 2) throw new VoiceAdmissionError('All available voice connections are in use.');
     const seconds = path ? TESTER_DEMO_SECONDS - count(balance?.usedSeconds) - count(balance?.heldSeconds) : 0;
     if (path && seconds <= 0) throw new VoiceAdmissionError(owner.kind ? 'Your three-minute introduction allowance has ended for today.'
       : period === 'daily' ? 'Your three-minute demo allowance has ended for today.' : 'Your three-minute beta demo has ended.', 429, true);
-    return { global, active, path, balance, seconds };
+    return { global, own, active, path, balance, seconds };
   }
   return {
     async available(owner: VoiceOwner) { await database.transaction(async tx => { await admission(tx, owner); }); },
@@ -87,7 +93,7 @@ export function createTesterVoiceStore(database: VoiceDatabase, now: () => numbe
           controlExpiresAt: Math.min(expiresAt, now() + TESTER_CONTROL_LEASE_MS),
           ...(a.path ? { allowancePath: a.path, allowanceSeconds: a.seconds } : {}) };
         tx.set(callPath(id), call);
-        tx.set(ownPath(owner.tester!.uid), { active: id });
+        tx.set(ownPath(actor(owner)), { ...a.own, active: id });
         tx.set(globalPath, { day: new Date(now()).toISOString().slice(0, 10), reservedSeconds: 0, ...a.global, active: { ...a.active, [id]: 'creating' } });
         if (a.path) tx.set(a.path, { ...a.balance, usedSeconds: count(a.balance?.usedSeconds), heldSeconds: a.seconds });
         return call;
@@ -113,11 +119,40 @@ export function createTesterVoiceStore(database: VoiceDatabase, now: () => numbe
         return call.canceled || uncertain;
       });
     },
+    async beginConnection(owner: VoiceOwner, id: string) {
+      return database.transaction(async tx => {
+        const call = stored(await tx.get(callPath(id)));
+        if (!call || !sameActor(call, owner) || call.canceled || call.state !== 'active' || !call.providerId
+          || call.connectionPending || call.connectedAt !== undefined || call.controlExpiresAt! <= now()) throw new VoiceAdmissionError('This connection is unavailable.', 409);
+        await authorize(tx, owner);
+        tx.set(callPath(id), { ...call, connectionPending: true }); return call;
+      });
+    },
+    async connectionDeadline(id: string) {
+      return database.transaction(async tx => {
+        const call = stored(await tx.get(callPath(id)));
+        if (!call || !call.connectionPending || call.connectedAt !== undefined || call.canceled || call.controlExpiresAt! <= now()) throw new VoiceAdmissionError('This connection ended.', 409);
+        await authorize(tx, call);
+        return { connectedAt: now(), expiresAt: call.allowancePath ? now() + call.allowanceSeconds! * 1000 : UNMETERED_LOCAL_DEADLINE,
+          controlExpiresAt: now() + TESTER_CONTROL_LEASE_MS };
+      });
+    },
+    async confirmConnection(id: string, meter: { connectedAt: number; expiresAt: number; controlExpiresAt: number }) {
+      return database.transaction(async tx => {
+        const call = stored(await tx.get(callPath(id)));
+        if (!call || !call.connectionPending || call.connectedAt !== undefined || call.canceled || call.cleanup || call.controlExpiresAt! <= now()
+          || !Number.isSafeInteger(meter.connectedAt) || meter.connectedAt > now() || meter.connectedAt < call.createdAt
+          || meter.expiresAt !== (call.allowancePath ? meter.connectedAt + call.allowanceSeconds! * 1000 : UNMETERED_LOCAL_DEADLINE)
+          || meter.controlExpiresAt !== meter.connectedAt + TESTER_CONTROL_LEASE_MS || meter.controlExpiresAt <= now()) throw new VoiceAdmissionError('This connection ended.', 409);
+        await authorize(tx, call);
+        tx.set(callPath(id), { ...call, ...meter, connectionPending: false }); return meter;
+      });
+    },
     // Read before scheduling; commit only after the replacement deadline task exists.
     async heartbeat(owner: VoiceOwner, id: string, scheduledUntil?: number) {
       return database.transaction(async tx => {
         const call = stored(await tx.get(callPath(id)));
-        if (!call || !sameActor(call, owner) || call.canceled || call.state !== 'active' || call.cleanup
+        if (!call || !sameActor(call, owner) || call.connectedAt === undefined || call.canceled || call.state !== 'active' || call.cleanup
           || call.controlExpiresAt! <= now() || call.expiresAt <= now()) throw new VoiceAdmissionError('The voice lease ended. Start again after cleanup.', 409);
         await authorize(tx, owner);
         const next = Math.min(call.expiresAt, Math.ceil(now() / 15_000) * 15_000 + TESTER_CONTROL_LEASE_MS);
@@ -141,6 +176,15 @@ export function createTesterVoiceStore(database: VoiceDatabase, now: () => numbe
         return { ...call, canceled: true, state };
       });
     },
+    async preCancel(owner: VoiceOwner, id: string) {
+      await database.transaction(async tx => {
+        if (await tx.get(callPath(id))) return;
+        await authorize(tx, owner);
+        const path = ownPath(actor(owner)), own = await tx.get(path);
+        // One constant-sized barrier per actor; unknown IDs cannot fan out into documents.
+        tx.set(path, { ...own, cancelUntil: now() + 10_000 });
+      });
+    },
     async cancel(ownerUid: string, waveformId?: string, id?: string, accountSessionId?: string) {
       return database.transaction(async tx => {
         // Account sign-out passes the real UID; explicit waveform cancellation passes its scoped owner UID.
@@ -149,7 +193,6 @@ export function createTesterVoiceStore(database: VoiceDatabase, now: () => numbe
         if (typeof target !== 'string') return null;
         const call = stored(await tx.get(callPath(target)));
         if (!call) {
-          if (id && waveformId) tx.set(callPath(id), { id, tombstone: true });
           return null;
         }
         if (call.ownerUid !== ownerUid && !(waveformId === undefined && call.tester?.uid === ownerUid)
@@ -175,7 +218,7 @@ export function createTesterVoiceStore(database: VoiceDatabase, now: () => numbe
           || !call.cleanup && result.cleanupEpoch !== undefined
           || call.providerId && result.providerId && call.providerId !== result.providerId
           || result.finalized && !result.rejected && (typeof result.seconds !== 'number' || !Number.isFinite(result.seconds) || result.seconds < 0)) throw new Error('Unconfirmed or stale finalization');
-        const [global, own, balance] = await Promise.all([tx.get(globalPath), tx.get(ownPath(call.tester!.uid)),
+        const [global, own, balance] = await Promise.all([tx.get(globalPath), tx.get(ownPath(actor(call))),
           call.allowancePath ? tx.get(call.allowancePath) : null]);
         const active = slots(global);
         if (result.finalized) delete active[id]; else active[id] = 'uncertain';
@@ -183,10 +226,10 @@ export function createTesterVoiceStore(database: VoiceDatabase, now: () => numbe
         tx.set(callPath(id), { ...call, state: result.finalized ? result.rejected ? 'rejected' : 'closed' : 'uncertain',
           ...(result.providerId ? { providerId: result.providerId } : {}), ...(result.seconds !== undefined ? { seconds: result.seconds } : {}) });
         if (result.finalized) {
-          if (own?.active === id) tx.set(ownPath(call.tester!.uid), { active: null });
+          if (own?.active === id) tx.set(ownPath(actor(call)), { ...own, active: null });
           if (call.allowancePath) {
-            // Only server-observed provider finalization releases an unused hold. Setup time counts conservatively.
-            const used = result.rejected ? 0 : Math.min(call.allowanceSeconds!, Math.max(Math.ceil(result.seconds!), Math.ceil((now() - call.createdAt) / 1000)));
+            // Only server-observed provider finalization releases an unused hold. Only a provider-confirmed connection starts elapsed-time metering.
+            const used = result.rejected || call.connectedAt === undefined ? 0 : Math.min(call.allowanceSeconds!, Math.max(Math.ceil(result.seconds!), call.connectedAt === undefined ? 0 : Math.ceil((now() - call.connectedAt) / 1000)));
             tx.set(call.allowancePath, { usedSeconds: Math.min(TESTER_DEMO_SECONDS, count(balance?.usedSeconds) + used), heldSeconds: 0 });
           }
         }

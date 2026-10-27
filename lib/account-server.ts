@@ -39,6 +39,7 @@ type Options = {
   safetyAdminFixture?: boolean;
   localUnmeteredTesting?: () => boolean;
   hostedTesterDemo?: () => boolean;
+  authorizeWaveformSave?: (request: Request) => Promise<boolean>;
   localDirectory?: string;
   development?: () => boolean;
   publicOrigin?: () => string | undefined;
@@ -365,6 +366,7 @@ export function createAccountServer(options: Options = {}) {
       if (mode() === 'unavailable') return unavailable();
       const identity = await resolveIdentity(request);
       if (!identity) return unauthorized();
+      if (options.authorizeWaveformSave && !await options.authorizeWaveformSave(request)) return json({ error: 'Enter the demo code before saving your waveform.' }, 403);
       let input: WaveformInput | null;
       try { input = waveformInput(await readBody(request, 256 * 1024)); } catch { input = null; }
       if (!input) return json({ error: `Use a name up to ${WAVEFORM_NAME_LIMIT} characters, instructions up to ${WAVEFORM_PROMPT_LIMIT} characters, a six-digit hex color and a PNG, JPEG or WebP photo up to 128 KB and 512 pixels.` }, 400);

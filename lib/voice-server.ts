@@ -28,10 +28,16 @@ type Options = {
   requestOwnedCleanup?: boolean;
   /** Browser primary controls + short authenticated requests; no orphan server sideband. */
   requestScopedDemo?: boolean;
+  authorizeStart?: (request: Request) => Promise<boolean>;
+  demoGrant?: (request: Request) => string | undefined;
+  greeting?: boolean;
   production?: {
     store: ProductionVoiceStore;
     policy: () => VoicePolicy | null;
     scheduleDeadline: (id: string, expiresAt: number) => Promise<void>;
+    preCancel?: (owner: VoiceOwner, id: string) => Promise<void>;
+    beginConnection?: (owner: VoiceOwner, id: string) => Promise<StoredVoice>;
+    confirmConnection?: (id: string) => Promise<{ expiresAt: number }>;
     heartbeat?: (owner: VoiceOwner, id: string, scheduledUntil?: number) => Promise<{ expiresAt: number; controlExpiresAt: number; schedule: boolean }>;
   };
   resolveWaveform?: (request: Request, id: string) => Promise<{
@@ -176,7 +182,7 @@ function attachControl(session: Conversation, options: Options, onFatal: () => v
         session.connected = options.connected(session.id);
         void session.connected.catch(fatal);
       }
-      if ((event.type === 'session.started' || event.type === 'session.input_audio.append') && !greeted && !session.canceled) {
+      if ((event.type === 'session.started' || event.type === 'session.input_audio.append') && !greeted && !session.canceled && options.greeting !== false) {
         greeted = true;
         clearTimeout(session.startTimer);
         socket.send(JSON.stringify({
@@ -231,6 +237,7 @@ export function createVoiceServer(options: Options = {}) {
 
   async function scope(request: Request) {
     const params = new URL(request.url).searchParams;
+    const demoGrant = options.demoGrant?.(request);
     const override = request.headers.get('X-FlowPath-Admin');
     const previousSessionId = request.headers.get('X-FlowPath-Continue');
     if (override !== null && override !== 'continue' || previousSessionId !== null && (!validId(previousSessionId) || !override)) {
@@ -255,7 +262,7 @@ export function createVoiceServer(options: Options = {}) {
     if (!params.has('waveformId')) {
       // A known visitor can still close an existing conversation after new starts are paused.
       const visitor = options.production ? await options.resolvePublicVisitor?.(request) : null;
-      return { waveformId: undefined, personal: undefined, visitor: visitor?.kind === 'visitor' ? visitor : undefined, admin, isAdminCurrent: identity?.isCurrent };
+      return { demoGrant, waveformId: undefined, personal: undefined, visitor: visitor?.kind === 'visitor' ? visitor : undefined, admin, isAdminCurrent: identity?.isCurrent };
     }
     const id = params.get('waveformId');
     if (!validId(id)) return { error: json({ error: 'Invalid waveform identifier.' }, 400) };
@@ -265,7 +272,7 @@ export function createVoiceServer(options: Options = {}) {
         return { error: json({ error: 'This preview is unavailable.' }, 403) };
       }
       if (!personal || !await personal.isCurrent()) return { error: json({ error: 'Sign in as this waveform’s owner to continue.' }, 403) };
-      return { waveformId: id, personal, visitor: undefined, admin, isAdminCurrent: identity?.isCurrent };
+      return { demoGrant, waveformId: id, personal, visitor: undefined, admin, isAdminCurrent: identity?.isCurrent };
     } catch { return { error: json({ error: 'Your waveform could not be loaded. Try again later.' }, 503) }; }
   }
 
@@ -370,11 +377,45 @@ export function createVoiceServer(options: Options = {}) {
     return result.finalized;
   }
 
+  function connectionResponse(session: Conversation, request: Request, firstFrame: object, status = 200) {
+          const encoder = new TextEncoder(); let cancel!: () => void;
+          const stream = new ReadableStream<Uint8Array>({
+            async start(controller) {
+              let resolveStarted!: (value: { expiresAt: number }) => void, rejectStarted!: (error: Error) => void;
+              const started = new Promise<{ expiresAt: number }>((resolve, reject) => { resolveStarted = resolve; rejectStarted = reject; });
+              void started.catch(() => undefined);
+              const timeout = setTimeout(() => rejectStarted(new Error('Connection timed out')), 30_000);
+              cancel = () => rejectStarted(new Error('Connection canceled'));
+              request.signal.addEventListener('abort', cancel, { once: true });
+              const control = attachControl(session, { ...options, greeting: false, connected: async id => {
+                const meter = await options.production!.confirmConnection!(id); resolveStarted(meter);
+              } }, () => rejectStarted(new Error('Connection failed')));
+              void control.closed.then(() => rejectStarted(new Error('Connection ended')));
+              let complete = false;
+              try {
+                await control.ready;
+                controller.enqueue(encoder.encode(JSON.stringify(firstFrame) + '\n'));
+                const meter = await started;
+                controller.enqueue(encoder.encode(JSON.stringify(meter) + '\n'));
+                complete = true;
+              } catch { try { controller.enqueue(encoder.encode(JSON.stringify({ error: 'The voice connection could not be confirmed.' }) + '\n')); } catch { /* Client departed. */ } }
+              finally {
+                clearTimeout(timeout); request.signal.removeEventListener('abort', cancel); control.dispose();
+                if (!complete) await closeCreatedDemo(session).catch(() => undefined);
+                try { controller.close(); } catch { /* Client already closed. */ }
+              }
+            },
+            cancel() { cancel?.(); },
+          });
+          return new Response(stream, { status, headers: { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' } });
+  }
+
   function productionOwner(access: Awaited<ReturnType<typeof scope>>): VoiceOwner | null {
-    if (access.visitor) return { ...access.visitor, ...(!options.requestScopedDemo && access.admin ? { admin: access.admin } : {}) };
+    if (access.visitor) return { ...access.visitor, ...(access.demoGrant ? { demoGrant: access.demoGrant } : {}), ...(!options.requestScopedDemo && access.admin ? { admin: access.admin } : {}) };
     return access.personal?.accountSessionId && access.waveformId ? {
       ownerUid: access.personal.ownerUid, waveformId: access.waveformId, accountSessionId: access.personal.accountSessionId,
       contentDigest: creationContentDigest(access.personal.waveform),
+      ...(access.demoGrant ? { demoGrant: access.demoGrant } : {}),
       ...(options.requestScopedDemo ? { tester: { uid: access.personal.ownerUid, accountSessionId: access.personal.accountSessionId, founder: access.admin?.uid === access.personal.ownerUid } } : {}),
       ...(access.personal.publishedRevision !== undefined ? { publishedRevision: access.personal.publishedRevision } : {}),
       ...(access.personal.paid ? { paid: access.personal.paid } : {}),
@@ -412,6 +453,7 @@ export function createVoiceServer(options: Options = {}) {
     },
     async GET(request: Request) {
       if (!isAllowedRequest(request, false, options.publicOrigin, options.trustedProxyHost)) return json({ error: 'This host is not enabled for voice.' }, 403);
+      if (options.authorizeStart && !await options.authorizeStart(request)) return json({ enabled: false, message: 'Enter the demo code to talk.' });
       const access = await scope(request);
       if (access.error) return access.error;
       if (options.production && !productionOwner(access)) return json({ enabled: false, message: accessMessage(access) });
@@ -433,6 +475,8 @@ export function createVoiceServer(options: Options = {}) {
     },
     async POST(request: Request) {
       if (!isAllowedRequest(request, true, options.publicOrigin, options.trustedProxyHost)) return json({ error: 'Only same-origin requests are allowed.' }, 403);
+      if (options.authorizeStart && !await options.authorizeStart(request)) return json({ error: 'Enter the demo code first.' }, 403);
+      if (options.requestScopedDemo && !request.headers.get('accept')?.includes('application/x-ndjson')) return json({ error: 'Refresh this page before starting the updated voice demo.' }, 409);
       const access = await scope(request);
       if (access.error) return access.error;
       const owner = productionOwner(access);
@@ -529,8 +573,7 @@ export function createVoiceServer(options: Options = {}) {
           session.canceled ||= canceled;
         }
         if (options.requestScopedDemo) {
-          if (!options.production?.heartbeat) throw new Error('Voice supervision is unavailable');
-          await options.production.heartbeat(owner!, session.id);
+          if (!options.production?.beginConnection) throw new Error('Voice supervision is unavailable');
           // The provider primary/data channel owns greeting and local tools. No
           // socket or timer is left running after this request returns.
           if (session.canceled || request.signal.aborted || access.personal && !await access.personal.isCurrent()
@@ -539,8 +582,10 @@ export function createVoiceServer(options: Options = {}) {
             release(session);
             return json({ error: 'The conversation was canceled.' }, 409);
           }
+          await options.production.beginConnection(owner!, session.id);
           release(session);
-          return json({ sdp: record(payload.transport).sdp, sessionId: session.id, expiresAt,
+          // SDP is not released until the request-owned observer is attached.
+          return connectionResponse(session, request, { sdp: record(payload.transport).sdp, sessionId: session.id, expiresAt,
             browserControl: true, heartbeatMs: 10_000,
             adminOverride: owner?.tester?.founder === true, adminEligible: owner?.tester?.founder === true }, 201);
         }
@@ -592,7 +637,14 @@ export function createVoiceServer(options: Options = {}) {
       if (!owner) return json({ error: 'Sign in with an invited account.' }, 403);
       try {
         const body = await readBody(request);
-        if (Object.keys(body).length !== 1 || !validId(body.sessionId)) return json({ error: 'Invalid conversation identifier.' }, 400);
+        if (!validId(body.sessionId) || Object.keys(body).some(key => !['sessionId', 'connect'].includes(key)) || body.connect !== undefined && body.connect !== true) return json({ error: 'Invalid conversation identifier.' }, 400);
+        if (options.authorizeStart && !await options.authorizeStart(request)) return json({ error: 'Enter the demo code first.' }, 403);
+        if (body.connect === true) {
+          if (!options.production.beginConnection || !options.production.confirmConnection || !key()) return json({ error: 'Connection confirmation is unavailable.' }, 503);
+          const call = await options.production.beginConnection(owner, body.sessionId);
+          const session: Conversation = { id: call.id, apiKey: key()!, providerId: call.providerId, ownerUid: call.ownerUid, waveformId: call.waveformId, durable: call, canceled: false };
+          return connectionResponse(session, request, { ready: true });
+        }
         const lease = await options.production.heartbeat(owner, body.sessionId);
         if (lease.schedule) {
           await options.production.scheduleDeadline(body.sessionId, lease.controlExpiresAt);
@@ -613,6 +665,7 @@ export function createVoiceServer(options: Options = {}) {
         const owner = productionOwner(access);
         if (!owner) return json({ error: accessMessage(access) }, 403);
         try {
+          if (options.production.preCancel && (!options.authorizeStart || await options.authorizeStart(request))) await options.production.preCancel(owner, body.sessionId);
           const call = await options.production.store.cancel(owner.ownerUid, owner.waveformId, body.sessionId,
             owner.accountSessionId, owner.kind, options.production.policy() ?? undefined, owner.demoVisitorId);
           const finalized = call ? await closeStored(call) : true;

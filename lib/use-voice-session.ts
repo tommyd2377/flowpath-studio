@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { VoicePhase } from '@/components/Waveform';
+import { voiceConnectionReader } from './voice-connection';
 import { PUBLIC_GREETING_INSTRUCTIONS } from './voice-config';
 import { monitorAudio, waitForIce } from './voice-session';
 import { createVoiceDiagnostics, type VoiceDiagnosticFinishReason } from './voice-diagnostics';
@@ -25,6 +26,7 @@ type VoiceSession = {
   adminOverride?: boolean;
   adminDeadline?: number;
   browserControl?: boolean;
+  controlConfirmed?: boolean;
   handledDelegations?: Set<string>;
   heartbeat?: ReturnType<typeof setTimeout>;
   admissionLimit?: boolean;
@@ -250,7 +252,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
     setStatus('Connecting…');
     const alive = () => mounted.current && current.current === session;
     const becomeReady = () => {
-      if (!alive() || session.ready || !session.started || !session.answerApplied) return;
+      if (!alive() || session.ready || !session.started || !session.answerApplied || session.browserControl && !session.controlConfirmed) return;
       session.ready = true;
       session.diagnostic?.lifecycle('connected');
       session.lastActivity = Date.now();
@@ -347,7 +349,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
         } else if (alive() && event.type === 'session.started') {
           const firstStart = !session.started;
           session.started = true;
-          if (firstStart && session.browserControl) channel.send(JSON.stringify({ type: 'session.instructions.append', event_id: 'flowpath_greeting', delegation_id: null,
+          if (firstStart && session.browserControl && session.controlConfirmed) channel.send(JSON.stringify({ type: 'session.instructions.append', event_id: 'flowpath_greeting', delegation_id: null,
             content: waveformId ? 'Greet the visitor now in English using the saved waveform identity and conversational style. Keep it brief, invite them to talk, then pause and listen. Do not claim unavailable capabilities.' : PUBLIC_GREETING_INSTRUCTIONS }));
           becomeReady();
         } else if (alive() && session.browserControl && event.type === 'session.delegation.created' && 'delegation' in event) {
@@ -401,12 +403,13 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
       // A stop cancels the server reservation by ID. Let the POST complete so
       // even a late provider creation can be closed, without losing its answer.
       const response = await fetch(session.endpoint, {
-        method: 'POST', headers: { ...session.headers, 'Content-Type': 'application/json' },
+        method: 'POST', headers: { ...session.headers, 'Content-Type': 'application/json', Accept: 'application/x-ndjson, application/json' },
         body: JSON.stringify({ sdp, sessionId: session.id, ...(recordDiagnostics ? { diagnostics: true } : {}) }), signal: AbortSignal.timeout(30_000),
       });
       if (!response.ok) throw new Error(await errorMessage(response, session));
-      const result: unknown = await response.json();
-      if (!alive()) { void deleteSession(session.id, session.endpoint, session.headers); return; }
+      let confirmation = response.headers.get('content-type')?.startsWith('application/x-ndjson') ? voiceConnectionReader(response) : undefined;
+      const result: unknown = confirmation ? await confirmation.next() : await response.json();
+      if (!alive()) { void confirmation?.cancel(); void deleteSession(session.id, session.endpoint, session.headers); return; }
       if (!result || typeof result !== 'object' || !('sdp' in result) || typeof result.sdp !== 'string'
         || !('sessionId' in result) || result.sessionId !== session.id || !('expiresAt' in result)
         || typeof result.expiresAt !== 'number' || !Number.isFinite(result.expiresAt)) {
@@ -417,7 +420,24 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
       session.adminEligible = 'adminEligible' in result && result.adminEligible === true;
       session.adminOverride = 'adminOverride' in result && result.adminOverride === true;
       session.adminDeadline = 'adminDeadline' in result && typeof result.adminDeadline === 'number' ? result.adminDeadline : undefined;
+      if (!confirmation && session.browserControl && 'connectionConfirmation' in result && result.connectionConfirmation === true) {
+        const reply = await fetch(session.endpoint, { method: 'PATCH', headers: { ...session.headers, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: session.id, connect: true }), signal: session.controller.signal });
+        if (!reply.ok) throw new Error(await errorMessage(reply, session));
+        confirmation = voiceConnectionReader(reply);
+        if ((await confirmation.next()).ready !== true) throw new Error('Voice supervision is unavailable.');
+      }
       await peer.setRemoteDescription({ type: 'answer', sdp: result.sdp });
+      if (confirmation) {
+        try {
+          const meter = await confirmation.next();
+          if (typeof meter.expiresAt !== 'number' || !Number.isFinite(meter.expiresAt)) throw new Error('Invalid voice confirmation.');
+          session.expiresAt = meter.expiresAt;
+        } finally { void confirmation.cancel(); }
+      }
+      session.controlConfirmed = true;
+      if (session.browserControl && session.started) channel.send(JSON.stringify({ type: 'session.instructions.append', event_id: 'flowpath_greeting', delegation_id: null,
+        content: waveformId ? 'Greet the visitor now in English using the saved waveform identity and conversational style. Keep it brief, invite them to talk, then pause and listen. Do not claim unavailable capabilities.' : PUBLIC_GREETING_INSTRUCTIONS }));
       if (!alive()) return;
       session.answerApplied = true;
       becomeReady();

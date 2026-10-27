@@ -15,6 +15,7 @@ import { liveTextPanelEnabled, type TextPanelConfiguration } from '@/lib/text-pa
 import { clientAnalytics, observeVisit } from '@/lib/analytics-runtime';
 import { Square } from 'lucide-react';
 import BrandLoader from './BrandLoader';
+import DemoCodeGate from './DemoCodeGate';
 
 export default function VoiceExperience({ waveformId, name, accentColor = WAVEFORM_DEFAULT_COLOR, profilePhoto = null, paidPayer, onSettled, textPanel = null, analyticsSurface, nextConversation, draftPreview = false, publishedPreview = false }: {
   waveformId?: string; name?: string; accentColor?: string; profilePhoto?: string | null; paidPayer?: 'creator' | 'self'; onSettled?: () => void; textPanel?: TextPanelConfiguration | null; analyticsSurface?: 'private' | 'public'; nextConversation?: () => void; draftPreview?: boolean; publishedPreview?: boolean;
@@ -25,6 +26,7 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
   useEffect(() => { if (voice.settledVersion > handledSettlement.current) { handledSettlement.current = voice.settledVersion; onSettled?.(); } }, [voice.settledVersion, onSettled]);
   const diagnosticsMode = useDiagnosticsMode();
   const [recordNext, setRecordNext] = useState(false);
+  const [demoCodeRequired, setDemoCodeRequired] = useState(false);
   const { active, stop } = voice;
   const connected = voice.phase === 'listening' || voice.phase === 'speaking';
   const textVisible = textBoxEnabled && voice.textState.visible;
@@ -66,7 +68,7 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
   }, [active, stop]);
 
   return <div className="voice-experience" data-active={voice.active} data-connected={connected}
-    data-personal={Boolean(waveformId)} data-profile-photo={hasPortrait} data-docked={docked} data-text-visible={textVisible}
+    data-demo-code={demoCodeRequired} data-personal={Boolean(waveformId)} data-profile-photo={hasPortrait} data-docked={docked} data-text-visible={textVisible}
     style={waveformId ? appearanceTheme(accentColor) : undefined}>
     <nav className="voice-navigation" aria-label="FlowPath navigation" hidden={Boolean(waveformId) && voice.active}>
       {!waveformId && <a className="news-example-link" href="https://flowpathapp.com" onClick={() => clientAnalytics.record({ eventName: 'navigation_selected', properties: { destination: 'news' } })}>FlowPath News example</a>}
@@ -100,6 +102,7 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
         }}>
         <Waveform phase={voice.phase} inputAnalyser={voice.inputAnalyser} outputAnalyser={voice.outputAnalyser} accentColor={waveformId ? accentColor : undefined} />
       </button>
+      {!voice.active && !docked && <DemoCodeGate onState={setDemoCodeRequired} />}
       <p className="voice-hint" id="voice-hint" aria-hidden={connected || docked}>{nextConversation ? 'Copy your text, then tap the wave to choose your next conversation' : 'Tap the wave whenever you’re ready'}</p>
       <p className="voice-status" id="voice-status" role="status" aria-live="polite" aria-atomic="true">{voice.phase === 'connecting' && <BrandLoader variant="inline" />}{showStatus ? status : ''}</p>
       {paidPayer && <p className="paid-session-meter" aria-live="polite">{paidPayer === 'creator' ? 'Creator pays' : 'You pay from your prepaid balance'}{voice.remainingSeconds !== null ? ` · ${voice.remainingSeconds} seconds remaining${voice.remainingSeconds <= 30 ? ' — ending soon' : ''}` : ''}</p>}

@@ -17,6 +17,7 @@ import { clientAnalytics, observeVisit } from '@/lib/analytics-runtime';
 import type { TextPanelConfiguration } from '@/lib/text-panel';
 import { PLUGINS } from '@/lib/plugin-contract';
 import BrandLoader from './BrandLoader';
+import DemoCodeGate from './DemoCodeGate';
 import WaveformSettingsPreview from './WaveformSettingsPreview';
 import { AudioLines, BookOpen, LockKeyhole, MessageSquareText, Puzzle, Settings2, SlidersHorizontal, TextCursorInput, ArrowUpRight } from 'lucide-react';
 
@@ -35,6 +36,7 @@ async function readResponse<T>(response: Response): Promise<T> {
 
 export default function AccountSettings() {
   const [account, setAccount] = useState<Account | null>(null);
+  const [demoAllowed, setDemoAllowed] = useState(false);
   const [waveform, setWaveform] = useState<Waveform | null>(null);
   const [name, setName] = useState('');
   const [voice, setVoice] = useState<VoiceName>(DEFAULT_VOICE);
@@ -60,7 +62,7 @@ export default function AccountSettings() {
   const [returnTo, setReturnTo] = useState('/account');
   const accountRevision = useRef(0);
   const photoRevision = useRef<symbol | null>(null);
-  const safety = useCreationReview({ enabled: !!account?.creationSafetyEnabled && !!account.user,
+  const safety = useCreationReview({ enabled: !!account?.creationSafetyEnabled && !!account.user && (!account.hostedTesterDemo || demoAllowed),
     candidate: { name, initialPrompt, textPanel, profilePhoto }, ownerKey: account?.user?.uid ?? '',
     automatic: !waveform || name !== waveform.name || initialPrompt !== waveform.initialPrompt
       || JSON.stringify(textPanel) !== JSON.stringify(waveform.textPanel ?? null) || profilePhoto !== waveform.profilePhoto });
@@ -231,6 +233,7 @@ export default function AccountSettings() {
   ] as const;
   if (loading) return <BrandLoader variant="screen" label="Loading your account…" />;
   return <main className={account?.user ? 'account-page settings-workspace' : 'account-page'} style={appearanceTheme(previewColor)}>
+    <DemoCodeGate onAccess={setDemoAllowed} />
     {account?.user ? <>
       <header className="settings-topbar"><Link className="settings-brand" href="/" aria-label="Back to FlowPath"><Image src="/brand/flowpath-icon-square.png" alt="" width={36} height={36} loading="eager" />FlowPath <span>Studio</span></Link>
         <div className="account-identity"><span>Signed in as {account.user.displayName}</span><button type="button" onClick={() => void signOut()} disabled={busy} aria-busy={busyAction === 'sign-out'}>{busyAction === 'sign-out' && <BrandLoader variant="inline" />}Sign out</button></div>

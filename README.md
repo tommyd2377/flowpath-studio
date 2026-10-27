@@ -2,7 +2,7 @@
 
 **Save draft** keeps edits private. **Preview draft** opens your saved private version; **Publish / Update published version** explicitly updates the visitor-facing snapshot, opened through **View published version**. Saving alone does not change an existing publication.
 
-The new [hosted tester demo candidate](docs/hosted-beta.md) uses request-based heartbeats/cleanup, a three-minute daily account allowance and an owner-only founder exemption that never applies to the introduction. It has no daily OpenAI spending guard. Its source activation profile is prepared; release and real-provider acceptance remain pending. Payments and hosted Knowledge remain off.
+The new [hosted tester demo candidate](docs/hosted-beta.md) uses request-based heartbeats/cleanup, a three-minute daily account allowance and an owner-only founder exemption that never applies to the introduction. It has no daily OpenAI spending guard. Its temporary server-validated code gate allows anonymous introduction demos; creation still requires an invited account and code access. The meter starts on provider-confirmed connection. See the release record for deployment status; real voice acceptance is manual at the user’s request. Payments and hosted Knowledge remain off.
 
 The earlier October 27 [voice lifecycle candidate](docs/voice-lifecycle.md) keeps hosted starts closed pending cutoff/recovery acceptance and adds request-owned, fenced cleanup for known sessions. The full localhost experience and unmetered founder testing remain unchanged. This branch is not deployment or hosted reactivation approval.
 
