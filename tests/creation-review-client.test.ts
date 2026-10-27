@@ -99,7 +99,7 @@ test('pending and completed reviews cannot be decided, while malformed queues fa
     { reviews: [{ ...proof, digest: '', candidate, status: 'manual-review', categories: [] }] },
     { reviews: [{ ...proof, candidate, status: 'unknown', categories: [] }] },
     { reviews: [{ ...proof, candidate, status: 'manual-review', categories: ['x'.repeat(81)] }] },
-    { reviews: Array(101).fill({ ...proof, candidate, status: 'manual-review', categories: [] }) }]) {
+    { reviews: Array(201).fill({ ...proof, candidate, status: 'manual-review', categories: [] }) }]) {
     assert.equal(creationReviewQueueRecords(input), null);
   }
 });

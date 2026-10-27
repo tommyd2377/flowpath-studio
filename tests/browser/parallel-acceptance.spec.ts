@@ -31,7 +31,7 @@ test('background approval is reused on save; available Text Box stays absent bef
   await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Text Box content', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Copy text', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('link', { name: 'FlowPath News example', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'Talk through the news', exact: true })).toHaveCount(0);
   await page.goto('/account');
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await page.goto(address!);
@@ -70,6 +70,35 @@ test('manual review queue requires an explicit admin decision for the reviewed v
   await expect(page.getByRole('heading', { name: 'Creation review queue', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Approve reviewed version', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Approve reviewed version', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Revoke approval', exact: true })).toBeVisible();
+});
+
+test('low-risk content saves immediately and the founder can revoke that exact version', async ({ page }) => {
+  await page.goto('/account');
+  await page.getByRole('button', { name: 'Use test owner A', exact: true }).click();
+  await settingsSection(page, 'appearance');
+  await page.getByLabel('Waveform name', { exact: true }).fill('Historical guide [fixture:followup]');
+  await settingsSection(page, 'instructions');
+  await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('A safe historical simulation for conversation.');
+  await expect(page.locator('[data-creation-safety]')).toHaveAttribute('data-creation-safety', 'allowed');
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
+  await expect(page.getByText('Saved. Your draft is private until you publish it.')).toBeVisible();
+  const saved = (await (await page.request.get('/api/waveform')).json()).waveform;
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await page.getByRole('button', { name: 'Use test safety admin', exact: true }).click();
+  await settingsSection(page, 'account');
+  const entry = page.locator('.creation-review-queue article').filter({ has: page.getByRole('heading', { name: saved.name, exact: true }) });
+  await expect(entry).toContainText('This version is usable.');
+  await entry.getByRole('button', { name: 'Revoke approval', exact: true }).click();
+  await expect(entry).toHaveCount(0);
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await page.getByRole('button', { name: 'Use test owner A', exact: true }).click();
+  await expect(page.locator('[data-creation-safety]')).toHaveAttribute('data-creation-safety', 'revoked');
+  await expect(page.getByRole('button', { name: 'Save draft', exact: true })).toBeDisabled();
+  const denied = await page.request.get(`/api/session?waveformId=${saved.id}`);
+  expect(denied.status()).toBe(409);
+  expect((await denied.json()).reviewRequired).toBe(true);
+  expect((await (await page.request.get('/api/waveform')).json()).waveform).toEqual(saved);
 });
 
 test('discarding a blocked draft restores the identical saved approval without changing settings', async ({ page }) => {

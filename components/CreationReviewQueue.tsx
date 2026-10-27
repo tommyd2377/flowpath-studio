@@ -8,7 +8,7 @@ import BrandLoader from './BrandLoader';
 function AdminReviewQueue() {
   const [reviews, setReviews] = useState<CreationReviewQueueRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [busyDecision, setBusyDecision] = useState<{ review: CreationReviewQueueRecord; decision: 'allowed' | 'blocked' } | null>(null);
+  const [busyDecision, setBusyDecision] = useState<{ review: CreationReviewQueueRecord; decision: 'allowed' | 'blocked' | 'revoked' } | null>(null);
   const busy = busyDecision !== null;
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -44,8 +44,8 @@ function AdminReviewQueue() {
     setReviews([]); setLoading(true); setError(''); setRevision(value => value + 1);
   }
 
-  async function decide(review: CreationReviewQueueRecord, decision: 'allowed' | 'blocked') {
-    if (inFlight.current || !canDecideCreationReview(review.status)) return;
+  async function decide(review: CreationReviewQueueRecord, decision: 'allowed' | 'blocked' | 'revoked') {
+    if (inFlight.current || (decision === 'revoked' ? review.status !== 'allowed' : !canDecideCreationReview(review.status))) return;
     inFlight.current = true;
     setBusyDecision({ review, decision }); setError(''); setMessage('');
     const controller = new AbortController();
@@ -61,7 +61,7 @@ function AdminReviewQueue() {
         setReviews([]);
         setError('The decision could not be saved. Refresh the queue before trying again.');
       } else {
-        setMessage(decision === 'allowed' ? 'The reviewed version was approved.' : 'The reviewed version was rejected.');
+        setMessage(decision === 'revoked' ? 'Approval was revoked. This version can no longer be used.' : decision === 'allowed' ? 'The reviewed version was approved.' : 'The reviewed version was rejected.');
         setReviews([]); setLoading(true); setRevision(value => value + 1);
       }
     } catch {
@@ -76,7 +76,7 @@ function AdminReviewQueue() {
 
   return <section className="creation-review-queue" aria-label="Creation review queue" aria-busy={loading || busy}>
     <h2>Creation review queue</h2>
-    <p>Read the exact version below before choosing a decision. Pending reviews cannot be approved.</p>
+    <p>Low-risk cases can be used immediately while you review them here. Serious uncertainty stays on hold. Read the exact version before approving, rejecting or revoking it.</p>
     <button type="button" className="secondary-button" disabled={loading || busy} onClick={refresh}>Refresh review queue</button>
     {loading && <BrandLoader label="Loading reviews…" />}
     {error && <p className="account-error" role="alert">{error}</p>}
@@ -85,6 +85,7 @@ function AdminReviewQueue() {
     {reviews.map(review => <article key={`${review.proof.ownerUid}:${review.proof.reviewId}:${review.proof.digest}`}
       style={{ marginTop: '1rem', padding: '1rem', border: '1px solid currentColor', borderRadius: '0.75rem' }}>
       <h3>{review.candidate.name}</h3>
+      {review.status === 'allowed' && <p>This version is usable. You can revoke its approval below.</p>}
       <p>Status: {review.status} · Categories: {review.categories.length ? review.categories.join(', ') : 'None'}</p>
       {review.issue && <p>Automatic review needs a human decision: {review.issue === 'coverage' ? 'complete file coverage was unavailable' : review.issue === 'budget' ? 'review budget unavailable' : review.issue === 'abandoned' ? 'the attempt was interrupted' : 'the provider result could not be confirmed'}. No automatic retry was made.</p>}
       <p>Owner: {review.proof.ownerUid}</p>
@@ -94,10 +95,10 @@ function AdminReviewQueue() {
       {review.candidate.document && <><p>Document: <a href={`/api/creation-review/admin/${encodeURIComponent(review.proof.reviewId)}/file`}>Download {review.candidate.document.filename} for full review</a>. Read the complete original before deciding. If retrieval is unavailable, keep it blocked until you can inspect a matching original.</p><p style={{ overflowWrap: 'anywhere' }}>Original SHA-256: {review.candidate.document.digest}</p></>}
       {review.candidate.textPanel?.version === 1 && <><h4>Creator text</h4><div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{review.candidate.textPanel.text}</div></>}
       {review.candidate.textPanel?.version === 2 && <p>Text Box plugin enabled. Conversation text is not saved with this waveform.</p>}
-      <div className="account-actions">
+      <div className="account-actions">{review.status === 'allowed' ? <button type="button" className="secondary-button" disabled={loading || busy} aria-busy={busyDecision?.review === review && busyDecision.decision === 'revoked'} onClick={() => void decide(review, 'revoked')}>{busyDecision?.review === review && busyDecision.decision === 'revoked' && <BrandLoader variant="inline" />}Revoke approval</button> : <>
         <button type="button" className="primary-button" disabled={loading || busy || !canDecideCreationReview(review.status)} aria-busy={busyDecision?.review === review && busyDecision.decision === 'allowed'} onClick={() => void decide(review, 'allowed')}>{busyDecision?.review === review && busyDecision.decision === 'allowed' && <BrandLoader variant="inline" />}Approve reviewed version</button>
         <button type="button" className="secondary-button" disabled={loading || busy || !canDecideCreationReview(review.status)} aria-busy={busyDecision?.review === review && busyDecision.decision === 'blocked'} onClick={() => void decide(review, 'blocked')}>{busyDecision?.review === review && busyDecision.decision === 'blocked' && <BrandLoader variant="inline" />}Reject reviewed version</button>
-      </div>
+      </>} </div>
     </article>)}
   </section>;
 }

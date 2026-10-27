@@ -405,3 +405,8 @@ button { font: inherit; }
 .demo-code-gate--waveform input { border: 0; border-radius: 0; outline: none; box-shadow: none; background: transparent; padding: 14px 0; letter-spacing: .06em; }
 .demo-code-gate--waveform input::placeholder { letter-spacing: .02em; color: var(--muted, #a5b1d8); }
 @media (prefers-reduced-motion: reduce) { .demo-code-gate--waveform .demo-code-entry { transition: none; } }
+
+/* Homepage examples remain distinct from private waveform navigation. */
+.home-news-links { display: flex; flex-wrap: wrap; gap: 8px 16px; min-width: 0; max-width: 480px; }
+.home-news-title { flex-basis: 100%; font-weight: 600; }
+.voice-navigation:has(.home-news-links) { align-items: flex-start; }

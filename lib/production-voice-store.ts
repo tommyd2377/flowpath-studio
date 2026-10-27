@@ -22,6 +22,7 @@ export type VoiceOwner = { ownerUid: string; waveformId: string; accountSessionI
   /** Derived by hosted tester admission from verified server identity, never request JSON. */
   demoGrant?: string;
   tester?: { uid: string; accountSessionId: string; founder: boolean };
+  demoSource?: { ownerUid: string };
   demoVisitorId?: string; contentDigest?: string; publishedRevision?: number;
   paid?: { actor: { visitorId: string; uid?: string; accountSessionId?: string }; choice: 'creator' | 'self'; preview?: boolean; expectedContentDigest?: string } };
 export type StoredVoice = VoiceOwner & {
@@ -34,6 +35,7 @@ export type StoredVoice = VoiceOwner & {
   connectionPending?: boolean;
   allowancePath?: string;
   allowanceSeconds?: number;
+  visitorAllowancePath?: string;
 };
 export const VOICE_CLEANUP_LEASE_MS = 20_000;
 export type VoiceTransaction = {

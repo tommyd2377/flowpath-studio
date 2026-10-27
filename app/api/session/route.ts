@@ -5,7 +5,7 @@ import { productionVoicePolicy } from '../../../lib/production-voice-store';
 import { withPublicVoiceVisitor } from '../../../lib/public-voice-identity';
 import { localAppOrigin } from '../../../lib/local-app-runtime';
 import { paidEnabled } from '../../../lib/paid-runtime';
-import { withWaveformKnowledge } from '../../../lib/knowledge-runtime';
+import { withWaveformKnowledge, resolveDemoVisitor } from '../../../lib/knowledge-runtime';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -15,7 +15,7 @@ const state = globalThis as typeof globalThis & { flowpathVoiceServer?: ReturnTy
 const resolveWaveform = withWaveformKnowledge;
 const resolveAdmin = accountServer.resolveAdmin;
 const fullLocal = !!localAppOrigin();
-const server = process.env.NODE_ENV === 'production' || fullLocal ? getProductionVoiceServer(resolveWaveform, resolveAdmin)
+const server = process.env.NODE_ENV === 'production' || fullLocal ? getProductionVoiceServer(resolveWaveform, resolveAdmin, resolveDemoVisitor)
   : state.flowpathVoiceServer ??= createVoiceServer({ resolveWaveform, resolveAdmin });
 
 const unpaid = (request: Request) => paidEnabled && new URL(request.url).searchParams.has('waveformId');

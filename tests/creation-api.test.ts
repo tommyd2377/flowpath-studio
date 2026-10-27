@@ -21,12 +21,13 @@ async function fixture() {
   const db = new PaidMemoryDatabase();
   let calls = 0;
   const policy: CreationSafetyPolicy = { version: 'test-v1', categories: Object.fromEntries(CREATION_SAFETY_CATEGORIES.map(key => [key, 'block'])) as CreationSafetyPolicy['categories'] };
+  policy.categories['portrait-provenance'] = 'allow-and-review';
   const store = (identity: CreationIdentity) => createCreationReviewStore(db, { mode: 'fixture', policy: () => policy,
     verifyOwner: async (_tx, actor) => { if (actor.uid !== identity.owner.uid || !await identity.isCurrent()) throw new CreationSafetyError('Sign in again.', 403); },
     verifyAdmin: async () => { if (identity.owner.role !== 'admin' || !await identity.isCurrent()) throw new CreationSafetyError('Admin access required.', 403); },
     reviewer: createFixtureCreationReviewer({ nodeEnv: 'development', enabled: true }, async candidate => {
       calls++;
-      return { findings: Object.fromEntries(CREATION_SAFETY_CATEGORIES.map(key => [key, candidate.name === 'Manual' && key === 'fraud-impersonation' ? 'uncertain' : 'clear'])) as Record<typeof CREATION_SAFETY_CATEGORIES[number], 'clear' | 'uncertain'> };
+      return { findings: Object.fromEntries(CREATION_SAFETY_CATEGORIES.map(key => [key, (candidate.name === 'Manual' && key === 'fraud-impersonation' || candidate.name === 'Followup' && key === 'portrait-provenance') ? 'uncertain' : 'clear'])) as Record<typeof CREATION_SAFETY_CATEGORIES[number], 'clear' | 'uncertain'> };
     }),
   });
   const guard = async (req: Request, input: WaveformInput) => {
@@ -86,5 +87,23 @@ test('manual queue requires verified admin and binds its explicit decision to cu
     assert.equal((await f.api.adminPOST(request('/api/creation-review/admin', 'POST', { ...proof, digest: '0'.repeat(64) }, admin))).status, 409);
     assert.equal((await f.api.adminPOST(request('/api/creation-review/admin', 'POST', proof, admin))).status, 200);
     assert.equal((await f.accounts.waveformPUT(request('/api/waveform', 'PUT', candidate, await f.signIn()))).status, 200);
+  } finally { await f.cleanup(); }
+});
+
+test('low-risk API approval permits Save immediately; only a verified founder can revoke its exact proof', async () => {
+  const f = await fixture();
+  try {
+    const cookie = await f.signIn(), candidate = { ...f.candidate, name: 'Followup' };
+    const reviewed = await (await f.api.POST(request('/api/creation-review', 'POST', { candidate }, cookie))).json();
+    assert.equal(reviewed.review.status, 'allowed');
+    const saved = await f.accounts.waveformPUT(request('/api/waveform', 'PUT', candidate, cookie));
+    assert.equal(saved.status, 200); const id = (await saved.json()).waveform.id;
+    const admin = await f.signIn('owner-admin');
+    const row = (await (await f.api.adminGET(request('/api/creation-review/admin', 'GET', undefined, admin))).json()).reviews[0];
+    const proof = { ownerUid: row.ownerUid, reviewId: row.reviewId, digest: row.digest, policyDigest: row.policyDigest, policyVersion: row.policyVersion, decision: 'revoked' };
+    assert.equal((await f.api.adminPOST(request('/api/creation-review/admin', 'POST', proof, cookie))).status, 403);
+    assert.equal((await f.api.adminPOST(request('/api/creation-review/admin', 'POST', proof, admin))).status, 200);
+    assert.equal((await f.accounts.waveformPUT(request('/api/waveform', 'PUT', candidate, cookie))).status, 409);
+    await assert.rejects(f.accounts.resolveVoiceWaveform(request('/api/session', 'GET', undefined, cookie), id, 'voice'), /safety review/);
   } finally { await f.cleanup(); }
 });

@@ -42,7 +42,7 @@ type Options = {
   };
   resolveWaveform?: (request: Request, id: string) => Promise<{
     ownerUid: string; waveform: WaveformPrompt; accountSessionId?: string; isCurrent: () => boolean | Promise<boolean>;
-    paid?: VoiceOwner['paid']; publishedRevision?: number;
+    paid?: VoiceOwner['paid']; publishedRevision?: number; publicVisitor?: VoiceOwner;
   } | null>;
   resolvePublicVisitor?: (request: Request) => VoiceOwner | null | Promise<VoiceOwner | null>;
   resolveAdmin?: (request: Request) => Promise<{ uid: string; accountSessionId?: string; testing?: boolean; isCurrent: () => boolean | Promise<boolean> } | null>;
@@ -268,6 +268,7 @@ export function createVoiceServer(options: Options = {}) {
       const visitor = options.production ? await options.resolvePublicVisitor?.(request) : null;
       return { demoGrant, waveformId: undefined, personal: undefined, visitor: visitor?.kind === 'visitor' ? visitor : undefined, admin, isAdminCurrent: identity?.isCurrent };
     }
+    const browserVisitorId = (await options.resolvePublicVisitor?.(request))?.demoVisitorId;
     const id = params.get('waveformId');
     if (!validId(id)) return { error: json({ error: 'Invalid waveform identifier.' }, 400) };
     try {
@@ -276,7 +277,7 @@ export function createVoiceServer(options: Options = {}) {
         return { error: json({ error: 'This preview is unavailable.' }, 403) };
       }
       if (!personal || !await personal.isCurrent()) return { error: json({ error: 'Sign in as this waveform’s owner to continue.' }, 403) };
-      return { demoGrant, waveformId: id, personal, visitor: undefined, admin, isAdminCurrent: identity?.isCurrent };
+      return { demoGrant, browserVisitorId, waveformId: id, personal, visitor: personal.publicVisitor, admin, isAdminCurrent: identity?.isCurrent };
     } catch (error) { return { error: waveformFailure(error) }; }
   }
 
@@ -419,6 +420,7 @@ export function createVoiceServer(options: Options = {}) {
     return access.personal?.accountSessionId && access.waveformId ? {
       ownerUid: access.personal.ownerUid, waveformId: access.waveformId, accountSessionId: access.personal.accountSessionId,
       contentDigest: creationContentDigest(access.personal.waveform),
+      ...(access.browserVisitorId ? { demoVisitorId: access.browserVisitorId } : {}),
       ...(access.demoGrant ? { demoGrant: access.demoGrant } : {}),
       ...(options.requestScopedDemo ? { tester: { uid: access.personal.ownerUid, accountSessionId: access.personal.accountSessionId, founder: access.admin?.uid === access.personal.ownerUid } } : {}),
       ...(access.personal.publishedRevision !== undefined ? { publishedRevision: access.personal.publishedRevision } : {}),

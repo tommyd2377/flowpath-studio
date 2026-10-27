@@ -56,3 +56,12 @@ test('direct waveform PUT cannot bypass the additional code gate after account a
   const result = await server.waveformPUT(new Request(`${base}/api/waveform`, { method: 'PUT', headers: { host, origin: base, cookie: cookiePair(login), 'content-type': 'application/json' }, body: '{}' }));
   assert.equal(result.status, 403); assert.match((await result.json()).error, /demo code/);
 });
+
+
+test('Studio accepts the exact release code and rejects capitalization or added spaces', async () => {
+  const db = new PaidMemoryDatabase();
+  const gate = createDemoAccess(db, { enabled: () => true, publicOrigin: origin });
+  const challenge = cookiePair(await gate.GET(request('GET')));
+  for (const code of ['NYC-1776', ' nyc-1776', 'nyc-1776 ']) assert.equal((await gate.POST(request('POST', challenge, { code }))).status, 403);
+  assert.equal((await gate.POST(request('POST', challenge, { code: 'nyc-1776' }))).status, 200);
+});

@@ -3,6 +3,7 @@ import { isAllowedRequest } from './request-origin';
 
 export const PUBLIC_VOICE_SECONDS = 180;
 export const PUBLIC_WAVEFORM_ID = '00000000-0000-4000-8000-000000000000';
+export const FRANKLIN_DEMO_ID = 'c538ac44-883b-4d96-8785-4ddf8a151efb';
 export const PUBLIC_VOICE_COOKIE = '__Host-flowpath_demo';
 export type PublicVoiceOwner = {
   kind: 'visitor'; ownerUid: string; waveformId: string; accountSessionId: string;
@@ -18,7 +19,8 @@ function publicDemoId(request: Request): string | null | undefined {
 }
 
 /** Page scope retains cancellation authority; the stable cookie hash bounds refresh usage. */
-export function publicVoiceOwner(request: Request): PublicVoiceOwner | null {
+export function publicVoiceOwner(request: Request, waveformId = PUBLIC_WAVEFORM_ID): PublicVoiceOwner | null {
+  if (![PUBLIC_WAVEFORM_ID, FRANKLIN_DEMO_ID].includes(waveformId)) return null;
   const demoId = publicDemoId(request);
   if (demoId === null) return null;
   const cookies = (request.headers.get('cookie') ?? '').split(';').map(value => value.trim());
@@ -28,7 +30,7 @@ export function publicVoiceOwner(request: Request): PublicVoiceOwner | null {
   if (!validToken(token)) return null;
   // Missing page IDs retain the old identity so already-open clients can close safely.
   const accountSessionId = createHash('sha256').update(demoId ? `${token}:${demoId}` : token).digest('hex');
-  return { kind: 'visitor', ownerUid: `visitor:${accountSessionId}`, waveformId: PUBLIC_WAVEFORM_ID, accountSessionId,
+  return { kind: 'visitor', ownerUid: `visitor:${accountSessionId}`, waveformId, accountSessionId,
     demoVisitorId: createHash('sha256').update(token).digest('hex') };
 }
 
@@ -37,7 +39,7 @@ export function isPublicVoiceOwner(value: unknown): value is PublicVoiceOwner {
   const owner = value as Record<string, unknown>;
   return owner.kind === 'visitor' && validToken(owner.accountSessionId)
     && (owner.demoVisitorId === undefined || validToken(owner.demoVisitorId))
-    && owner.ownerUid === `visitor:${owner.accountSessionId}` && owner.waveformId === PUBLIC_WAVEFORM_ID;
+    && owner.ownerUid === `visitor:${owner.accountSessionId}` && [PUBLIC_WAVEFORM_ID, FRANKLIN_DEMO_ID].includes(String(owner.waveformId));
 }
 
 /** Mint only on an allowed public readiness GET, never during paid creation. */
@@ -45,7 +47,7 @@ export async function withPublicVoiceVisitor(request: Request, handler: (request
   enabled: boolean; local?: boolean; publicOrigin?: string; trustedProxyHost?: string;
 }): Promise<Response> {
   const url = new URL(request.url);
-  if (!options.enabled || !options.publicOrigin && !options.local || request.method !== 'GET' || url.pathname !== '/api/session' || url.search
+  if (!options.enabled || !options.publicOrigin && !options.local || request.method !== 'GET' || url.pathname !== '/api/session' || (url.search && ([...url.searchParams.keys()].some(key => key !== 'waveformId') || url.searchParams.getAll('waveformId').length !== 1 || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(url.searchParams.get('waveformId') ?? '')))
     || !isAllowedRequest(request, false, options.publicOrigin, options.trustedProxyHost)
     || publicDemoId(request) === null || publicVoiceOwner(request)) {
     return handler(request);

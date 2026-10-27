@@ -136,3 +136,13 @@ test('explicit full local runtime issues the same visitor identity only on loopb
   }, { enabled: true, local: true });
   assert.equal(rejected.headers.get('set-cookie'), null);
 });
+
+test('valid personal readiness can establish the same browser allowance without granting ownership', async () => {
+  const id = 'c538ac44-883b-4d96-8785-4ddf8a151efb';
+  const result = await withPublicVoiceVisitor(request({}, `/api/session?waveformId=${id}`), async prepared => {
+    assert.equal(publicVoiceOwner(prepared, id)?.waveformId, id);
+    assert.equal(publicVoiceOwner(prepared, 'private'), null);
+    return Response.json({ enabled: false });
+  }, options);
+  assert.ok(result.headers.get('set-cookie'));
+});

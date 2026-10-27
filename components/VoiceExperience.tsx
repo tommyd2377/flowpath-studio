@@ -17,8 +17,8 @@ import { Square } from 'lucide-react';
 import BrandLoader from './BrandLoader';
 import DemoCodeGate from './DemoCodeGate';
 
-export default function VoiceExperience({ waveformId, name, accentColor = WAVEFORM_DEFAULT_COLOR, profilePhoto = null, paidPayer, onSettled, textPanel = null, analyticsSurface, nextConversation, draftPreview = false, publishedPreview = false }: {
-  waveformId?: string; name?: string; accentColor?: string; profilePhoto?: string | null; paidPayer?: 'creator' | 'self'; onSettled?: () => void; textPanel?: TextPanelConfiguration | null; analyticsSurface?: 'private' | 'public'; nextConversation?: () => void; draftPreview?: boolean; publishedPreview?: boolean;
+export default function VoiceExperience({ waveformId, name, accentColor = WAVEFORM_DEFAULT_COLOR, profilePhoto = null, paidPayer, onSettled, textPanel = null, analyticsSurface, nextConversation, draftPreview = false, publishedPreview = false, publicDemo = false }: {
+  waveformId?: string; name?: string; accentColor?: string; profilePhoto?: string | null; paidPayer?: 'creator' | 'self'; onSettled?: () => void; textPanel?: TextPanelConfiguration | null; analyticsSurface?: 'private' | 'public'; nextConversation?: () => void; draftPreview?: boolean; publishedPreview?: boolean; publicDemo?: boolean;
 }) {
   const textBoxEnabled = liveTextPanelEnabled(textPanel);
   const voice = useVoiceSession(waveformId, paidPayer, textBoxEnabled, draftPreview, publishedPreview);
@@ -78,11 +78,11 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
     data-demo-code={demoCodeRequired} data-personal={Boolean(waveformId)} data-profile-photo={hasPortrait} data-docked={docked} data-text-visible={textVisible}
     style={waveformId ? appearanceTheme(accentColor) : undefined}>
     <nav className="voice-navigation" aria-label="FlowPath navigation" hidden={Boolean(waveformId) && voice.active}>
-      {!waveformId && <a className="news-example-link" href="https://flowpathapp.com" onClick={() => clientAnalytics.record({ eventName: 'navigation_selected', properties: { destination: 'news' } })}>FlowPath News example</a>}
+      {!waveformId && <div className="home-news-links"><span className="home-news-title">News</span><Link href="/w/c538ac44-883b-4d96-8785-4ddf8a151efb">Benjamin Franklin</Link><a className="news-example-link" href="https://flowpathapp.com" onClick={() => clientAnalytics.record({ eventName: 'navigation_selected', properties: { destination: 'news' } })}>Talk through the news</a></div>}
       {waveformId && !voice.active && !textVisible && voice.textState.text && <button className="secondary-button text-reopen" type="button" onClick={voice.showText}>Show text</button>}
       <div className="voice-account-links">
         {name && !docked && <span>{name}</span>}
-        <Link href="/account" onClick={() => clientAnalytics.record({ eventName: 'navigation_selected', properties: { destination: 'account' } })}>{waveformId ? 'My waveform' : 'Create your waveform'}</Link>
+        <Link href="/account" onClick={() => clientAnalytics.record({ eventName: 'navigation_selected', properties: { destination: 'account' } })}>{waveformId && !publicDemo ? 'My waveform' : 'Create your waveform'}</Link>
       </div>
     </nav>
     <main className="voice-page" data-voice-phase={voice.phase}>

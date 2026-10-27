@@ -72,13 +72,13 @@ test('clear Nazi names are blocked without a model call; ambiguous findings stay
   const result = await s.reviewer.review({ ...candidate, name: 'Adolf Hitler' }, CONSERVATIVE_CREATION_POLICY, context());
   assert.equal(evaluateCreationReview(result, CONSERVATIVE_CREATION_POLICY).status, 'blocked'); assert.equal(s.calls.length, 0);
   assert.equal(evaluateCreationReview({ findings: { ...findings, 'living-person': 'violation' } }, CONSERVATIVE_CREATION_POLICY).status, 'blocked');
-  assert.equal(evaluateCreationReview({ findings: { ...findings, 'portrait-provenance': 'uncertain' } }, CONSERVATIVE_CREATION_POLICY).status, 'manual-review');
+  assert.equal(evaluateCreationReview({ findings: { ...findings, 'portrait-provenance': 'uncertain' } }, CONSERVATIVE_CREATION_POLICY).status, 'allowed');
 });
 
 test('historical simulation policy routes identity/provenance concerns to the founder without weakening hard bans', () => {
-  assert.equal(CONSERVATIVE_CREATION_POLICY.version, 'local-conservative-2026-10-26-v3');
+  assert.equal(CONSERVATIVE_CREATION_POLICY.version, 'historical-followup-2026-10-27-v4');
   for (const category of ['controversial-identity', 'portrait-provenance'] as const) {
-    assert.equal(evaluateCreationReview({ findings: { ...findings, [category]: 'violation' } }, CONSERVATIVE_CREATION_POLICY).status, 'manual-review');
+    assert.equal(evaluateCreationReview({ findings: { ...findings, [category]: 'violation' } }, CONSERVATIVE_CREATION_POLICY).status, 'allowed');
   }
   for (const category of ['extremist-impersonation', 'living-person', 'recently-deceased-person', 'fraud-impersonation', 'sexual-content-minors', 'self-harm', 'coercive-dependency', 'false-professional', 'privacy-abuse'] as const) {
     assert.equal(evaluateCreationReview({ findings: { ...findings, [category]: 'violation', 'controversial-identity': 'uncertain' } }, CONSERVATIVE_CREATION_POLICY).status, 'blocked');

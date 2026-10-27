@@ -11,6 +11,7 @@ import { createVoiceServer } from '../lib/voice-server';
 import { hostedTesterDemo } from '../lib/tester-voice-config';
 import { voiceSessionConfig } from '../lib/voice-config';
 import { readFileSync } from 'node:fs';
+import { CreationSafetyError } from '../lib/creation-safety';
 
 function fixture() {
   const db = new PaidMemoryDatabase(); let now = Date.UTC(2026, 9, 27, 12);
@@ -37,6 +38,19 @@ function fixture() {
   };
   return { db, personal, intro, store, finish, connect, now: () => now, advance: (ms: number) => { now += ms; } };
 }
+
+test('revocation blocks the next hosted heartbeat and admission while keeping cleanup available', async () => {
+  const f = fixture(), owner = f.personal(); let revoked = false;
+  const store = createTesterVoiceStore(f.db, f.now, 'daily', async () => {
+    if (revoked) throw new CreationSafetyError('Approval revoked');
+  });
+  const call = await store.reserve(owner, 'revoked-call'); await f.connect(store, call.id);
+  revoked = true;
+  await assert.rejects(store.heartbeat(owner, call.id), /Approval revoked/);
+  await assert.rejects(store.available(owner), /Approval revoked/);
+  await f.finish(store, call.id, 1);
+  assert.equal(f.db.rows.get(`voiceConversations/${call.id}`)?.state, 'closed');
+});
 
 test('tester allowance is cumulative by UID across refresh, login, waveform changes, restarts and days', async () => {
   const f = fixture(), owner = f.personal(), first = f.store();
@@ -69,7 +83,7 @@ test('founder owns an unlimited personal call; intro is capped for the same veri
   const welcome = await store.reserve(intro, 'founder-intro');
   assert.equal(welcome.expiresAt - f.now(), 180_000);
   await f.finish(store, welcome.id, 180);
-  await assert.rejects(store.reserve(intro, 'again'), /introduction allowance/);
+  await assert.rejects(store.reserve(intro, 'again'), /visitor allowance/);
   await store.available(founder);
 });
 
@@ -219,7 +233,7 @@ test('code grants unlock anonymous intro only; re-entry and new page IDs cannot 
   await store.beginConnection(guest, call.id); await store.confirmConnection(call.id, await store.connectionDeadline(call.id));
   f.advance(180_000); await store.finish(call.id, { finalized: true, seconds: 180, providerId: 'provider_anonymous' });
   f.db.rows.set(`voiceDemoAccess/${'d'.repeat(64)}`, { state: 'active', expiresAt: f.now() + 86_400_000 });
-  await assert.rejects(store.reserve({ ...otherPage, demoGrant: 'd'.repeat(64) }, 're-entered'), /introduction allowance/);
+  await assert.rejects(store.reserve({ ...otherPage, demoGrant: 'd'.repeat(64) }, 're-entered'), /visitor allowance/);
 });
 
 test('meter begins on provider-confirmed connection, never on access, reservation or a client heartbeat', async () => {
@@ -285,4 +299,60 @@ test('provider initialization charge without a confirmed connection does not con
   f.advance(20_000); await store.cancel(owner.ownerUid, owner.waveformId, call.id); const claim = await store.claimCleanup(call.id);
   await store.finish(call.id, { finalized: true, seconds: 15, providerId: 'provider_initialization', cleanupEpoch: claim!.cleanup.epoch });
   assert.equal((await store.reserve(owner, 'next')).expiresAt - f.now(), 180_000);
+});
+
+test('public Franklin and introduction share a daily allowance, which follows regular login and personal usage', async () => {
+  const { FRANKLIN_DEMO_ID } = await import('../lib/public-voice-identity');
+  const f = fixture(), token = 'a'.repeat(64), browser = 'b'.repeat(64);
+  const intro: VoiceOwner = { kind: 'visitor', ownerUid: `visitor:${token}`, accountSessionId: token, demoVisitorId: browser, waveformId: PUBLIC_WAVEFORM_ID };
+  const franklin = { ...intro, waveformId: FRANKLIN_DEMO_ID, demoSource: { ownerUid: 'founder' } };
+  let revoked = false;
+  const store = createTesterVoiceStore(f.db, f.now, 'daily', async () => { if (revoked) throw new CreationSafetyError('revoked'); });
+  const first = await store.reserve(intro, 'intro-total'); await f.finish(store, first.id, 60);
+  const second = await store.reserve(franklin, 'franklin-total'); assert.equal(second.allowanceSeconds, 120);
+  await f.finish(store, second.id, 30);
+  const personal = { ...f.personal(), demoVisitorId: browser };
+  const third = await store.reserve(personal, 'personal-total'); assert.equal(third.allowanceSeconds, 90);
+  await f.finish(store, third.id, 60);
+  const signed = { ...franklin, tester: personal.tester };
+  const fourth = await store.reserve(signed, 'signed-total'); assert.equal(fourth.allowanceSeconds, 30);
+  await f.connect(store, fourth.id); revoked = true;
+  await assert.rejects(store.heartbeat(signed, fourth.id), /revoked/);
+  await f.finish(store, fourth.id, 30);
+  revoked = false;
+  await assert.rejects(store.reserve(intro, 'anonymous-again'), /ended for today/);
+  await assert.rejects(store.reserve(personal, 'signed-again'), /ended for today/);
+  const founder = { ...f.personal('founder', true), demoVisitorId: browser };
+  assert.equal((await store.reserve(founder, 'unlimited')).expiresAt, UNMETERED_LOCAL_DEADLINE);
+});
+
+test('public Franklin reservations cannot race browser holds or bypass published safety', async () => {
+  const { FRANKLIN_DEMO_ID } = await import('../lib/public-voice-identity');
+  const f = fixture(), owner: VoiceOwner = { kind: 'visitor', ownerUid: `visitor:${'a'.repeat(64)}`, accountSessionId: 'a'.repeat(64), demoVisitorId: 'b'.repeat(64), waveformId: FRANKLIN_DEMO_ID, demoSource: { ownerUid: 'founder' } };
+  const store = createTesterVoiceStore(f.db, f.now, 'daily', async () => {});
+  await assert.rejects(store.available({ ...owner, demoSource: undefined }), /approved publication/);
+  const results = await Promise.allSettled([store.reserve(owner, 'race-a'), store.reserve({ ...owner, ownerUid: `visitor:${'c'.repeat(64)}`, accountSessionId: 'c'.repeat(64) }, 'race-b')]);
+  assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
+});
+
+test('public waveform scope uses the curated prompt while reserving visitor, not founder, authority', async () => {
+  const { FRANKLIN_DEMO_ID } = await import('../lib/public-voice-identity');
+  const f = fixture(), token = 'd'.repeat(64);
+  const visitor: VoiceOwner = { kind: 'visitor', ownerUid: `visitor:${token}`, accountSessionId: token, demoVisitorId: token, waveformId: FRANKLIN_DEMO_ID, demoSource: { ownerUid: 'founder' } };
+  const store = createTesterVoiceStore(f.db, f.now, 'daily', async () => {});
+  const waveform = { id: FRANKLIN_DEMO_ID, name: 'Benjamin Franklin', initialPrompt: 'Approved public snapshot' };
+  let starts = 0;
+  const server = createVoiceServer({ enabled: () => true, apiKey: () => 'fixture', publicOrigin: 'https://voice.example', requestScopedDemo: true, requestOwnedCleanup: true,
+    resolveWaveform: async () => ({ ownerUid: 'founder', waveform, publicVisitor: visitor, isCurrent: () => true }),
+    production: { store, policy: () => ({ ownerDailySeconds: 900, globalDailySeconds: 3600, globalConcurrency: 2, publicDemoSeconds: 180, access: 'signed-in', allowedUids: [] }), scheduleDeadline: async () => {} },
+    requestProvider: (async (_url, init) => { starts++; assert.match(String(init?.body), /Approved public snapshot/); return new Response('', { status: 400 }); }) as typeof fetch });
+  const req = (method: string) => new Request(`https://voice.example/api/session?waveformId=${FRANKLIN_DEMO_ID}`, { method,
+    headers: { host: 'voice.example', origin: 'https://voice.example', 'content-type': 'application/json', accept: 'application/x-ndjson' },
+    ...(method === 'POST' ? { body: JSON.stringify({ sessionId: randomUUID(), sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n' }) } : {}) });
+  assert.equal((await (await server.GET(req('GET'))).json()).enabled, true);
+  const response = await server.POST(req('POST')); await response.text();
+  assert.equal(starts, 1);
+  const call = [...f.db.rows.entries()].find(([path]) => path.startsWith('voiceConversations/'))?.[1];
+  assert.equal(call?.kind, 'visitor'); assert.equal(call?.ownerUid, visitor.ownerUid); assert.equal(call?.allowanceSeconds, 180);
+  assert.equal(call?.tester, undefined);
 });

@@ -477,7 +477,7 @@ test('the public account link stays available while talking and navigation close
   await page.goto('/');
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'FlowPath News example', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Talk through the news', exact: true })).toBeVisible();
   await page.getByRole('link', { name: 'Create your waveform', exact: true }).click();
   await expect(page).toHaveURL(/\/account$/);
   await expect(page.getByRole('heading', { name: 'My waveform', exact: true })).toBeVisible();
@@ -623,7 +623,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     expect(Math.abs(initial.y + initial.height / 2 - viewport.height / 2)).toBeLessThan(1);
     await expect(page.locator('.wordmark')).toHaveCSS('opacity', '1');
     const navigation = page.getByRole('navigation', { name: 'FlowPath navigation', exact: true });
-    const newsLink = navigation.getByRole('link', { name: 'FlowPath News example', exact: true });
+    const newsLink = navigation.getByRole('link', { name: 'Talk through the news', exact: true });
     const accountLink = navigation.getByRole('link', { name: 'Create your waveform', exact: true });
     await expect(newsLink).toHaveAttribute('href', 'https://flowpathapp.com');
     await expect(newsLink).not.toHaveAttribute('target', '_blank');
@@ -631,7 +631,9 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     const newsBounds = (await newsLink.boundingBox())!;
     const accountBounds = (await accountLink.boundingBox())!;
     expect(newsBounds.x + newsBounds.width).toBeLessThan(accountBounds.x);
-    expect(Math.abs(newsBounds.y - accountBounds.y)).toBeLessThan(1);
+    const newsTitle = (await page.locator('.home-news-title').boundingBox())!;
+    expect(Math.abs(newsTitle.y - accountBounds.y)).toBeLessThan(1);
+    await expect(navigation.getByRole('link', { name: 'Benjamin Franklin', exact: true })).toHaveAttribute('href', '/w/c538ac44-883b-4d96-8785-4ddf8a151efb');
     const newsStyle = await newsLink.evaluate(element => ({ color: getComputedStyle(element).color, fontSize: getComputedStyle(element).fontSize }));
     await expect(accountLink).toHaveCSS('color', newsStyle.color);
     await expect(accountLink).toHaveCSS('font-size', newsStyle.fontSize);
@@ -750,7 +752,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     await expect(photo).toHaveAttribute('src', profilePhoto);
     const accent = await page.locator('.voice-experience').evaluate(element => getComputedStyle(element).getPropertyValue('--accent-rgb').replace(/\s/g, ''));
     expect(accent).toBe('64,105,225');
-    const newsLink = page.getByRole('link', { name: 'FlowPath News example', exact: true });
+    const newsLink = page.getByRole('link', { name: 'Talk through the news', exact: true });
     const accountLink = page.getByRole('link', { name: 'My waveform', exact: true });
     await expect(newsLink).toHaveCount(0);
     await expect(accountLink).toBeVisible();
@@ -1053,7 +1055,7 @@ for (const viewport of [
   await page.goto(`/w/${id}`);
   const box = page.getByRole('region', { name: 'Text Box content', exact: true });
   await expect(box).toHaveCount(0);
-  await expect(page.getByRole('link', { name: 'FlowPath News example', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'Talk through the news', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
   await expect(box).toHaveCount(0);
@@ -1178,4 +1180,35 @@ test('a signed-in waveform review blocker shows settings guidance without asking
   await expect(page.getByRole('link', { name: 'Open waveform settings', exact: true })).toHaveAttribute('href', '/account');
   await expect(page.locator('#voice-status')).not.toContainText('Sign in');
   expect((await tracker(page)).microphoneCalls).toBe(0); expect(starts).toBe(0);
+});
+
+test('anonymous Franklin loads its public display and code gate before simulated voice, with no private account required', async ({ page }) => {
+  const id = 'c538ac44-883b-4d96-8785-4ddf8a151efb';
+  await fakeMedia(page); const calls = await mockSession(page, { durationMs: 180_000 });
+  await page.route('**/api/billing', route => route.fulfill({ json: { enabled: false } }));
+  await page.route('**/api/waveform*', route => route.fulfill({ json: { publicDemo: true, waveform: { id, name: 'Benjamin Franklin', accentColor: '#3a66ff', profilePhoto: null, textPanel: { type: 'text', version: 2 } } } }));
+  let unlocked = false;
+  await page.route('**/api/demo-access', route => {
+    if (route.request().method() === 'POST') {
+      unlocked = route.request().postDataJSON().code === 'nyc-1776';
+      return route.fulfill({ status: unlocked ? 200 : 403, json: unlocked ? { enabled: true, allowed: true } : { error: 'That demo code is incorrect.' } });
+    }
+    return route.fulfill({ json: { enabled: true, allowed: unlocked } });
+  });
+  await page.goto(`/w/${id}`);
+  await expect(page.getByRole('link', { name: 'Create your waveform', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'My waveform', exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Demo code', { exact: true })).toBeVisible();
+  expect((await tracker(page)).microphoneCalls).toBe(0);
+  await page.getByLabel('Demo code', { exact: true }).fill('NYC-1776');
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.locator('#demo-code-error')).toContainText('incorrect');
+  expect(calls.filter(call => call.method === 'POST')).toHaveLength(0);
+  await page.getByLabel('Demo code', { exact: true }).fill('nyc-1776');
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  expect(calls.find(call => call.method === 'POST')?.waveformId).toBe(id);
+  await expect(page.getByRole('region', { name: 'Text Box content', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  await expect.poll(async () => (await tracker(page)).stoppedTracks).toBe(1);
 });

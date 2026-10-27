@@ -19,7 +19,7 @@ export const creationActor = (identity: CreationIdentity): CreationActor => ({ u
 
 function policy(): CreationSafetyPolicy | null {
   // This policy and reviewer are synthetic fixtures, never a production classifier.
-  if (creationSafetyFixtures) return { version: 'local-fixture-v1', categories: Object.fromEntries(CREATION_SAFETY_CATEGORIES.map(key => [key, 'block'])) as CreationSafetyPolicy['categories'] };
+  if (creationSafetyFixtures) return { version: 'local-fixture-v1', categories: { ...Object.fromEntries(CREATION_SAFETY_CATEGORIES.map(key => [key, 'block'])) as CreationSafetyPolicy['categories'], 'controversial-identity': 'allow-and-review', 'portrait-provenance': 'allow-and-review' } };
   return configuredCreationPolicy(process.env);
 }
 export function creationReviewStore(identity?: CreationIdentity, file?: ReviewFile) {
@@ -42,6 +42,7 @@ export function creationReviewStore(identity?: CreationIdentity, file?: ReviewFi
       const text = `${candidate.name}\n${candidate.initialPrompt}\n${candidate.textPanel?.text ?? ''}`;
       const findings = Object.fromEntries(CREATION_SAFETY_CATEGORIES.map(key => [key, 'clear'])) as Record<typeof CREATION_SAFETY_CATEGORIES[number], 'clear' | 'violation' | 'uncertain'>;
       if (/\[fixture:blocked\]|\b(?:Adolf Hitler|Osama bin Laden)\b/i.test(text)) findings['extremist-impersonation'] = 'violation';
+      else if (/\[fixture:followup\]/i.test(text)) findings['portrait-provenance'] = 'uncertain';
       else if (/\[fixture:manual\]/i.test(text)) findings['fraud-impersonation'] = 'uncertain';
       return { findings };
     }) : localAppOrigin() || hostedCreationReviewConfigured(process.env) ? createLunaCreationReviewer({ key: () => process.env.OPENAI_API_KEY,

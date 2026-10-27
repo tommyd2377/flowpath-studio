@@ -6,6 +6,8 @@ import { createKnowledgeServer } from './knowledge-server';
 import { localAppOrigin } from './local-app-runtime';
 import { creationActor, creationReviewStore, creationSafetyEnabled } from './creation-runtime';
 import { CreationSafetyError } from './creation-safety';
+import { curatedDemo } from './curated-demo-runtime';
+import { FRANKLIN_DEMO_ID, publicVoiceOwner } from './public-voice-identity';
 import { resolvePublishedPreview } from './published-preview';
 
 const fixtures = process.env.NODE_ENV === 'development' && process.env.FLOWPATH_ACCOUNT_MODE === 'local' && process.env.FLOWPATH_KNOWLEDGE_FIXTURES === '1';
@@ -43,6 +45,13 @@ export const knowledgeServer = createKnowledgeServer({ store: knowledgeStore, av
       waveformId: resolved.waveform.id, isCurrent: identity.isCurrent, reviewIdentity: identity } : null;
   },
 });
+export async function resolveDemoVisitor(request: Request) {
+  const visitor = publicVoiceOwner(request);
+  if (!visitor) return null;
+  const identity = await accountServer.resolveIdentity(request);
+  return identity && identity.owner.role !== 'admin' && identity.accountSessionId && await identity.isCurrent()
+    ? { ...visitor, tester: { uid: identity.owner.uid, accountSessionId: identity.accountSessionId, founder: false } } : visitor;
+}
 export async function withWaveformKnowledge(request: Request, id: string) {
   if (new URL(request.url).searchParams.get('preview') === 'published') {
     const { getPaidStore, paidEnabled } = await import('./paid-runtime');
@@ -50,7 +59,16 @@ export async function withWaveformKnowledge(request: Request, id: string) {
       approvedPublication: getPaidStore().approvedPublication }) : null;
   }
   const resolved = await accountServer.resolveVoiceWaveform(request, id, 'voice');
-  if (!resolved) return null;
+  if (!resolved) {
+    if (id !== FRANKLIN_DEMO_ID) return null;
+    const visitor = publicVoiceOwner(request, id);
+    if (!visitor) return null;
+    const row = request.method === 'DELETE' ? await curatedDemo.cleanupSnapshot() : await curatedDemo.published();
+    if (!row) return null;
+    return { ownerUid: row.ownerUid, waveform: { ...row.waveform, knowledge: false },
+      publicVisitor: { ...await resolveDemoVisitor(request), ...visitor, contentDigest: row.contentDigest, demoSource: { ownerUid: row.ownerUid } },
+      isCurrent: async () => request.method === 'DELETE' || !!await curatedDemo.published() };
+  }
   const knowledge = request.method !== 'DELETE' && available() && await knowledgeStore.enabled({
     uid: resolved.ownerUid, waveformId: id, isCurrent: resolved.isCurrent,
   });

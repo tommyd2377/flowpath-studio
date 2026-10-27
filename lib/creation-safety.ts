@@ -3,7 +3,7 @@ import { WAVEFORM_NAME_LIMIT, WAVEFORM_PROMPT_LIMIT } from './account-model';
 import { validateTextPanelConfiguration, type TextPanelConfiguration } from './text-panel';
 import { validProfilePhoto } from './profile-photo';
 
-export type CreationSafetyStatus = 'pending' | 'allowed' | 'blocked' | 'manual-review';
+export type CreationSafetyStatus = 'pending' | 'allowed' | 'blocked' | 'manual-review' | 'revoked';
 export type CreationTextPanel = TextPanelConfiguration;
 export type ReviewDocument = { id: string; digest: string; filename: string };
 export type CreationCandidate = { name: string; initialPrompt: string; textPanel?: CreationTextPanel | null; profilePhoto?: string | null; document?: ReviewDocument };
@@ -18,7 +18,7 @@ export const CREATION_SAFETY_CATEGORIES = [
 export type CreationSafetyCategory = typeof CREATION_SAFETY_CATEGORIES[number];
 export type CreationSafetyPolicy = {
   version: string;
-  categories: Record<CreationSafetyCategory, 'block' | 'manual-review'>;
+  categories: Record<CreationSafetyCategory, 'block' | 'manual-review' | 'allow-and-review'>;
 };
 export type CreationSafetyBinding = { digest: string; policyVersion: string; policyDigest: string };
 export type CreationReviewerResult = { findings: Record<CreationSafetyCategory, 'clear' | 'violation' | 'uncertain'> };
@@ -73,7 +73,8 @@ export function creationPolicyDigest(policy: CreationSafetyPolicy): string {
   const categories = object(policy?.categories);
   if (!policy || typeof policy.version !== 'string' || !/^[A-Za-z0-9._-]{1,80}$/.test(policy.version)
     || !categories || Object.keys(categories).length !== CREATION_SAFETY_CATEGORIES.length
-    || CREATION_SAFETY_CATEGORIES.some(key => !['block', 'manual-review'].includes(String(categories[key])))
+    || CREATION_SAFETY_CATEGORIES.some(key => !['block', 'manual-review', 'allow-and-review'].includes(String(categories[key]))
+      || categories[key] === 'allow-and-review' && key !== 'controversial-identity' && key !== 'portrait-provenance')
     || categories['extremist-impersonation'] !== 'block') {
     throw new CreationSafetyError('Creation safety policy is unavailable.', 503);
   }
@@ -89,7 +90,7 @@ export function sameCreationBinding(a: CreationSafetyBinding, b: CreationSafetyB
   return a.digest === b.digest && a.policyVersion === b.policyVersion && a.policyDigest === b.policyDigest;
 }
 
-/** Missing/incomplete/uncertain evidence never allows a candidate. */
+/** Only completed evidence with exclusively low-risk findings may allow use with follow-up. */
 export function evaluateCreationReview(result: unknown, policy: CreationSafetyPolicy): {
   status: Exclude<CreationSafetyStatus, 'pending'>; categories: CreationSafetyCategory[];
 } {
@@ -103,5 +104,5 @@ export function evaluateCreationReview(result: unknown, policy: CreationSafetyPo
   if (categories.some(key => findings[key] === 'violation' && policy.categories[key] === 'block')) {
     return { status: 'blocked', categories };
   }
-  return { status: categories.length ? 'manual-review' : 'allowed', categories };
+  return { status: categories.some(key => policy.categories[key] !== 'allow-and-review') ? 'manual-review' : 'allowed', categories };
 }

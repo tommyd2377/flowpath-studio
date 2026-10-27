@@ -1,7 +1,7 @@
 import { WAVEFORM_NAME_LIMIT, WAVEFORM_PROMPT_LIMIT } from './account-model';
 import { validateTextPanelConfiguration, type TextPanelConfiguration } from './text-panel';
 
-export type CreationReviewStatus = 'pending' | 'allowed' | 'blocked' | 'manual-review' | 'stale' | 'unavailable';
+export type CreationReviewStatus = 'pending' | 'allowed' | 'blocked' | 'manual-review' | 'stale' | 'unavailable' | 'revoked';
 export type CreationReviewCandidate = { name: string; initialPrompt: string; textPanel?: TextPanelConfiguration | null; profilePhoto?: string | null };
 export type CanonicalCreationReviewCandidate = { name: string; initialPrompt: string; textPanel: TextPanelConfiguration | null; profilePhoto?: string;
   document?: { id: string; digest: string; filename: string } };
@@ -11,12 +11,12 @@ export type CreationReviewQueueRecord = { proof: CreationReviewProof; candidate:
 export type CreationReviewClientResult = { ownerKey: string; key: string; status: CreationReviewStatus; categories?: string[] };
 
 export const canDecideCreationReview = (status: CreationReviewStatus): boolean => status === 'manual-review';
-export function creationReviewDecisionPayload(review: CreationReviewQueueRecord, decision: 'allowed' | 'blocked') {
+export function creationReviewDecisionPayload(review: CreationReviewQueueRecord, decision: 'allowed' | 'blocked' | 'revoked') {
   const { ownerUid, reviewId, digest, policyVersion, policyDigest } = review.proof;
   return { ownerUid, reviewId, digest, policyVersion, policyDigest, decision };
 }
 
-const statuses: CreationReviewStatus[] = ['pending', 'allowed', 'blocked', 'manual-review', 'stale', 'unavailable'];
+const statuses: CreationReviewStatus[] = ['pending', 'allowed', 'blocked', 'manual-review', 'stale', 'unavailable', 'revoked'];
 const object = (input: unknown): Record<string, unknown> | null => input && typeof input === 'object' && !Array.isArray(input) ? input as Record<string, unknown> : null;
 const identifier = (input: unknown): input is string => typeof input === 'string' && input.length > 0 && input.length <= 256;
 
@@ -71,7 +71,7 @@ export function creationReviewView({ enabled, ownerKey, key, result }: {
 export function creationReviewQueueRecords(input: unknown): CreationReviewQueueRecord[] | null {
   try {
     const value = object(input);
-    if (!Array.isArray(value?.reviews) || value.reviews.length > 100) return null;
+    if (!Array.isArray(value?.reviews) || value.reviews.length > 200) return null;
     const records: CreationReviewQueueRecord[] = [];
     for (const input of value.reviews) {
       const row = object(input), proof = row, content = object(row?.candidate);

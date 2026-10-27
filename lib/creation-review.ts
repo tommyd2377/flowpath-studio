@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { compatiblePreviousBinding } from './creation-policy';
 import type { VoiceDatabase, VoiceTransaction } from './production-voice-store';
 import {
   canonicalCreationCandidate, CreationSafetyError, creationContentDigest, creationPolicyDigest, creationSafetyBinding, evaluateCreationReview, sameCreationBinding,
@@ -11,8 +12,8 @@ export type CreationReviewProof = CreationSafetyBinding & { ownerUid: string; re
 export type CreationReviewRecord = CreationReviewProof & {
   candidate: CanonicalCreationCandidate; status: CreationSafetyStatus; createdAt: number; updatedAt: number;
   attemptedAt: number | null; categories: CreationSafetyCategory[];
-  reason: 'review-pending' | 'reviewed' | 'review-unavailable' | 'manual-decision';
-  decision?: { actorUid: string; decision: 'allowed' | 'blocked'; decidedAt: number };
+  reason: 'review-pending' | 'reviewed' | 'review-unavailable' | 'manual-decision' | 'manual-revocation';
+  decision?: { actorUid: string; decision: 'allowed' | 'blocked' | 'revoked'; decidedAt: number };
   issue?: ReviewIssue;
 };
 export type CreationReviewer = {
@@ -46,11 +47,11 @@ function recordFrom(row: Record<string, unknown> | null): CreationReviewRecord |
   if (!validId(row.reviewId) || typeof row.ownerUid !== 'string' || !row.ownerUid
     || typeof row.digest !== 'string' || !/^[a-f0-9]{64}$/.test(row.digest)
     || typeof row.policyVersion !== 'string' || typeof row.policyDigest !== 'string' || !/^[a-f0-9]{64}$/.test(row.policyDigest)
-    || !['pending', 'allowed', 'blocked', 'manual-review'].includes(String(row.status))
+    || !['pending', 'allowed', 'blocked', 'manual-review', 'revoked'].includes(String(row.status))
     || typeof row.createdAt !== 'number' || !Number.isFinite(row.createdAt)
     || typeof row.updatedAt !== 'number' || !Number.isFinite(row.updatedAt)
     || row.attemptedAt !== null && (typeof row.attemptedAt !== 'number' || !Number.isFinite(row.attemptedAt))
-    || !['review-pending', 'reviewed', 'review-unavailable', 'manual-decision'].includes(String(row.reason))
+    || !['review-pending', 'reviewed', 'review-unavailable', 'manual-decision', 'manual-revocation'].includes(String(row.reason))
     || !Array.isArray(row.categories) || row.categories.some(category => !CREATION_SAFETY_CATEGORIES.includes(category))) {
     throw new CreationSafetyError('Invalid creation safety record.', 503);
   }
@@ -88,13 +89,24 @@ export function createCreationReviewStore(database: VoiceDatabase, options: Crea
     }
     return record;
   }
+  function matches(record: CreationReviewRecord, binding: CreationSafetyBinding) {
+    const previous = compatiblePreviousBinding(binding);
+    return sameCreationBinding(record, binding) || record.status === 'allowed' && !!previous && sameCreationBinding(record, previous);
+  }
+  async function indexed(tx: VoiceTransaction, uid: string, binding: CreationSafetyBinding) {
+    const previous = compatiblePreviousBinding(binding);
+    const reference = await tx.get(approvedVersionPath(uid, binding))
+      ?? (previous ? await tx.get(approvedVersionPath(uid, previous)) : null);
+    if (reference && !validId(reference.reviewId)) throw new CreationSafetyError('Invalid saved review reference.', 503);
+    return reference ? recordFrom(await tx.get(reviewPath(reference.reviewId as string))) : null;
+  }
   async function requireAllowed(tx: VoiceTransaction, ownerUid: string, candidate: CreationCandidate,
     expectedBinding?: CreationSafetyBinding): Promise<CreationReviewProof> {
     const binding = creationSafetyBinding(candidate, policy());
     await options.validateCandidate?.(tx, ownerUid, canonicalCreationCandidate(candidate));
     const record = await current(tx, ownerUid, candidate.document?.id);
-    if (!record || record.status !== 'allowed' || !sameCreationBinding(record, binding)
-      || expectedBinding && !sameCreationBinding(expectedBinding, binding)) {
+    if (!record || record.status !== 'allowed' || !matches(record, binding)
+      || expectedBinding && !sameCreationBinding(expectedBinding, record)) {
       throw new CreationSafetyError('This exact content needs an allowed safety review before continuing.');
     }
     return proof(record);
@@ -105,23 +117,35 @@ export function createCreationReviewStore(database: VoiceDatabase, options: Crea
     const binding = creationSafetyBinding(candidate, policy());
     await options.validateCandidate?.(tx, ownerUid, canonicalCreationCandidate(candidate));
     const head = await current(tx, ownerUid, candidate.document?.id);
-    if (head?.status === 'allowed' && sameCreationBinding(head, binding)) return proof(head);
-    const reference = await tx.get(approvedVersionPath(ownerUid, binding));
-    const record = reference && validId(reference.reviewId) ? recordFrom(await tx.get(reviewPath(reference.reviewId))) : null;
+    if (head?.status === 'allowed' && matches(head, binding)) return proof(head);
+    const record = await indexed(tx, ownerUid, binding);
     if (!record || record.ownerUid !== ownerUid || record.candidate.document?.id !== candidate.document?.id
-      || record.status !== 'allowed' || !sameCreationBinding(record, binding)) {
+      || record.status !== 'allowed' || !matches(record, binding)) {
       throw new CreationSafetyError('This published version needs an allowed safety review before continuing.');
     }
     return proof(record);
   }
   return {
     requireAllowed, requireSnapshotAllowed,
+    // A curated publication may retain an older manual approval in the founder's
+    // follow-up queue. This never grants or changes an approval.
+    async followUp(ownerUid: string, candidate: CreationCandidate) {
+      return database.transaction(async tx => {
+        const approved = await requireSnapshotAllowed(tx, ownerUid, candidate);
+        const record = recordFrom(await tx.get(reviewPath(approved.reviewId)))!;
+        const queue = queueFrom(await tx.get(queuePath));
+        if ((record.categories.length || record.reason === 'manual-decision') && !queue.includes(record.reviewId)) {
+          if (queue.length >= queueLimit) throw new CreationSafetyError('The creation review queue is full.', 503);
+          tx.set(queuePath, { reviewIds: [...queue, record.reviewId] });
+        }
+      });
+    },
     async get(actor: CreationActor, documentId?: string) {
       actorValid(actor);
       if (documentId !== undefined && !validId(documentId)) throw new CreationSafetyError('Invalid document.', 400);
       return database.transaction(async tx => {
         await options.verifyOwner(tx, actor); const record = await current(tx, actor.uid, documentId);
-        if (record && !sameCreationBinding(record, creationSafetyBinding(record.candidate, policy()))) throw new CreationSafetyError('The review policy changed. Review this version again.');
+        if (record && !matches(record, creationSafetyBinding(record.candidate, policy()))) throw new CreationSafetyError('The review policy changed. Review this version again.');
         return record;
       });
     },
@@ -131,8 +155,9 @@ export function createCreationReviewStore(database: VoiceDatabase, options: Crea
         await options.verifyAdmin(tx, actor);
         if (!validId(id)) throw new CreationSafetyError('Invalid review.', 400);
         const record = recordFrom(await tx.get(reviewPath(id)));
-        if (!record || !['pending', 'manual-review'].includes(record.status)
-          || (await current(tx, record.ownerUid, record.candidate.document?.id))?.reviewId !== id) throw new CreationSafetyError('This review is no longer current.', 409);
+        if (!record || !['pending', 'manual-review', 'allowed'].includes(record.status)
+          || record.status !== 'allowed' && (await current(tx, record.ownerUid, record.candidate.document?.id))?.reviewId !== id
+          || !matches(record, creationSafetyBinding(record.candidate, policy()))) throw new CreationSafetyError('This review is no longer current.', 409);
         return record;
       });
     },
@@ -144,17 +169,15 @@ export function createCreationReviewStore(database: VoiceDatabase, options: Crea
         await options.validateCandidate?.(tx, actor.uid, candidate);
         const selected = policy(), binding = creationSafetyBinding(candidate, selected);
         const prior = await current(tx, actor.uid, candidate.document?.id);
-        if (prior && sameCreationBinding(prior, binding)) return { record: prior, needsReview: false };
-        const reference = await tx.get(approvedVersionPath(actor.uid, binding));
-        if (reference && !validId(reference.reviewId)) throw new CreationSafetyError('Invalid saved review reference.', 503);
-        const reusable = reference && recordFrom(await tx.get(reviewPath(reference.reviewId as string)));
-        if (reference && (!reusable || reusable.ownerUid !== actor.uid || reusable.candidate.document?.id !== candidate.document?.id
-          || !sameCreationBinding(reusable, binding))) throw new CreationSafetyError('Invalid saved review binding.', 503);
+        if (prior && matches(prior, binding)) return { record: prior, needsReview: false };
+        const reusable = await indexed(tx, actor.uid, binding);
+        if (reusable && (reusable.ownerUid !== actor.uid || reusable.candidate.document?.id !== candidate.document?.id
+          || !(matches(reusable, binding) || reusable.status === 'revoked' && sameCreationBinding(reusable, compatiblePreviousBinding(binding) ?? binding)))) throw new CreationSafetyError('Invalid saved review binding.', 503);
         if (reusable && reusable.status !== 'allowed') throw new CreationSafetyError('The previous approval is no longer valid.');
-        const queue = queueFrom(await tx.get(queuePath)).filter(id => id !== prior?.reviewId);
+        const queue = queueFrom(await tx.get(queuePath)).filter(id => id !== prior?.reviewId || prior?.status === 'allowed');
         if (!reusable && queue.length >= queueLimit) throw new CreationSafetyError('The creation review queue is full. Please try later.', 503);
         // Index only an actual completed approval, never a client verdict or missing legacy review.
-        if (prior?.status === 'allowed' && sameCreationBinding(prior, creationSafetyBinding(prior.candidate, selected))) {
+        if (prior?.status === 'allowed' && matches(prior, creationSafetyBinding(prior.candidate, selected))) {
           tx.set(approvedVersionPath(actor.uid, prior), { reviewId: prior.reviewId });
         }
         if (reusable) {
@@ -203,7 +226,7 @@ export function createCreationReviewStore(database: VoiceDatabase, options: Crea
         const queue = queueFrom(await tx.get(queuePath));
         if (!record || active?.reviewId !== record.reviewId || record.ownerUid !== expected.ownerUid
           || !sameCreationBinding(record, expected)
-          || !sameCreationBinding(record, creationSafetyBinding(record.candidate, policy()))) {
+          || !matches(record, creationSafetyBinding(record.candidate, policy()))) {
           throw new CreationSafetyError('This review is stale.');
         }
         await options.validateCandidate?.(tx, record.ownerUid, record.candidate);
@@ -212,7 +235,7 @@ export function createCreationReviewStore(database: VoiceDatabase, options: Crea
         const completed: CreationReviewRecord = { ...record, ...decision, updatedAt: now(),
           reason: unavailable ? 'review-unavailable' : 'reviewed', ...(issue ? { issue } : {}) };
         tx.set(reviewPath(record.reviewId), completed);
-        tx.set(queuePath, { reviewIds: completed.status === 'manual-review' ? queue : queue.filter(id => id !== record.reviewId) });
+        tx.set(queuePath, { reviewIds: completed.status === 'manual-review' || completed.status === 'allowed' && completed.categories.length > 0 ? queue : queue.filter(id => id !== record.reviewId) });
         return completed;
       });
     },
@@ -224,8 +247,8 @@ export function createCreationReviewStore(database: VoiceDatabase, options: Crea
         const queue = queueFrom(await tx.get(queuePath));
         const rows = await Promise.all(queue.map(id => tx.get(reviewPath(id))));
         const records = rows.map(recordFrom).filter((record): record is CreationReviewRecord => !!record
-          && (record.status === 'pending' || record.status === 'manual-review')
-          && sameCreationBinding(record, creationSafetyBinding(record.candidate, selected)));
+          && (record.status === 'pending' || record.status === 'manual-review' || record.status === 'allowed')
+          && matches(record, creationSafetyBinding(record.candidate, selected)));
         if (records.length !== queue.length) tx.set(queuePath, { reviewIds: records.map(record => record.reviewId) });
         return records.map(record => {
           if (record.status !== 'pending' || now() - (record.attemptedAt ?? record.createdAt) < 120_000) return record;
@@ -234,25 +257,30 @@ export function createCreationReviewStore(database: VoiceDatabase, options: Crea
         });
       });
     },
-    async decide(actor: CreationActor, expected: CreationReviewProof & { decision: 'allowed' | 'blocked' }) {
+    async decide(actor: CreationActor, expected: CreationReviewProof & { decision: 'allowed' | 'blocked' | 'revoked' }) {
       actorValid(actor);
-      if (!['allowed', 'blocked'].includes(expected.decision)) throw new CreationSafetyError('Choose approve or reject.', 400);
+      if (!['allowed', 'blocked', 'revoked'].includes(expected.decision)) throw new CreationSafetyError('Choose approve, reject or revoke.', 400);
       return database.transaction(async tx => {
         await options.verifyAdmin(tx, actor);
         if (!validId(expected.reviewId)) throw new CreationSafetyError('Unknown creation review.', 404);
         const record = recordFrom(await tx.get(reviewPath(expected.reviewId)));
         const active = record && await current(tx, record.ownerUid, record.candidate.document?.id);
         const queue = queueFrom(await tx.get(queuePath));
-        if (!record || record.ownerUid !== expected.ownerUid || active?.reviewId !== record.reviewId
+        if (!record || record.ownerUid !== expected.ownerUid || (expected.decision === 'revoked' ? !queue.includes(record.reviewId) : active?.reviewId !== record.reviewId)
           || !sameCreationBinding(record, expected)
-          || !sameCreationBinding(record, creationSafetyBinding(record.candidate, policy()))) throw new CreationSafetyError('This review is stale.');
+          || !matches(record, creationSafetyBinding(record.candidate, policy()))) throw new CreationSafetyError('This review is stale.');
         await options.validateCandidate?.(tx, record.ownerUid, record.candidate);
-        if (record.status !== 'manual-review') throw new CreationSafetyError('Only content awaiting manual review can receive a manual decision.');
+        if (expected.decision === 'revoked' ? record.status !== 'allowed' : record.status !== 'manual-review') {
+          throw new CreationSafetyError(expected.decision === 'revoked' ? 'Only an approved version can be revoked.' : 'Only content awaiting manual review can receive a manual decision.');
+        }
         const timestamp = now();
         const completed: CreationReviewRecord = { ...record, status: expected.decision, updatedAt: timestamp,
-          reason: 'manual-decision', decision: { actorUid: actor.uid, decision: expected.decision, decidedAt: timestamp } };
+          reason: expected.decision === 'revoked' ? 'manual-revocation' : 'manual-decision', decision: { actorUid: actor.uid, decision: expected.decision, decidedAt: timestamp } };
         tx.set(reviewPath(record.reviewId), completed);
-        tx.set(queuePath, { reviewIds: queue.filter(id => id !== record.reviewId) });
+        // Preserve revocation by content/policy even if the creator later edits
+        // away and returns to this version. A new head must not erase this verdict.
+        if (expected.decision === 'revoked') tx.set(approvedVersionPath(record.ownerUid, record), { reviewId: record.reviewId });
+        tx.set(queuePath, { reviewIds: expected.decision === 'allowed' ? queue : queue.filter(id => id !== record.reviewId) });
         return completed;
       });
     },

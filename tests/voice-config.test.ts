@@ -31,7 +31,7 @@ test('the public greeting invites a general conversation and points to both visi
   assert.match(PUBLIC_GREETING_INSTRUCTIONS, /any general question/);
   assert.match(PUBLIC_GREETING_INSTRUCTIONS, /interrupt you and talk naturally at any time/);
   assert.match(PUBLIC_GREETING_INSTRUCTIONS, /Create your waveform at the top right/);
-  assert.match(PUBLIC_GREETING_INSTRUCTIONS, /FlowPath News example at the top left/);
+  assert.match(PUBLIC_GREETING_INSTRUCTIONS, /Talk through the news under News at the top left/);
   assert.match(PUBLIC_GREETING_INSTRUCTIONS, /pause and listen/);
   assert.doesNotMatch(PUBLIC_GREETING_INSTRUCTIONS, /after ending|sign in first|invitation required/);
 });

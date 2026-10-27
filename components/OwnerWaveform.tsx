@@ -9,6 +9,7 @@ import type { Waveform } from '@/lib/account-model';
 import { loadBilling, type BillingView } from '@/lib/paid-client';
 
 export default function OwnerWaveform({ id }: { id: string }) {
+  const [publicDemo, setPublicDemo] = useState(false);
   const [billing, setBilling] = useState<BillingView | null>(null);
   const [billingFailed, setBillingFailed] = useState(false);
   const [waveform, setWaveform] = useState<Pick<Waveform, 'id' | 'name' | 'accentColor' | 'profilePhoto' | 'textPanel'> | null>(null);
@@ -35,6 +36,7 @@ export default function OwnerWaveform({ id }: { id: string }) {
         const result = await response.json();
         if (!current()) return;
         if (result.waveform?.id !== id || typeof result.waveform.name !== 'string') { setState('private'); return; }
+        setPublicDemo(result.publicDemo === true);
         setWaveform({ id: result.waveform.id, name: result.waveform.name,
           accentColor: result.waveform.accentColor, profilePhoto: result.waveform.profilePhoto, textPanel: result.waveform.textPanel });
         setState('ready');
@@ -51,7 +53,7 @@ export default function OwnerWaveform({ id }: { id: string }) {
   if (state === 'loading' || state === 'ready' && !billing && !billingFailed) return <BrandLoader variant="screen" label="Loading your waveform…" />;
   if (state === 'ready' && waveform && billing?.enabled) return <PaidExperience key={id} id={id} personal initialBilling={billing} />;
   if (state === 'ready' && waveform && billing && !billing.enabled) return <VoiceExperience key={waveform.id} waveformId={waveform.id} name={waveform.name}
-    accentColor={waveform.accentColor} profilePhoto={waveform.profilePhoto} textPanel={waveform.textPanel} />;
+    accentColor={waveform.accentColor} profilePhoto={waveform.profilePhoto} textPanel={waveform.textPanel} analyticsSurface={publicDemo ? 'public' : 'private'} publicDemo={publicDemo} />;
   return <main className="account-page">
     <Link className="account-back" href="/">← Back to FlowPath</Link>
     <h1>Your waveform</h1>

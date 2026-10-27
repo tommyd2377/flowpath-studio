@@ -6,6 +6,7 @@ import {
   creationPolicyDigest, evaluateCreationReview, type CreationCandidate, type CreationReviewerResult, type CreationSafetyPolicy,
 } from '../lib/creation-safety';
 import { createFixtureCreationReviewer } from '../lib/creation-safety-fixtures';
+import { CONSERVATIVE_CREATION_POLICY } from '../lib/creation-policy';
 import type { VoiceDatabase, VoiceTransaction } from '../lib/production-voice-store';
 
 class MemoryDatabase implements VoiceDatabase {
@@ -66,6 +67,54 @@ const allowed = async (s: ReturnType<typeof setup>, input = candidate) => {
   const requested = await s.store.request(owner, input);
   return s.store.runReview(requested.record);
 };
+
+test('only completed low-risk findings allow immediate use; serious uncertainty and missing coverage stay held', () => {
+  for (const category of CREATION_SAFETY_CATEGORIES) {
+    const lowRisk = category === 'portrait-provenance' || category === 'controversial-identity';
+    assert.equal(evaluateCreationReview(evidence({ [category]: 'uncertain' }), CONSERVATIVE_CREATION_POLICY).status, lowRisk ? 'allowed' : 'manual-review');
+    assert.equal(evaluateCreationReview(evidence({ [category]: 'violation' }), CONSERVATIVE_CREATION_POLICY).status, lowRisk ? 'allowed' : 'blocked');
+    if (!lowRisk) assert.throws(() => creationPolicyDigest({ ...CONSERVATIVE_CREATION_POLICY,
+      categories: { ...CONSERVATIVE_CREATION_POLICY.categories, [category]: 'allow-and-review' } }), denied(503));
+  }
+  assert.equal(evaluateCreationReview(evidence({ 'portrait-provenance': 'uncertain', 'living-person': 'uncertain' }), CONSERVATIVE_CREATION_POLICY).status, 'manual-review');
+  assert.equal(evaluateCreationReview({ findings: {} }, CONSERVATIVE_CREATION_POLICY).status, 'manual-review');
+});
+
+test('queued low-risk approval is usable immediately and revocation invalidates current and published proof without replaying AI', async () => {
+  let calls = 0;
+  const s = setup({ policy: () => CONSERVATIVE_CREATION_POLICY,
+    reviewer: reviewer(async () => { calls++; return evidence({ 'portrait-provenance': 'uncertain' }); }) });
+  const reviewed = await allowed(s, { ...candidate, name: 'Benjamin Franklin' });
+  assert.equal(reviewed.status, 'allowed');
+  assert.equal((await s.store.listManual(admin))[0].reviewId, reviewed.reviewId);
+  await s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, reviewed.candidate));
+  await s.db.transaction(tx => s.store.requireSnapshotAllowed(tx, owner.uid, reviewed.candidate));
+  const revoke = { ...reviewed, decision: 'revoked' as const };
+  await assert.rejects(s.store.decide(other, revoke), denied(403));
+  await assert.rejects(s.store.decide(admin, { ...revoke, digest: '0'.repeat(64) }), denied());
+  const revoked = await s.store.decide(admin, revoke);
+  assert.equal(revoked.status, 'revoked');
+  assert.equal(revoked.decision?.actorUid, admin.uid);
+  await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, reviewed.candidate)), denied());
+  await assert.rejects(s.db.transaction(tx => s.store.requireSnapshotAllowed(tx, owner.uid, reviewed.candidate)), denied());
+  const duplicate = await s.store.request(owner, reviewed.candidate);
+  assert.equal(duplicate.needsReview, false); assert.equal(duplicate.record.status, 'revoked'); assert.equal(calls, 1);
+  await allowed(s, { ...candidate, initialPrompt: 'A different safe version.' });
+  await assert.rejects(s.store.request(owner, reviewed.candidate), /no longer valid/);
+  assert.equal(calls, 2, 'editing away and back cannot re-review a revoked version');
+});
+
+test('a changed draft cannot hide a queued published approval from revocation', async () => {
+  const s = setup({ policy: () => CONSERVATIVE_CREATION_POLICY,
+    reviewer: reviewer(async () => evidence({ 'controversial-identity': 'uncertain' })) });
+  const first = await allowed(s), next = { ...candidate, initialPrompt: 'A changed safe draft.' };
+  await allowed(s, next);
+  await s.db.transaction(tx => s.store.requireSnapshotAllowed(tx, owner.uid, candidate));
+  assert.equal((await s.store.listManual(admin)).length, 2);
+  await s.store.decide(admin, { ...first, decision: 'revoked' });
+  await assert.rejects(s.db.transaction(tx => s.store.requireSnapshotAllowed(tx, owner.uid, candidate)), denied());
+  await s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, next));
+});
 
 test('discarding an unsafe draft restores only an identical completed approval without another reviewer call', async () => {
   let calls = 0;
@@ -315,7 +364,7 @@ test('manual review requires verified admin and exact proof; explicit approval i
   assert.equal(reviewed.status, 'allowed');
   assert.deepEqual(reviewed.decision, { actorUid: admin.uid, decision: 'allowed', decidedAt: 1000 });
   await s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, candidate, reviewed));
-  assert.equal((await s.store.listManual(admin)).length, 0);
+  assert.equal((await s.store.listManual(admin))[0].status, 'allowed');
   await assert.rejects(s.store.decide(admin, { ...request, decision: 'blocked' }), denied());
 });
 
@@ -369,4 +418,25 @@ test('an exact published approval survives unrelated draft reviews, but draft en
   await assert.rejects(s.db.transaction(tx => s.store.requireSnapshotAllowed(tx, owner.uid, { ...candidate, name: 'Never reviewed' })), denied());
   s.setPolicy({ ...policy(), version: 'new-policy' });
   await assert.rejects(s.db.transaction(tx => s.store.requireSnapshotAllowed(tx, owner.uid, candidate)), denied());
+});
+
+test('v4 retains exact genuine v3 approvals without re-review, but never changed, revoked or unknown-policy proofs', async () => {
+  const { PREVIOUS_CREATION_POLICY } = await import('../lib/creation-policy');
+  const s = setup({ policy: () => PREVIOUS_CREATION_POLICY });
+  const prior = await allowed(s);
+  s.db.rows.set(`creationSafetyReviews/${prior.reviewId}`, { ...prior, reason: 'manual-decision' });
+  const next = createCreationReviewStore(s.db, { ...s.options, policy: () => CONSERVATIVE_CREATION_POLICY });
+  assert.equal((await s.db.transaction(tx => next.requireAllowed(tx, owner.uid, candidate))).reviewId, prior.reviewId);
+  assert.equal((await next.request(owner, candidate)).needsReview, false);
+  await assert.rejects(s.db.transaction(tx => next.requireAllowed(tx, owner.uid, { ...candidate, initialPrompt: 'changed' })), denied());
+  await next.request(owner, { ...candidate, initialPrompt: 'A new private draft.' });
+  assert.equal((await s.db.transaction(tx => next.requireSnapshotAllowed(tx, owner.uid, candidate))).reviewId, prior.reviewId);
+  await next.followUp(owner.uid, candidate);
+  await next.decide(admin, { ...prior, decision: 'revoked' });
+  await assert.rejects(s.db.transaction(tx => next.requireSnapshotAllowed(tx, owner.uid, candidate)), denied());
+  await assert.rejects(next.request(owner, candidate), denied());
+  const unknown = setup({ policy: () => ({ ...PREVIOUS_CREATION_POLICY, version: 'unrecognized' }) });
+  await allowed(unknown);
+  const strict = createCreationReviewStore(unknown.db, { ...unknown.options, policy: () => CONSERVATIVE_CREATION_POLICY });
+  await assert.rejects(unknown.db.transaction(tx => strict.requireAllowed(tx, owner.uid, candidate)), denied());
 });

@@ -1,3 +1,4 @@
+import { curatedDemo } from './curated-demo-runtime';
 import { createVoiceServer } from './voice-server';
 import { configuredFirebaseProjectId, getFirebaseAccountServices } from './firebase-accounts';
 import { configuredPublicOrigin } from './request-origin';
@@ -18,16 +19,19 @@ import { waveformRecord } from './account-server';
 import { requirePublishedPreview } from './published-preview';
 
 type AdminResolver = NonNullable<Parameters<typeof createVoiceServer>[0]>['resolveAdmin'];
+type VisitorResolver = NonNullable<Parameters<typeof createVoiceServer>[0]>['resolvePublicVisitor'];
 type Resolver = NonNullable<Parameters<typeof createVoiceServer>[0]>['resolveWaveform'];
 const shared = globalThis as typeof globalThis & {
   flowpathProductionVoiceServer?: ReturnType<typeof createVoiceServer>;
   flowpathProductionVoiceConfigVersion?: string;
   flowpathProductionWaveformResolver?: Resolver;
   flowpathProductionAdminResolver?: AdminResolver;
+  flowpathProductionVisitorResolver?: VisitorResolver;
 };
 
 /** Also initialized by logout/deadline routes, which must work on a fresh instance. */
-export function getProductionVoiceServer(resolveWaveform?: Resolver, resolveAdmin?: AdminResolver): ReturnType<typeof createVoiceServer> {
+export function getProductionVoiceServer(resolveWaveform?: Resolver, resolveAdmin?: AdminResolver, resolveVisitor?: VisitorResolver): ReturnType<typeof createVoiceServer> {
+  if (resolveVisitor) shared.flowpathProductionVisitorResolver = resolveVisitor;
   if (resolveAdmin) shared.flowpathProductionAdminResolver = resolveAdmin;
   if (resolveWaveform) shared.flowpathProductionWaveformResolver = resolveWaveform;
   const local = !!localAppOrigin();
@@ -44,6 +48,7 @@ export function getProductionVoiceServer(resolveWaveform?: Resolver, resolveAdmi
     return getFirebaseAccountServices(projectId, process.env.FLOWPATH_FIREBASE_DATABASE_ID ?? '(default)').db;
   });
   const assertContentAllowed = async (tx: VoiceTransaction, owner: VoiceOwner) => {
+    if (owner.demoSource) { await curatedDemo.requireVoice(tx, owner); return; }
     if (owner.publishedRevision !== undefined) {
       await requirePublishedPreview(tx, owner, creationSafetyEnabled() ? creationReviewStore().requireSnapshotAllowed : async () => {}, creationContentDigest);
       return;
@@ -68,7 +73,7 @@ export function getProductionVoiceServer(resolveWaveform?: Resolver, resolveAdmi
     ...(testerDemo ? { authorizeStart: demoAccess.allowed, demoGrant: demoGrantId } : {}),
     resolveWaveform: (request, id) => shared.flowpathProductionWaveformResolver?.(request, id) ?? Promise.resolve(null),
     // The stable intro cookie keeps the same allowance across sign-in/out and code re-entry.
-    resolvePublicVisitor: publicVoiceOwner,
+    resolvePublicVisitor: request => shared.flowpathProductionVisitorResolver?.(request) ?? publicVoiceOwner(request),
     resolveAdmin: request => shared.flowpathProductionAdminResolver?.(request) ?? Promise.resolve(null),
     production: {
       store,
