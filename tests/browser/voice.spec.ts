@@ -1123,7 +1123,7 @@ test('failed hosted heartbeat stops capture and requests cleanup without creatin
   expect((await tracker(page)).stoppedTracks).toBeGreaterThan(0); expect(calls.filter(value => value === 'POST')).toHaveLength(1);
 });
 
-test('demo code unlocks the intro without starting voice or revealing the code, and fits a phone', async ({ page }) => {
+test('entering the demo code and tapping the waveform validates once and begins voice on a phone', async ({ page }) => {
   await fakeMedia(page); const calls = await mockSession(page);
   let accepted = false, entries = 0;
   await page.route('**/api/demo-access', route => {
@@ -1135,11 +1135,15 @@ test('demo code unlocks the intro without starting voice or revealing the code, 
   const entry = await page.locator('.demo-code-gate').boundingBox(), guidance = await page.locator('#voice-hint').boundingBox();
   expect(entry!.y + entry!.height).toBeLessThan(guidance!.y);
   await page.screenshot({ path: 'test-results/demo-code-mobile.png' });
-  await input.fill('wrong'); await page.getByRole('button', { name: 'Unlock demo', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Unlock demo', exact: true })).toHaveCount(0);
+  await expect(page.locator('#voice-hint')).toHaveText('Enter the code and tap the waveform to begin.');
+  await input.fill('wrong'); await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.locator('.demo-code-gate').getByRole('alert')).toContainText('Incorrect');
-  await input.fill('synthetic'); await page.getByRole('button', { name: 'Unlock demo', exact: true }).click();
-  await expect(page.getByText('Demo unlocked', { exact: true })).toBeVisible();
   expect(calls.filter(value => value.method === 'POST')).toHaveLength(0); expect((await tracker(page)).microphoneCalls).toBe(0);
+  await input.fill('synthetic'); await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  expect(calls.filter(value => value.method === 'POST')).toHaveLength(1);
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
   await page.reload(); await expect(page.getByText('Demo unlocked', { exact: true })).toBeVisible(); expect(entries).toBe(2);
   const hint = await page.locator('#voice-hint').boundingBox(); expect(hint!.y + hint!.height).toBeLessThan(844);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

@@ -397,3 +397,11 @@ button { font: inherit; }
 @media (max-height: 650px) { .voice-page > .demo-code-gate { top: calc(50svh + 80px); } [data-demo-code="true"] .voice-hint { top: calc(50svh + 175px); } [data-demo-code="true"] .voice-status { top: calc(50svh + 203px); } }
 [data-docked="true"][data-demo-code="true"] .voice-status { top: 132px; }
 @media (max-width: 600px) { [data-docked="true"][data-demo-code="true"] .voice-status { top: 162px; } }
+
+.demo-code-gate--waveform { width: min(300px, calc(100% - 48px)); }
+.demo-code-gate--waveform .demo-code-entry { padding: 0 16px; gap: 12px; border: 1px solid var(--border, #3a66ff55); border-radius: 14px; background: linear-gradient(135deg, #ffffff08, #3a66ff08); box-shadow: 0 8px 28px #0003, inset 0 1px 0 #ffffff08; transition: border-color 180ms, box-shadow 180ms; }
+.demo-code-gate--waveform .demo-code-entry:focus-within { border-color: var(--accent, #3a66ff); box-shadow: 0 0 0 3px #3a66ff18, 0 8px 28px #0003; }
+.demo-code-gate--waveform .demo-code-entry > svg { width: 17px; height: 17px; flex-shrink: 0; color: var(--accent, #6688ff); }
+.demo-code-gate--waveform input { border: 0; border-radius: 0; outline: none; box-shadow: none; background: transparent; padding: 14px 0; letter-spacing: .06em; }
+.demo-code-gate--waveform input::placeholder { letter-spacing: .02em; color: var(--muted, #a5b1d8); }
+@media (prefers-reduced-motion: reduce) { .demo-code-gate--waveform .demo-code-entry { transition: none; } }

@@ -26,6 +26,7 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
   useEffect(() => { if (voice.settledVersion > handledSettlement.current) { handledSettlement.current = voice.settledVersion; onSettled?.(); } }, [voice.settledVersion, onSettled]);
   const diagnosticsMode = useDiagnosticsMode();
   const [recordNext, setRecordNext] = useState(false);
+  const [demoCodeAccepted, setDemoCodeAccepted] = useState(false);
   const [demoCodeRequired, setDemoCodeRequired] = useState(false);
   const { active, stop } = voice;
   const connected = voice.phase === 'listening' || voice.phase === 'speaking';
@@ -33,6 +34,12 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
   const docked = Boolean(waveformId && (connected || textVisible));
   const waveControl = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const codeLocked = demoCodeRequired && !demoCodeAccepted;
+  const beginConversation = () => {
+    if (!waveControl.current) return;
+    clientAnalytics.record({ eventName: 'voice_start_requested', properties: { surface } });
+    void voice.start(diagnosticsMode && recordNext); setRecordNext(false);
+  };
   const hideText = () => {
     const restoreFocus = panel.current?.contains(document.activeElement);
     voice.hideText();
@@ -92,18 +99,18 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
         <span className="conversation-state">{voice.active ? connected ? voice.phase === 'speaking' ? 'Speaking' : 'Listening' : 'Connecting' : 'Conversation ended'}</span>
       </div>}
       {waveformId && docked && voice.active && <button type="button" className="secondary-button conversation-end" onClick={() => void voice.stop()}><Square aria-hidden="true" />End conversation</button>}
-      <button ref={waveControl} className="wave-control" type="button" aria-label={waveformId && docked && voice.active && !voice.needsAudioResume ? 'Voice waveform' : label} aria-pressed={voice.active}
+      <button ref={waveControl} className="wave-control" type={!voice.active && codeLocked ? 'submit' : 'button'} form={!voice.active && codeLocked ? 'voice-demo-code-form' : undefined} aria-label={waveformId && docked && voice.active && !voice.needsAudioResume ? 'Voice waveform' : label} aria-pressed={voice.active}
         aria-describedby={showStatus && status ? 'voice-status' : !connected && !docked ? 'voice-hint' : undefined}
         onClick={() => {
           if (nextConversation) nextConversation();
           else if (voice.needsAudioResume) void voice.start();
-          else if (!voice.active) { clientAnalytics.record({ eventName: 'voice_start_requested', properties: { surface } }); void voice.start(diagnosticsMode && recordNext); setRecordNext(false); }
-          else void voice.stop();
+          else if (!voice.active && !codeLocked) beginConversation();
+          else if (voice.active) void voice.stop();
         }}>
         <Waveform phase={voice.phase} inputAnalyser={voice.inputAnalyser} outputAnalyser={voice.outputAnalyser} accentColor={waveformId ? accentColor : undefined} />
       </button>
-      {!voice.active && !docked && <DemoCodeGate onState={setDemoCodeRequired} />}
-      <p className="voice-hint" id="voice-hint" aria-hidden={connected || docked}>{nextConversation ? 'Copy your text, then tap the wave to choose your next conversation' : 'Tap the wave whenever you’re ready'}</p>
+      {!voice.active && !docked && <DemoCodeGate formId="voice-demo-code-form" waveformTrigger onState={setDemoCodeRequired} onAccess={setDemoCodeAccepted} onUnlocked={beginConversation} />}
+      <p className="voice-hint" id="voice-hint" aria-hidden={connected || docked}>{nextConversation ? 'Copy your text, then tap the wave to choose your next conversation' : codeLocked ? 'Enter the code and tap the waveform to begin.' : 'Tap the waveform to begin.'}</p>
       <p className="voice-status" id="voice-status" role="status" aria-live="polite" aria-atomic="true">{voice.phase === 'connecting' && <BrandLoader variant="inline" />}{showStatus ? status : ''}</p>
       {paidPayer && <p className="paid-session-meter" aria-live="polite">{paidPayer === 'creator' ? 'Creator pays' : 'You pay from your prepaid balance'}{voice.remainingSeconds !== null ? ` · ${voice.remainingSeconds} seconds remaining${voice.remainingSeconds <= 30 ? ' — ending soon' : ''}` : ''}</p>}
       <span className="sr-only">{connected ? 'Conversation connected. Tap the waveform or press Escape to end.' : ''}</span>

@@ -48,3 +48,7 @@ One receiver is attached before SDP is released, so a client cannot simply omit 
 The separate coordinator reported approximately $14.46/$20 gross calendar-month Cloud Run cap consumption and about $5.54 reported headroom at its last inspection. These are delayed month-to-date figures, not this release’s cost or a live remaining-balance guarantee. The existing cap must remain unchanged; it can pause the service, and it excludes Firestore, builds, storage, tasks and OpenAI. No daily OpenAI spend guard is added.
 
 Final rollout: `3b93a6e`, 100% traffic on `flowpath-studio-build-2026-10-27-002`; 373 source tests, 83 standard browser checks and eight synthetic paid-preview checks passed. Unpaid readiness passed. Real voice/audio and hosted provider acceptance are manual and unverified. No local server remains running.
+
+## Waveform-triggered code entry follow-up
+
+The waveform page uses one styled code field with no adjacent unlock button. Its guidance is “Enter the code and tap the waveform to begin.” The waveform button submits that field through its native form association; only successful server validation starts the existing voice flow. Invalid code never requests microphone access or starts voice. Accepted grants retain the normal “Tap the waveform to begin.” guidance. Account settings keep their existing independent code-submit control. Backend grants, limits, billing, moderation and connection metering are unchanged.
