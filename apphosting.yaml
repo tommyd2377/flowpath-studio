@@ -1,12 +1,13 @@
 # This launch profile is for the new FlowPath Studio project only.
-# Enabling this hosted runtime incurs Cloud Run usage, including a warm instance.
+# Approved source-only zero-idle candidate; no deployment or hosted reactivation is authorized.
+# Hosted voice also remains gated in code pending cutoff/recovery acceptance.
 runConfig:
   cpu: 1
   memoryMiB: 512
-  minInstances: 1
+  minInstances: 0
   maxInstances: 2
   concurrency: 80
-  cpuAlwaysAllocated: true
+  cpuAlwaysAllocated: false
 
 # Use the standard Next server rather than depend on preview Next 16 adapters.
 scripts:
@@ -34,7 +35,7 @@ env:
     value: standard
     availability: [RUNTIME]
   - variable: FLOWPATH_LIVE_ENABLED
-    value: "1"
+    value: "0"
     availability: [RUNTIME]
   - variable: FLOWPATH_PUBLIC_DEMO_ENABLED
     value: "1"

@@ -6,7 +6,9 @@ Prepared October 18, 2026. This is the new waveform product, not the archived St
 
 The separate billing investigation reports user-requested manual scaling to zero and zero-instance metrics; the public hosted app/voice are reported unavailable. This thread has not independently inspected production or session records. Firebase Auth/Firestore and local voice routing are separate and preserved. The deployment/availability evidence below is historical.
 
-The isolated [lifecycle candidate](voice-lifecycle.md) closes hosted starts in code and makes known-session cleanup request-owned with durable settlement fencing. It does not establish an active hosted voice worker, an upstream hard cutoff or unknown-ID recovery. Source `apphosting.yaml` still has the old warm-instance/live settings: the proposed zero-idle edit awaits direct user approval after automatic review rejected it. Review source and actual scaling together before any future release, and obtain explicit deployment/reactivation authorization. No cloud setting, secret, permission or service was changed here.
+The isolated [lifecycle candidate](voice-lifecycle.md) closes hosted starts in code and makes known-session cleanup request-owned with durable settlement fencing. It does not establish an active hosted voice worker, an upstream hard cutoff or unknown-ID recovery. Following direct user approval in this chat, source `apphosting.yaml` sets `minInstances: 0`, `cpuAlwaysAllocated: false` and `FLOWPATH_LIVE_ENABLED: "0"`. The earlier forwarded-approval retry was rejected and stopped; the later direct approval permitted the source-only patch. See the lifecycle handoff for the approval history and verification.
+
+These are candidate source settings, not a deployment or a change to the actual paused service. No cloud setting, secret, permission or service was changed here. Review source and actual scaling together before any future release, and obtain explicit deployment/reactivation authorization. The separate reported production pause is preserved; zero minimum instances does not eliminate all cloud/storage costs.
 
 ## Confirmed resources
 
