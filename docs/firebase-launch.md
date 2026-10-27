@@ -2,6 +2,14 @@
 
 Prepared October 18, 2026. This is the new waveform product, not the archived Studio builder.
 
+## October 27 owner review error correction
+
+Application source `68007e69fe21a72a8619b9e51f10d618d1a9bca0` was pushed to main and deployed from a clean 227-file export. Build `7bb9a29b-8ffb-401b-9f89-22f96d210373` succeeded; revision `flowpath-studio-build-2026-10-27-004` serves 100% of traffic. A signed-in owner whose exact saved version needs review now receives a review-required response and an **Open waveform settings** link, instead of the misleading owner sign-in error. Ownership denial, exact-version safety enforcement and cleanup remain intact. No approval or saved content was changed.
+
+`npm run check` passed (374 tests, lint, types and build); the complete mocked browser suite passed 84/84. Non-paid HTTPS checks verified homepage/account 200, the served review-guidance bundle, code-required admission, disabled billing and private/auth/cross-site rejection. The user confirmed Franklin's settings showed Needs review. Signed-in Brave inspection was blocked by the saved origin permission; no paid review or voice call was made, so actual owner voice remains pending the user's review and manual acceptance. Local servers are off.
+
+The rollout's service-wide maximum was restored from 20 to the existing 2. Service/revision limits remain minimum 0, maximum 2, request-only CPU. Existing tags, secrets, auth providers and the separate native monthly cap were unchanged. Logs: `/private/tmp/flowpath-owner-review-release-68007e6-deploy.log`, `/private/tmp/flowpath-owner-review-{check,browser}.log` and `/private/tmp/flowpath-owner-review-readiness-68007e6.log`.
+
 ## October 27 waveform-triggered code field update
 
 UI source `10d5504562178b15dd03783af9738e90c4f76c9e` was pushed to main and deployed from a clean 227-file export. Build `ed3fad0f-0f30-48fb-a16c-7d127d75a5b5` succeeded; revision `flowpath-studio-build-2026-10-27-003` serves 100% of traffic. The waveform page now has a styled code input with no adjacent unlock button. Its native form is submitted by the waveform, and voice begins only after the existing server validation succeeds. Guidance: “Enter the code and tap the waveform to begin.” Account settings retain their independent code control. Backend gates, quotas, billing and moderation are unchanged.
