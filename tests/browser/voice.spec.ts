@@ -477,7 +477,7 @@ test('the public account link stays available while talking and navigation close
   await page.goto('/');
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Talk through the news', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'News', exact: true })).toBeVisible();
   await page.getByRole('link', { name: 'Create your waveform', exact: true }).click();
   await expect(page).toHaveURL(/\/account$/);
   await expect(page.getByRole('heading', { name: 'My waveform', exact: true })).toBeVisible();
@@ -623,7 +623,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     expect(Math.abs(initial.y + initial.height / 2 - viewport.height / 2)).toBeLessThan(1);
     await expect(page.locator('.wordmark')).toHaveCSS('opacity', '1');
     const navigation = page.getByRole('navigation', { name: 'FlowPath navigation', exact: true });
-    const newsLink = navigation.getByRole('link', { name: 'Talk through the news', exact: true });
+    const newsLink = navigation.getByRole('link', { name: 'News', exact: true });
     const accountLink = navigation.getByRole('link', { name: 'Create your waveform', exact: true });
     await expect(newsLink).toHaveAttribute('href', 'https://flowpathapp.com');
     await expect(newsLink).not.toHaveAttribute('target', '_blank');
@@ -631,8 +631,12 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     const newsBounds = (await newsLink.boundingBox())!;
     const accountBounds = (await accountLink.boundingBox())!;
     expect(newsBounds.x + newsBounds.width).toBeLessThan(accountBounds.x);
-    const newsTitle = (await page.locator('.home-news-title').boundingBox())!;
-    expect(Math.abs(newsTitle.y - accountBounds.y)).toBeLessThan(1);
+    const franklinBounds = (await navigation.getByRole('link', { name: 'Benjamin Franklin', exact: true }).boundingBox())!;
+    expect(Math.abs(franklinBounds.y - accountBounds.y)).toBeLessThan(1);
+    expect(Math.abs(franklinBounds.x - newsBounds.x)).toBeLessThan(1);
+    expect(newsBounds.y).toBeGreaterThan(franklinBounds.y + franklinBounds.height);
+    await expect(page.locator('.home-news-links a')).toHaveText(['Benjamin Franklin', 'News']);
+    await expect(page.locator('.home-news-title')).toHaveCount(0);
     await expect(navigation.getByRole('link', { name: 'Benjamin Franklin', exact: true })).toHaveAttribute('href', '/w/c538ac44-883b-4d96-8785-4ddf8a151efb');
     const newsStyle = await newsLink.evaluate(element => ({ color: getComputedStyle(element).color, fontSize: getComputedStyle(element).fontSize }));
     await expect(accountLink).toHaveCSS('color', newsStyle.color);
@@ -752,7 +756,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     await expect(photo).toHaveAttribute('src', profilePhoto);
     const accent = await page.locator('.voice-experience').evaluate(element => getComputedStyle(element).getPropertyValue('--accent-rgb').replace(/\s/g, ''));
     expect(accent).toBe('64,105,225');
-    const newsLink = page.getByRole('link', { name: 'Talk through the news', exact: true });
+    const newsLink = page.getByRole('link', { name: 'News', exact: true });
     const accountLink = page.getByRole('link', { name: 'My waveform', exact: true });
     await expect(newsLink).toHaveCount(0);
     await expect(accountLink).toBeVisible();
@@ -1055,7 +1059,7 @@ for (const viewport of [
   await page.goto(`/w/${id}`);
   const box = page.getByRole('region', { name: 'Text Box content', exact: true });
   await expect(box).toHaveCount(0);
-  await expect(page.getByRole('link', { name: 'Talk through the news', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'News', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
   await expect(box).toHaveCount(0);

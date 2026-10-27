@@ -31,7 +31,7 @@ test('background approval is reused on save; available Text Box stays absent bef
   await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Text Box content', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Copy text', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('link', { name: 'Talk through the news', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'News', exact: true })).toHaveCount(0);
   await page.goto('/account');
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await page.goto(address!);

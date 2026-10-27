@@ -78,7 +78,7 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
     data-demo-code={demoCodeRequired} data-personal={Boolean(waveformId)} data-profile-photo={hasPortrait} data-docked={docked} data-text-visible={textVisible}
     style={waveformId ? appearanceTheme(accentColor) : undefined}>
     <nav className="voice-navigation" aria-label="FlowPath navigation" hidden={Boolean(waveformId) && voice.active}>
-      {!waveformId && <div className="home-news-links"><span className="home-news-title">News</span><Link href="/w/c538ac44-883b-4d96-8785-4ddf8a151efb">Benjamin Franklin</Link><a className="news-example-link" href="https://flowpathapp.com" onClick={() => clientAnalytics.record({ eventName: 'navigation_selected', properties: { destination: 'news' } })}>Talk through the news</a></div>}
+      {!waveformId && <div className="home-news-links"><Link href="/w/c538ac44-883b-4d96-8785-4ddf8a151efb">Benjamin Franklin</Link><a className="news-example-link" href="https://flowpathapp.com" onClick={() => clientAnalytics.record({ eventName: 'navigation_selected', properties: { destination: 'news' } })}>News</a></div>}
       {waveformId && !voice.active && !textVisible && voice.textState.text && <button className="secondary-button text-reopen" type="button" onClick={voice.showText}>Show text</button>}
       <div className="voice-account-links">
         {name && !docked && <span>{name}</span>}
