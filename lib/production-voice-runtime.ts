@@ -34,10 +34,13 @@ export function getProductionVoiceServer(resolveWaveform?: Resolver, resolveAdmi
   return shared.flowpathProductionVoiceServer ??= createVoiceServer({
     publicOrigin: local ? undefined : configuredPublicOrigin(process.env.FLOWPATH_PUBLIC_ORIGIN),
     trustedProxyHost: process.env.FLOWPATH_TRUSTED_PROXY_HOST,
-    enabled: () => (local || process.env.NODE_ENV === 'production')
+    // Hosted creation stays closed until provider cutoff/recovery and active execution are verified.
+    // No environment switch or warm-instance setting can bypass this release gate.
+    enabled: () => local
       && process.env.FLOWPATH_ACCOUNT_MODE === 'firebase' && process.env.FLOWPATH_FIRESTORE_EDITION === 'standard'
       && Boolean(configuredFirebaseProjectId()) && (local || Boolean(configuredPublicOrigin(process.env.FLOWPATH_PUBLIC_ORIGIN)))
       && (local || productionVoiceDeadlineConfigured()) && Boolean(localTestingVoicePolicy()),
+    requestOwnedCleanup: !local,
     resolveWaveform: (request, id) => shared.flowpathProductionWaveformResolver?.(request, id) ?? Promise.resolve(null),
     resolvePublicVisitor: publicVoiceOwner,
     resolveAdmin: request => shared.flowpathProductionAdminResolver?.(request) ?? Promise.resolve(null),

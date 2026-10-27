@@ -1,5 +1,7 @@
 # FlowPath Studio
 
+The October 27 [voice lifecycle candidate](docs/voice-lifecycle.md) keeps hosted starts closed pending cutoff/recovery acceptance and adds request-owned, fenced cleanup for known sessions. The full localhost experience and unmetered founder testing remain unchanged. This branch is not deployment or hosted reactivation approval.
+
 The selected [desktop experience](docs/experience-design.md) places the portrait left of the raised waveform. Text Box remains absent until requested and reveals over 800 ms, with its toolbar visible inside the viewport. Stop writing pauses capture; Hide dismisses without ending voice or erasing text. News appears only on the Studio homepage. Mobile reflow is protected; further mobile visual tuning remains separate.
 
 [Knowledge](docs/knowledge.md) adds private PDF/DOCX/TXT uploads through **Plugins → Knowledge → Manage Knowledge**. Ready documents support spoken answers and requested passages/sources in Text Box. It uses the [shared plugin contract](docs/parallel-work/contracts.md#shared-plugin-contract-implemented), existing Google/email accounts and GPT-6 Luna. Real provider use is restricted to the full localhost app; public document publication and hosted cost controls remain gated.

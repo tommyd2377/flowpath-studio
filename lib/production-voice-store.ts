@@ -24,7 +24,10 @@ export type VoiceOwner = { ownerUid: string; waveformId: string; accountSessionI
 export type StoredVoice = VoiceOwner & {
   id: string; state: 'creating' | 'active' | 'uncertain' | 'closed' | 'rejected';
   createdAt: number; expiresAt: number; canceled: boolean; providerId?: string; seconds?: number;
+  /** Cleanup-only ownership. Expiry permits another closer, never a new provider or released usage. */
+  cleanup?: { epoch: number; until: number };
 };
+export const VOICE_CLEANUP_LEASE_MS = 20_000;
 export type VoiceTransaction = {
   get(path: string): Promise<Record<string, unknown> | null>;
   set(path: string, value: object): void;
@@ -67,6 +70,11 @@ function stored(row: Record<string, unknown> | null): StoredVoice | null {
       || admin.deadline < row.expiresAt || (admin.unmeteredLocal === true
         ? admin.override !== true || admin.deadline !== UNMETERED_LOCAL_DEADLINE || row.expiresAt !== UNMETERED_LOCAL_DEADLINE
         : admin.unmeteredLocal !== undefined || admin.deadline > row.createdAt + VOICE_SESSION_SECONDS * 1000)) throw new Error('Invalid durable admin record');
+  }
+  if (row.cleanup !== undefined) {
+    const cleanup = object(row.cleanup);
+    if (!Number.isSafeInteger(cleanup.epoch) || Number(cleanup.epoch) < 1
+      || !Number.isSafeInteger(cleanup.until) || Number(cleanup.until) < 0) throw new Error('Invalid cleanup ownership');
   }
   if (row.kind !== undefined && !isPublicVoiceOwner(row)) throw new Error('Invalid durable voice record');
   return row as StoredVoice;
@@ -189,7 +197,7 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
     }
     return { global: global ?? {}, own: own ?? {}, seconds, admin, demo, demoGlobal, demoVisitor };
   }
-  async function finish(id: string, result: { finalized: boolean; seconds?: number; rejected?: boolean; providerId?: string }) {
+  async function finish(id: string, result: { finalized: boolean; seconds?: number; rejected?: boolean; providerId?: string; cleanupEpoch?: number }) {
     if (result.finalized && !result.rejected && (typeof result.seconds !== 'number' || !Number.isFinite(result.seconds) || result.seconds < 0)) {
       throw new Error('Confirmed final usage is required');
     }
@@ -200,6 +208,10 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
       const call = stored(await tx.get(callPath(id)));
       if (call?.providerId && result.providerId && call.providerId !== result.providerId) throw new Error('Provider identifier does not match');
       if (!call || call.state === 'closed' || call.state === 'rejected') return;
+      // A prior in-memory controller or expired worker cannot settle after cleanup takes ownership.
+      if (call.cleanup && (result.cleanupEpoch !== call.cleanup.epoch || call.cleanup.until <= now())
+        || !call.cleanup && result.cleanupEpoch !== undefined) throw new Error('Cleanup ownership changed');
+      if (call.cleanup && (result.providerId !== call.providerId || result.rejected)) throw new Error('Cleanup requires matching provider finalization');
       const demo = call.demoVisitorId ? await tx.get('voiceDemoBudgets/studio') : null;
       validateDemoGuard(demo, true);
       const [global, own, adminOwner] = await Promise.all([tx.get(globalPath), tx.get(ownerPath(call.ownerUid)),
@@ -219,6 +231,18 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
     });
   }
   return {
+    async claimCleanup(id: string) {
+      return database.transaction(async tx => {
+        const call = stored(await tx.get(callPath(id)));
+        if (!call || !call.canceled || !call.providerId || call.state === 'closed' || call.state === 'rejected'
+          || call.cleanup && call.cleanup.until > now()) return null;
+        const epoch = (call.cleanup?.epoch ?? 0) + 1;
+        if (!Number.isSafeInteger(epoch)) throw new Error('Cleanup epoch exhausted');
+        const cleanup = { epoch, until: now() + VOICE_CLEANUP_LEASE_MS };
+        tx.set(callPath(id), { ...call, cleanup });
+        return { ...call, cleanup };
+      });
+    },
     async available(owner: VoiceOwner, policy: VoicePolicy) {
       await database.transaction(async tx => { await admission(tx, owner, policy); });
     },
@@ -245,13 +269,17 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
     async created(id: string, providerId: string, expiresAt: number) {
       return database.transaction(async tx => {
         const call = stored(await tx.get(callPath(id)));
-        if (!call || call.state !== 'creating') throw new Error('Voice reservation is no longer creating');
+        if (!/^[A-Za-z0-9_-]{1,200}$/.test(providerId) || !call || !['creating', 'uncertain'].includes(call.state)
+          || call.providerId && call.providerId !== providerId || call.expiresAt !== expiresAt) throw new Error('Voice reservation is no longer creating');
         const global = await tx.get(globalPath);
         validateGuards(global, null);
-        if (!global || active(global)[id] !== 'creating') throw new Error('Missing voice admission slot');
-        tx.set(callPath(id), { ...call, providerId, expiresAt, state: 'active' });
-        tx.set(globalPath, { ...global, active: { ...active(global ?? {}), [id]: 'active' } });
-        return call.canceled;
+        if (!global || !['creating', 'uncertain'].includes(String(active(global)[id]))) throw new Error('Missing voice admission slot');
+        // A deadline/worker may have run before the creation response arrived. Keep its ID for cleanup.
+        const uncertain = call.state === 'uncertain' || call.expiresAt <= now();
+        const state = uncertain ? 'uncertain' : 'active';
+        tx.set(callPath(id), { ...call, providerId, state });
+        tx.set(globalPath, { ...global, active: { ...active(global), [id]: state } });
+        return call.canceled || uncertain;
       });
     },
     async mayStart(id: string) {
@@ -328,7 +356,9 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
   };
 }
 
-export type ProductionVoiceStore = ReturnType<typeof createProductionVoiceStore>;
+// Paid fixture adapters do not opt into hosted cleanup; missing support must fail closed.
+export type ProductionVoiceStore = Omit<ReturnType<typeof createProductionVoiceStore>, 'claimCleanup'>
+  & Partial<Pick<ReturnType<typeof createProductionVoiceStore>, 'claimCleanup'>>;
 
 export function firestoreVoiceDatabase(db: () => Firestore): VoiceDatabase {
   return {

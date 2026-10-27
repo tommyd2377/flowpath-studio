@@ -2,6 +2,12 @@
 
 Prepared October 18, 2026. This is the new waveform product, not the archived Studio builder.
 
+## October 27 hosting pause and lifecycle prerequisite
+
+The separate billing investigation reports user-requested manual scaling to zero and zero-instance metrics; the public hosted app/voice are reported unavailable. This thread has not independently inspected production or session records. Firebase Auth/Firestore and local voice routing are separate and preserved. The deployment/availability evidence below is historical.
+
+The isolated [lifecycle candidate](voice-lifecycle.md) closes hosted starts in code and makes known-session cleanup request-owned with durable settlement fencing. It does not establish an active hosted voice worker, an upstream hard cutoff or unknown-ID recovery. Source `apphosting.yaml` still has the old warm-instance/live settings: the proposed zero-idle edit awaits direct user approval after automatic review rejected it. Review source and actual scaling together before any future release, and obtain explicit deployment/reactivation authorization. No cloud setting, secret, permission or service was changed here.
+
 ## Confirmed resources
 
 - Project: `flowpath-studio` (FlowPath Studio), project number `317729996674`.

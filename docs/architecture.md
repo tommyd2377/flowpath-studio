@@ -1,5 +1,7 @@
 # FlowPath waveform architecture
 
+October 27 lifecycle candidate: hosted voice starts are closed in code pending provider cutoff/recovery and bounded active-execution acceptance. Existing hosted cancellation/expiry uses awaited, fenced known-session cleanup; localhost retains its existing supervisor and founder-testing behavior. See [voice lifecycle](voice-lifecycle.md) for implemented boundaries, provider findings and unverified release prerequisites. Historical hosted behavior below does not establish current activation readiness.
+
 The full localhost runtime now enforces [creation safety](creation-safety.md) for names, instructions, portraits and Knowledge documents using GPT-6 Luna and a separate 50¢ cumulative waveform review budget. Existing Franklin content is included explicitly; saved data and Google sessions are preserved. Exact-version approval gates save/publication/admission, and document approval gates retrieval. Uncertainty requires the founder. Hosted activation and runtime conversation safety remain separate decisions.
 
 The selected [waveform experience](experience-design.md) implements a compact desktop portrait/waveform row, on-demand Text Box mounting and homepage-only News navigation. Saved plugin capability is independent of ephemeral presentation state. Future multi-plugin compatibility remains a design proposal.

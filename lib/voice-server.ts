@@ -24,6 +24,8 @@ type Options = {
   requireSettlement?: boolean;
   publicOrigin?: string;
   trustedProxyHost?: string;
+  /** Hosted recovery only: never rely on a controller continuing after its HTTP response. */
+  requestOwnedCleanup?: boolean;
   production?: {
     store: ProductionVoiceStore;
     policy: () => VoicePolicy | null;
@@ -165,7 +167,7 @@ function attachControl(session: Conversation, options: Options, onFatal: () => v
         finish({ finalized: true, seconds });
         return;
       }
-      if (closing) return;
+      if (closing || session.canceled) return;
       if (event.type === 'error') { fatal(); return; }
       if (event.type === 'session.started' && options.connected && !session.connected) {
         session.connected = options.connected(session.id);
@@ -204,7 +206,7 @@ function attachControl(session: Conversation, options: Options, onFatal: () => v
       // Transcripts and reflected audio are deliberately neither retained nor logged.
     } catch { fatal(); }
   });
-  return { ready, closed, close };
+  return { ready, closed, close, dispose: () => finish({ finalized: false }) };
 }
 
 /** Local fixtures retain their process budget; public sessions require durable admission. */
@@ -312,6 +314,24 @@ export function createVoiceServer(options: Options = {}) {
 
   async function closeStored(call: StoredVoice) {
     if (call.state === 'closed' || call.state === 'rejected') return true;
+    if (options.requestOwnedCleanup) {
+      // No active-map shortcut: old processes and duplicate tasks are fenced by the database.
+      const apiKey = key();
+      if (!apiKey || !options.production?.store.claimCleanup) return false;
+      const claimed = await options.production.store.claimCleanup(call.id);
+      if (!claimed) return false;
+      const session: Conversation = { id: claimed.id, apiKey, canceled: true, providerId: claimed.providerId };
+      const bounded = (value: number | undefined) => Number.isFinite(value) ? Math.max(1, Math.min(value!, 4_000)) : 4_000;
+      const control = attachControl(session, { ...options, connected: undefined,
+        connectMs: bounded(options.connectMs), closeMs: bounded(options.closeMs) }, () => {});
+      let result: Finalization = { finalized: false };
+      try { await control.ready; result = await control.close(); }
+      catch { /* Missing transport/finalization leaves durable admission occupied. */ }
+      finally { control.dispose(); }
+      // There is no documented WebRTC REST hangup guarantee. Never infer final usage from it.
+      await options.production.store.finish(claimed.id, { ...result, providerId: claimed.providerId, cleanupEpoch: claimed.cleanup.epoch });
+      return result.finalized;
+    }
     const existing = active.get(call.id);
     if (existing) { existing.canceled = true; return existing.control ? close(existing) : false; }
     if (!call.providerId) return false;
@@ -346,12 +366,12 @@ export function createVoiceServer(options: Options = {}) {
   return {
     async cancelReservation(id: string, ownerUid: string, waveformId: string) {
       if (!options.production || !validId(id)) return false;
-      try { const call = await options.production.store.cancel(ownerUid, waveformId, id); return call ? closeStored(call) : true; }
+      try { const call = await options.production.store.cancel(ownerUid, waveformId, id); return call ? await closeStored(call) : true; }
       catch { return false; }
     },
     async cancelOwner(ownerUid: string) {
       if (options.production) {
-        try { const call = await options.production.store.cancel(ownerUid, undefined); return call ? closeStored(call) : true; }
+        try { const call = await options.production.store.cancel(ownerUid, undefined); return call ? await closeStored(call) : true; }
         catch { return false; }
       }
       const session = [...active.values()].find(call => call.ownerUid === ownerUid);
@@ -364,7 +384,7 @@ export function createVoiceServer(options: Options = {}) {
     },
     async expireReservation(id: string) {
       if (!options.production || !validId(id)) return false;
-      try { const call = await options.production.store.expire(id); return call ? closeStored(call) : true; }
+      try { const call = await options.production.store.expire(id); return call ? await closeStored(call) : true; }
       catch { return false; }
     },
     async GET(request: Request) {
