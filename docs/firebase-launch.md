@@ -2,6 +2,14 @@
 
 Prepared October 18, 2026. This is the new waveform product, not the archived Studio builder.
 
+## October 27 waveform-triggered code field update
+
+UI source `10d5504562178b15dd03783af9738e90c4f76c9e` was pushed to main and deployed from a clean 227-file export. Build `ed3fad0f-0f30-48fb-a16c-7d127d75a5b5` succeeded; revision `flowpath-studio-build-2026-10-27-003` serves 100% of traffic. The waveform page now has a styled code input with no adjacent unlock button. Its native form is submitted by the waveform, and voice begins only after the existing server validation succeeds. Guidance: “Enter the code and tap the waveform to begin.” Account settings retain their independent code control. Backend gates, quotas, billing and moderation are unchanged.
+
+`npm run check` passed (373 tests, lint, types, build); the complete browser suite passed 83/83, including wrong-code denial without microphone access and correct-code one-tap startup. The new phone screenshot was visually inspected. Unpaid live checks verified homepage/account 200, the served updated guidance/native-form bundle, gate-required voice readiness, disabled billing, private-waveform/auth and cross-site rejection. No paid call, review, upload or production grant was created for this update; real audio remains user verification. Local servers are off.
+
+The rollout's service-wide maximum was restored from App Hosting's default 20 to 2. Actual service/revision maximums are 2, minimums 0, request-only CPU; existing tags and the separate native $20/month cap are unchanged. Only App Hosting was deployed. The deployment and validation logs are `/private/tmp/flowpath-code-ui-release-10d5504-deploy.log` and `/private/tmp/flowpath-code-entry-ui-{check,browser}.log`.
+
 ## October 27 code-gated tester demo release preparation
 
 The user authorized the temporary shared-code demo and declined automated paid tests. This supersedes the website-only and earlier $5/day OpenAI-guard plan below. Hosted voice and the approved exact-version creation-review adapter are activated by the candidate profile; Knowledge ingestion and customer billing remain off. Anonymous intro access requires the server code grant and has 180 seconds per UTC day per stable browser cookie, including the founder. An invited account’s own waveform has 180 seconds per UTC day per UID; only the verified founder’s own waveform is exempt. Codes, sign-in/out and page refresh do not reset the existing browser allowance. Clearing cookies/devices can create a new anonymous identity.

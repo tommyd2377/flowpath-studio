@@ -1,6 +1,6 @@
 # Invitation-only hosted beta
 
-October 27, 2026. The code-gated demo source `3b93a6e` is deployed as `flowpath-studio-build-2026-10-27-002`. See [the release receipt](firebase-launch.md) for exact source, validation, cost configuration and manual acceptance. The earlier website-only release was `53a3ede`.
+October 27, 2026. The current waveform-triggered code-field UI source `10d5504` is deployed as `flowpath-studio-build-2026-10-27-003`, following the core code-gated demo `3b93a6e`. See [the release receipt](firebase-launch.md) for exact source, validation, cost configuration and manual acceptance. The earlier website-only release was `53a3ede`.
 
 ## Current requested policy
 
