@@ -2,6 +2,12 @@
 
 Prepared October 18, 2026. This is the new waveform product, not the archived Studio builder.
 
+## October 27 website/settings release
+
+The user explicitly authorized deploying the current limited version while the next hosted beta is built. Scope: App Hosting website/settings, current UI/loaders and private drafts. Hosted voice, Knowledge ingestion/retrieval, creation-review inference and payments remain disabled. Existing auth providers, secrets, rules and production user data are unchanged. The website may return from its manual-zero pause to request-based autoscaling with a zero-instance idle minimum and existing maximum of two; no warm instance or always-allocated CPU is requested. The local server should be off whenever active local testing is finished, per the latest user instruction.
+
+The subsequent version targets hosted voice, Knowledge and safety, payment-free publishing, 180 seconds total/day per regular signed-in account across waveforms, and an authenticated founder exemption including the introduction waveform. Those features are not asserted active by this website/settings release. The next beta also requires the owner-approved combined $5/day operating budget, advance alerts and approval before increases. This website/settings release does not claim that a cross-vendor billing hard cap or budget notifications are implemented; AI operations remain off. Deployment/HTTP/browser results will be recorded after rollout.
+
 ## October 27 Workspace/draft release preparation
 
 The user requested committing, pushing and deploying the current version. Source validation passed `npm run check` (348 unit/integration tests, lint, types, production build), 77 standard browser tests and eight synthetic paid-preview browser tests. Workspace settings, shared loaders, startup request cancellation/parallel reads and private draft versus explicit publication are included. The current application code matches the checked source-only copy.

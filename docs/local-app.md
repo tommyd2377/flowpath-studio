@@ -1,5 +1,7 @@
 # Full app on localhost
 
+October 27 latest operating preference: stop the local server when active local testing ends. A deployment is not a reason to leave localhost running. Earlier requests below to keep it running are historical and superseded.
+
 October 27 draft/publication follow-up: Save draft keeps changes private; Preview draft opens the saved draft; Publish / Update published version promotes it; View published version opens the frozen visitor configuration. Draft changes no longer overwrite a published waveform. The loader heartbeat remains one second; independent metadata reads now overlap and the request reuses its existing identity resolution. The server stays running, with no paid verification or hosted changes.
 
 October 27 Workspace settings: `/account` now uses the selected responsive Workspace layout. Desktop has section navigation/editor/appearance preview; mobile has a compact preview and touch controls. Knowledge is visible under **Plugins → Knowledge → Manage documents**. One draft survives section changes; the save area retains the existing safety gate and failed-save feedback. The real server remains on localhost:3220 with the same configured Firebase account runtime. Tests use an isolated source copy and synthetic servers on 3225/3226, with live APIs disabled; this change does not claim a new real-Google/voice acceptance run.

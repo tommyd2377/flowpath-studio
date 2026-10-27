@@ -1,5 +1,7 @@
 # Creation safety
 
+October 27 hosted-readiness follow-up: the existing Luna adapter can now be selected for the production `flowpath-studio` runtime through explicit creation-safety opt-in plus the approved `conservative-v3` policy preset (or a valid existing JSON policy). The verified HTTPS origin, Firebase account mode, Standard Firestore and project must match. Missing/wrong configuration fails closed. The approved policy, GPT-6 Luna, exact-version enforcement and 50¢ owner/waveform review budget are unchanged. No hosted configuration was activated, no key was read/created, and no paid request was made. Review-record retention remains a launch decision.
+
 As of October 26, the full localhost runtime enables conservative GPT-6 Luna review, including the existing Franklin waveform, at the owner's request. Hosted activation remains unchanged. The editor, direct save API, publication and voice admission enforce exact-version approval. Knowledge has independent immutable-document approvals. Google sessions and saved content are preserved; absent approval blocks new use. See [policy and research](creation-policy.md) for boundaries and evidence. Live acceptance results are recorded below separately from synthetic checks.
 
 ## Content and policy binding

@@ -10,6 +10,7 @@ import { CONSERVATIVE_CREATION_POLICY } from './creation-policy';
 import { createLunaCreationReviewer, type ReviewFile } from './creation-luna-reviewer';
 import { createReviewBudget } from './creation-review-budget';
 import { knowledgeDocumentForReview } from './knowledge-store';
+import { configuredCreationPolicy, hostedCreationReviewConfigured } from './creation-review-config';
 
 export type CreationIdentity = { owner: AccountUser; mode: AccountMode; cookie: string; accountSessionId?: string; isCurrent(): boolean | Promise<boolean> };
 export const creationSafetyFixtures = process.env.NODE_ENV === 'development' && process.env.FLOWPATH_ACCOUNT_MODE === 'local' && process.env.FLOWPATH_SAFETY_FIXTURES === '1';
@@ -19,7 +20,7 @@ export const creationActor = (identity: CreationIdentity): CreationActor => ({ u
 function policy(): CreationSafetyPolicy | null {
   // This policy and reviewer are synthetic fixtures, never a production classifier.
   if (creationSafetyFixtures) return { version: 'local-fixture-v1', categories: Object.fromEntries(CREATION_SAFETY_CATEGORIES.map(key => [key, 'block'])) as CreationSafetyPolicy['categories'] };
-  try { return process.env.FLOWPATH_CREATION_POLICY_JSON ? JSON.parse(process.env.FLOWPATH_CREATION_POLICY_JSON) : null; } catch { return null; }
+  return configuredCreationPolicy(process.env);
 }
 export function creationReviewStore(identity?: CreationIdentity, file?: ReviewFile) {
   const verifyOwner = async (tx: VoiceTransaction, actor: CreationActor) => {
@@ -43,7 +44,7 @@ export function creationReviewStore(identity?: CreationIdentity, file?: ReviewFi
       if (/\[fixture:blocked\]|\b(?:Adolf Hitler|Osama bin Laden)\b/i.test(text)) findings['extremist-impersonation'] = 'violation';
       else if (/\[fixture:manual\]/i.test(text)) findings['fraud-impersonation'] = 'uncertain';
       return { findings };
-    }) : localAppOrigin() ? createLunaCreationReviewer({ key: () => process.env.OPENAI_API_KEY,
+    }) : localAppOrigin() || hostedCreationReviewConfigured(process.env) ? createLunaCreationReviewer({ key: () => process.env.OPENAI_API_KEY,
       budget: createReviewBudget(applicationDatabase()), file }) : null,
   });
 }

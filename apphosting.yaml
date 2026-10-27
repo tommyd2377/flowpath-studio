@@ -1,5 +1,5 @@
 # This launch profile is for the new FlowPath Studio project only.
-# Approved source-only zero-idle candidate; no deployment or hosted reactivation is authorized.
+# Authorized website/settings release: zero idle instances; hosted voice stays disabled.
 # Hosted voice also remains gated in code pending cutoff/recovery acceptance.
 runConfig:
   cpu: 1
@@ -35,6 +35,13 @@ env:
     value: standard
     availability: [RUNTIME]
   - variable: FLOWPATH_LIVE_ENABLED
+    value: "0"
+    availability: [RUNTIME]
+  # This release has no hosted inference, ingestion, checkout or paid voice activation.
+  - variable: FLOWPATH_CREATION_SAFETY_ENABLED
+    value: "0"
+    availability: [RUNTIME]
+  - variable: FLOWPATH_PAID_TEST_ENABLED
     value: "0"
     availability: [RUNTIME]
   - variable: FLOWPATH_PUBLIC_DEMO_ENABLED
