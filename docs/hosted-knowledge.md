@@ -1,6 +1,6 @@
 # Private hosted Knowledge — October 29
 
-Release candidate, not deployment evidence. The owner requested hosted Knowledge before the production rollout and approved a $5/month estimated document-storage guard. Accounts, existing voice allowances, the 50¢ per-waveform review budget and disabled customer payments are unchanged.
+Deployed October 29 from application source `8fdeee28b09daca67398e99045b93d6aeccf8660` as `flowpath-studio-build-2026-10-29-001`, serving 100% of traffic. The owner requested hosted Knowledge before the production rollout and approved a $5/month estimated document-storage guard. Accounts, existing voice allowances, the 50¢ per-waveform review budget and disabled customer payments are unchanged.
 
 ## Activation and privacy
 
@@ -26,6 +26,6 @@ Remove disables a document before contacting the provider. The adapter verifies 
 
 ## Verification
 
-Source-only isolated checks passed lint, generated types/TypeScript, **435 source tests** and the production build. The full mocked browser suite passed **114/114**, including desktop/mobile adult consent, retention/budget notice, all existing account/voice/carousel/Streamdown behavior and resource cleanup. A focused Knowledge browser pass follows the final authorization-refusal handling adjustment. Unit coverage includes concurrent global reservations, idempotent measurement/removal, isolation, overrun/corrupt accounting, known refusal versus unknown outcomes, last-index cleanup, failed cleanup/racing intake and strict hosted configuration.
+Source-only isolated checks passed lint, generated types/TypeScript, **435 source tests** and the production build. The full mocked browser suite passed **114/114**, including desktop/mobile adult consent, retention/budget notice, all existing account/voice/carousel/Streamdown behavior and resource cleanup. The final focused Knowledge browser pass also passed 3/3 after the authorization-refusal handling adjustment. Unit coverage includes concurrent global reservations, idempotent measurement/removal, isolation, overrun/corrupt accounting, known refusal versus unknown outcomes, last-index cleanup, failed cleanup/racing intake and strict hosted configuration.
 
-Codex made no live provider request, production upload, search, review, voice call or account change for these checks. Provider permissions and real hosted document processing still need owner/live acceptance after rollout; source/mocked success is not that evidence. Only temporary isolated fixture servers run during checks; the regular local app is stopped. Deployment and HTTPS/configuration receipts will be recorded in `firebase-launch.md`.
+Codex made no live provider request, production upload, search, review, voice call or account change for these checks. Provider permissions and real hosted document processing still need owner/live acceptance after rollout; source/mocked success is not that evidence. Only temporary isolated fixture servers run during checks; the regular local app is stopped. The [deployment receipt](firebase-launch.md#october-29-plugin-and-private-knowledge-release) records successful HTTPS/access checks, active hosted configuration and preserved zero-to-two instance scaling.
