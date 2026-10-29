@@ -11,9 +11,10 @@ import { WAVEFORM_DEFAULT_COLOR } from '@/lib/account-model';
 import VoiceDiagnostics, { useDiagnosticsMode } from './VoiceDiagnostics';
 import TextPanel from './TextPanel';
 import LiveTextPanel from './LiveTextPanel';
+import PluginCarousel from './PluginCarousel';
 import { liveTextPanelEnabled, type TextPanelConfiguration } from '@/lib/text-panel';
 import { clientAnalytics, observeVisit } from '@/lib/analytics-runtime';
-import { Square } from 'lucide-react';
+import { BookOpen, EyeOff, Square, TextCursorInput } from 'lucide-react';
 import BrandLoader from './BrandLoader';
 import DemoCodeGate from './DemoCodeGate';
 
@@ -31,7 +32,7 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
   const { active, stop } = voice;
   const connected = voice.phase === 'listening' || voice.phase === 'speaking';
   const textVisible = textBoxEnabled && voice.textState.visible;
-  const docked = Boolean(waveformId && (connected || textVisible));
+  const docked = Boolean(waveformId && (voice.hasConnected || textVisible));
   const waveControl = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const codeLocked = demoCodeRequired && !demoCodeAccepted;
@@ -75,11 +76,11 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
   }, [active, stop]);
 
   return <div className="voice-experience" data-active={voice.active} data-connected={connected}
-    data-demo-code={demoCodeRequired} data-personal={Boolean(waveformId)} data-profile-photo={hasPortrait} data-docked={docked} data-text-visible={textVisible}
+    data-demo-code={codeLocked} data-personal={Boolean(waveformId)} data-profile-photo={hasPortrait} data-docked={docked} data-text-visible={textVisible}
     style={waveformId ? appearanceTheme(accentColor) : undefined}>
     <nav className="voice-navigation" aria-label="FlowPath navigation" hidden={Boolean(waveformId) && voice.active}>
       {!waveformId && <div className="home-news-links"><Link href="/w/c538ac44-883b-4d96-8785-4ddf8a151efb">Benjamin Franklin</Link><a className="news-example-link" href="https://flowpathapp.com" onClick={() => clientAnalytics.record({ eventName: 'navigation_selected', properties: { destination: 'news' } })}>News</a></div>}
-      {waveformId && !voice.active && !textVisible && voice.textState.text && <button className="secondary-button text-reopen" type="button" onClick={voice.showText}>Show text</button>}
+      {waveformId && !voice.active && !textVisible && (voice.textState.text || voice.textState.hasKnowledge) && <button className="secondary-button text-reopen" type="button" onClick={voice.showText}>Show text</button>}
       <div className="voice-account-links">
         {name && !docked && <span>{name}</span>}
         <Link href="/account" onClick={() => clientAnalytics.record({ eventName: 'navigation_selected', properties: { destination: 'account' } })}>{waveformId && !publicDemo ? 'My waveform' : 'Create your waveform'}</Link>
@@ -110,12 +111,19 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
         <Waveform phase={voice.phase} inputAnalyser={voice.inputAnalyser} outputAnalyser={voice.outputAnalyser} accentColor={waveformId ? accentColor : undefined} />
       </button>
       {!voice.active && !docked && <DemoCodeGate formId="voice-demo-code-form" waveformTrigger onState={setDemoCodeRequired} onAccess={setDemoCodeAccepted} onUnlocked={beginConversation} />}
-      <p className="voice-hint" id="voice-hint" aria-hidden={connected || docked}>{nextConversation ? 'Copy your text, then tap the wave to choose your next conversation' : codeLocked ? 'Enter the code and tap the waveform to begin.' : 'Tap the waveform to begin.'}</p>
-      <p className="voice-status" id="voice-status" role="status" aria-live="polite" aria-atomic="true">{voice.phase === 'connecting' && <BrandLoader variant="inline" />}{showStatus ? status : ''}{voice.reviewRequired && waveformId && <><br /><Link href="/account" className="voice-review-link">Open waveform settings</Link></>}</p>
+      <p className="voice-hint" id="voice-hint" aria-hidden={voice.active || docked}>{nextConversation ? 'Copy your text, then tap the wave to choose your next conversation' : codeLocked ? 'Enter the code and tap the waveform to begin.' : 'Tap the waveform to begin.'}</p>
+      <p className="voice-status" id="voice-status" role="status" aria-live="polite" aria-atomic="true">{voice.phase === 'connecting' && <BrandLoader variant="connection" />}{showStatus ? status : ''}{voice.reviewRequired && waveformId && <><br /><Link href="/account" className="voice-review-link">Open waveform settings</Link></>}
+      </p>
       {paidPayer && <p className="paid-session-meter" aria-live="polite">{paidPayer === 'creator' ? 'Creator pays' : 'You pay from your prepaid balance'}{voice.remainingSeconds !== null ? ` · ${voice.remainingSeconds} seconds remaining${voice.remainingSeconds <= 30 ? ' — ending soon' : ''}` : ''}</p>}
       <span className="sr-only">{connected ? 'Conversation connected. Tap the waveform or press Escape to end.' : ''}</span>
-      {textVisible ? <div ref={panel} className="voice-text-panel voice-text-panel--live"><LiveTextPanel {...voice.textState}
-        onStop={voice.stopWriting} onClear={voice.clearText} onUndo={voice.undoText} onHide={hideText} />
+      {textVisible ? <div ref={panel} className="voice-text-panel voice-text-panel--live">
+        <nav className="plugin-display-controls" aria-label="Plugin displays">
+          <button type="button" className="secondary-button" aria-pressed={voice.textState.display !== 'knowledge'} onClick={voice.showNotes}><TextCursorInput aria-hidden="true" />Text Box</button>
+          {voice.textState.hasKnowledge && <button type="button" className="secondary-button" aria-pressed={voice.textState.display === 'knowledge'} onClick={voice.showKnowledge}><BookOpen aria-hidden="true" />Knowledge</button>}
+          <button type="button" className="secondary-button plugin-display-hide" onClick={hideText}><EyeOff aria-hidden="true" />Hide</button>
+        </nav>
+        <PluginCarousel display={voice.textState.display ?? 'text'}><LiveTextPanel key={voice.textState.display ?? 'text'} {...voice.textState} externalHide
+          onStop={voice.stopWriting} onClear={voice.clearText} onUndo={voice.undoText} onHide={hideText} /></PluginCarousel>
         {voice.textState.message && <p role="status">{voice.textState.message}</p>}
       </div> : !textBoxEnabled && textPanel && <div className="voice-text-panel"><TextPanel configuration={textPanel} scopeKey={waveformId ?? 'home'} /></div>}
     </main>

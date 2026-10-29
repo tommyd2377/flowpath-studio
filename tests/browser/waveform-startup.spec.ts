@@ -44,6 +44,9 @@ for (const mode of ['admin', 'regular', 'disabled', 'unavailable'] as const) {
     try {
       await page.goto('/account');
       await expect(page.getByRole('link', { name: 'Preview draft', exact: true })).toBeVisible();
+      // Finish the account page's own metadata request before counting requests
+      // belonging to the waveform navigation. A late request is not a new mount.
+      await page.waitForLoadState('networkidle');
       opening = true;
       await page.getByRole('link', { name: 'Preview draft', exact: true }).click();
       await expect(page.getByText('Loading your waveform…', { exact: true })).toBeVisible();

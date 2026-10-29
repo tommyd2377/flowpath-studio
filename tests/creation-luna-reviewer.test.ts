@@ -63,6 +63,8 @@ test('Luna review preflights, uses strict structured output and returns findings
   assert.equal((body.text as { format: { strict: boolean } }).format.strict, true);
   assert.match(String(body.instructions), /Trusted server UTC review date: 2026-10-26/);
   assert.match(String(body.instructions), /died on or before 2021-10-26/);
+  assert.match(String(body.instructions), /not to volunteer AI disclaimers or break character is not concealment when the same prompt requires a truthful answer/);
+  assert.match(String(body.instructions), /Explicit instructions to lie when asked, deny being an AI simulation/);
   assert.deepEqual(await s.budget.view(actor.ownerUid), { spent: 1963, held: 0, limit: 500000 });
 });
 
@@ -76,7 +78,7 @@ test('clear Nazi names are blocked without a model call; ambiguous findings stay
 });
 
 test('historical simulation policy routes identity/provenance concerns to the founder without weakening hard bans', () => {
-  assert.equal(CONSERVATIVE_CREATION_POLICY.version, 'historical-followup-2026-10-27-v4');
+  assert.equal(CONSERVATIVE_CREATION_POLICY.version, 'historical-roleplay-2026-10-29-v5');
   for (const category of ['controversial-identity', 'portrait-provenance'] as const) {
     assert.equal(evaluateCreationReview({ findings: { ...findings, [category]: 'violation' } }, CONSERVATIVE_CREATION_POLICY).status, 'allowed');
   }

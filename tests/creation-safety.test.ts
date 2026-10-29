@@ -68,6 +68,47 @@ const allowed = async (s: ReturnType<typeof setup>, input = candidate) => {
   return s.store.runReview(requested.record);
 };
 
+test('queue validation failures do not silently discard active reviews', async () => {
+  let unavailable = false;
+  const s = setup({ validateCandidate: async () => { if (unavailable) throw new Error('Database unavailable'); } });
+  const requested = await s.store.request(owner, candidate);
+  unavailable = true;
+  await assert.rejects(s.store.listManual(admin), /Database unavailable/);
+  unavailable = false;
+  assert.deepEqual((await s.store.listManual(admin)).map(row => row.reviewId), [requested.record.reviewId]);
+});
+
+test('automatic blocks remain inspectable by the founder without granting approval or use', async () => {
+  const s = setup({ policy: () => CONSERVATIVE_CREATION_POLICY,
+    reviewer: reviewer(async () => evidence({ 'fraud-impersonation': 'violation', 'portrait-provenance': 'uncertain' })) });
+  const reviewed = await allowed(s);
+  assert.equal(reviewed.status, 'blocked');
+  assert.deepEqual((await s.store.listManual(admin)).map(row => row.reviewId), [reviewed.reviewId]);
+  assert.deepEqual((await s.store.getForAdmin(admin, reviewed.reviewId)).categories, ['fraud-impersonation', 'portrait-provenance']);
+  await assert.rejects(s.store.listManual(owner), denied(403));
+  await assert.rejects(s.store.getForAdmin(owner, reviewed.reviewId), denied(403));
+  await assert.rejects(s.store.decide(admin, { ...reviewed, decision: 'allowed' }), denied());
+  await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, candidate)), denied());
+  const next = await s.store.request(owner, { ...candidate, initialPrompt: 'Changed instructions.' });
+  assert.deepEqual((await s.store.listManual(admin)).map(row => row.reviewId), [next.record.reviewId]);
+  await assert.rejects(s.store.getForAdmin(admin, reviewed.reviewId), denied());
+});
+
+test('requesting an older automatic block restores its queue entry once without another reviewer call', async () => {
+  let calls = 0;
+  const s = setup({ reviewer: reviewer(async () => { calls++; return evidence({ 'extremist-impersonation': 'violation' }); }) });
+  const reviewed = await allowed(s);
+  s.db.rows.set('creationSafetyQueue/manual', { reviewIds: [] });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const requested = await s.store.request(owner, candidate);
+    assert.equal(requested.needsReview, false);
+    assert.equal(requested.record.status, 'blocked');
+    assert.equal(requested.record.reviewId, reviewed.reviewId);
+    assert.deepEqual((await s.store.listManual(admin)).map(row => row.reviewId), [reviewed.reviewId]);
+  }
+  assert.equal(calls, 1);
+});
+
 test('only completed low-risk findings allow immediate use; serious uncertainty and missing coverage stay held', () => {
   for (const category of CREATION_SAFETY_CATEGORIES) {
     const lowRisk = category === 'portrait-provenance' || category === 'controversial-identity';
@@ -439,4 +480,78 @@ test('v4 retains exact genuine v3 approvals without re-review, but never changed
   await allowed(unknown);
   const strict = createCreationReviewStore(unknown.db, { ...unknown.options, policy: () => CONSERVATIVE_CREATION_POLICY });
   await assert.rejects(unknown.db.transaction(tx => strict.requireAllowed(tx, owner.uid, candidate)), denied());
+});
+
+test('reading an owner status automatically repairs a missing blocked queue entry with no paid retry', async () => {
+  let calls = 0;
+  const s = setup({ reviewer: reviewer(async () => { calls++; return evidence({ 'extremist-impersonation': 'violation' }); }) });
+  const blocked = await allowed(s);
+  s.db.rows.set('creationSafetyQueue/manual', { reviewIds: [] });
+  assert.equal(await s.store.get(other), null);
+  assert.deepEqual(s.db.rows.get('creationSafetyQueue/manual'), { reviewIds: [] });
+  for (let i = 0; i < 2; i++) {
+    assert.equal((await s.store.get(owner))?.reviewId, blocked.reviewId);
+    assert.deepEqual((await s.store.listManual(admin)).map(row => row.reviewId), [blocked.reviewId]);
+  }
+  assert.equal(calls, 1);
+  await assert.rejects(s.store.decide(admin, { ...blocked, decision: 'allowed' }), denied());
+});
+
+test('v5 preserves a legacy block for inspection, but requires a genuine new review to change its verdict', async () => {
+  const { PREVIOUS_FOLLOWUP_POLICY } = await import('../lib/creation-policy');
+  let calls = 0;
+  const s = setup({ policy: () => PREVIOUS_FOLLOWUP_POLICY,
+    reviewer: reviewer(async () => { calls++; return evidence({ 'fraud-impersonation': 'violation', 'portrait-provenance': 'uncertain' }); }) });
+  const old = await allowed(s, { ...candidate, name: 'Benjamin Franklin' });
+  s.db.rows.set('creationSafetyQueue/manual', { reviewIds: [] });
+  const next = createCreationReviewStore(s.db, { ...s.options, policy: () => CONSERVATIVE_CREATION_POLICY,
+    reviewer: reviewer(async () => { calls++; return evidence({ 'portrait-provenance': 'uncertain' }); }) });
+  await assert.rejects(next.get(owner), denied());
+  const queued = await next.listManual(admin);
+  assert.equal(queued[0].reviewId, old.reviewId);
+  assert.equal(queued[0].policyCurrent, false);
+  assert.equal(queued[0].status, 'blocked');
+  assert.equal((await next.getForAdmin(admin, old.reviewId)).status, 'blocked');
+  await assert.rejects(next.decide(admin, { ...old, decision: 'allowed' }), denied());
+  await assert.rejects(s.db.transaction(tx => next.requireAllowed(tx, owner.uid, old.candidate)), denied());
+  assert.equal(calls, 1, 'GET and queue repair never invoke the reviewer');
+  const pending = await next.request(owner, old.candidate);
+  assert.equal(pending.needsReview, true);
+  assert.notEqual(pending.record.reviewId, old.reviewId);
+  const reviewed = await next.runReview(pending.record);
+  assert.equal(reviewed.status, 'allowed');
+  assert.equal((await s.db.transaction(tx => next.requireAllowed(tx, owner.uid, old.candidate))).reviewId, reviewed.reviewId);
+  assert.equal(calls, 2);
+  assert.equal(s.db.rows.get(`creationSafetyReviews/${old.reviewId}`)?.status, 'blocked', 'history is not rewritten');
+});
+
+test('an admin queue refresh restores its own legacy block automatically, without an owner POST', async () => {
+  const { PREVIOUS_FOLLOWUP_POLICY } = await import('../lib/creation-policy');
+  let calls = 0;
+  const s = setup({ policy: () => PREVIOUS_FOLLOWUP_POLICY,
+    reviewer: reviewer(async () => { calls++; return evidence({ 'fraud-impersonation': 'violation' }); }) });
+  const old = await allowed(s);
+  s.db.rows.set('sessions/owner-a-session', { uid: owner.uid, active: true, creationReviewAdmin: true });
+  s.db.rows.set('creationSafetyQueue/manual', { reviewIds: [] });
+  const next = createCreationReviewStore(s.db, { ...s.options, policy: () => CONSERVATIVE_CREATION_POLICY });
+  for (let i = 0; i < 2; i++) {
+    const queued = await next.listManual(owner);
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0].reviewId, old.reviewId);
+    assert.equal(queued[0].policyCurrent, false);
+  }
+  assert.equal(calls, 1);
+});
+
+test('v5 retains exact v4 approvals and their revocation, never replaying a blocked result as allowed', async () => {
+  const { PREVIOUS_FOLLOWUP_POLICY } = await import('../lib/creation-policy');
+  const s = setup({ policy: () => PREVIOUS_FOLLOWUP_POLICY,
+    reviewer: reviewer(async () => evidence({ 'portrait-provenance': 'uncertain' })) });
+  const prior = await allowed(s);
+  const next = createCreationReviewStore(s.db, { ...s.options, policy: () => CONSERVATIVE_CREATION_POLICY });
+  assert.equal((await next.request(owner, candidate)).record.reviewId, prior.reviewId);
+  await s.db.transaction(tx => next.requireAllowed(tx, owner.uid, candidate));
+  await next.decide(admin, { ...prior, decision: 'revoked' });
+  await assert.rejects(next.request(owner, candidate), denied());
+  await assert.rejects(s.db.transaction(tx => next.requireSnapshotAllowed(tx, owner.uid, candidate)), denied());
 });

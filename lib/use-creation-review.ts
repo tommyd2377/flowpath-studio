@@ -59,7 +59,12 @@ export function useCreationReview({ enabled, candidate, ownerKey, automatic = tr
     return () => { current = false; clearTimeout(timer); controller.abort(); };
   }, [enabled, ownerKey, key, scope, automatic, requested]);
 
-  return { ...creationReviewView({ enabled, ownerKey, key, result }), requestReview: () => {
+  return { ...creationReviewView({ enabled, ownerKey, key, result }), invalidateReview: (status: 'stale' | 'unavailable' = 'stale') => {
+    if (completed.current?.scope === scope && completed.current.result.ownerKey === ownerKey && completed.current.result.key === key) completed.current = null;
+    setState(previous => previous.scope === scope && previous.ownerKey === ownerKey && previous.result?.key === key
+      ? { ...previous, result: { ownerKey, key: key!, status } } : previous);
+    // No request/revision change: a failed save never launches another paid review.
+  }, requestReview: () => {
     completed.current = null;
     if (key) setRequested(previous => ({ key, revision: (previous?.revision ?? 0) + 1 }));
   } };

@@ -28,8 +28,13 @@ function normalizedColor(value: string): string | null {
   return match ? `#${match[1].toLowerCase()}` : null;
 }
 
+class ReviewRequiredError extends Error {
+  constructor(message: string, readonly reviewStatus: 'stale' | 'unavailable') { super(message); }
+}
+
 async function readResponse<T>(response: Response): Promise<T> {
   const result = await response.json();
+  if (!response.ok && result.reviewRequired === true) throw new ReviewRequiredError(result.error, response.status === 503 ? 'unavailable' : 'stale');
   if (!response.ok) throw new Error(typeof result.error === 'string' ? result.error : 'Your changes could not be loaded. Please try again.');
   return result as T;
 }
@@ -190,7 +195,10 @@ export default function AccountSettings() {
       setAccentColor(saved.waveform.accentColor); setPreviewColor(saved.waveform.accentColor); setProfilePhoto(saved.waveform.profilePhoto);
       setMessage('Saved. Your draft is private until you publish it.');
       clientAnalytics.record({ eventName: 'creation_step', properties: { step: 'saved', outcome: 'success' } });
-    } catch (error) { if (requestedRevision === accountRevision.current) setError(error instanceof Error ? error.message : 'Your waveform could not be saved. Please try again.'); }
+    } catch (error) { if (requestedRevision === accountRevision.current) {
+      if (error instanceof ReviewRequiredError) safety.invalidateReview(error.reviewStatus);
+      setError(error instanceof Error ? error.message : 'Your waveform could not be saved. Please try again.');
+    } }
     finally { if (requestedRevision === accountRevision.current) setBusyAction(null); }
   }
 
@@ -306,7 +314,7 @@ export default function AccountSettings() {
             : 'Skip your prepaid, personal time and silence limits. Conversations end at 15 minutes. Each start uses a 15-minute block from the shared daily testing budget, even if you end early. Shared capacity limits still apply. Turn off to experience regular-user limits. Save to apply on your next conversation.'}</p>
         </div>}
 
-            <CreationReviewQueue verifiedAdmin={account.user.role === 'admin' && account.creationSafetyEnabled === true} />
+            <CreationReviewQueue verifiedAdmin={account.user.role === 'admin' && account.creationSafetyEnabled === true} reviewStatus={safety.status} />
             {account.user.role !== 'admin' && <p className="field-help">Your waveform belongs to this account. Use Sign out above to change accounts.</p>}
           </section>
         </div>

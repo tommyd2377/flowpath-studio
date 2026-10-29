@@ -26,7 +26,7 @@ export default function DemoCodeGate({ onState, onAccess, formId, waveformTrigge
     } catch (error) { setError(error instanceof Error ? error.message : 'The demo code could not be checked.'); }
     finally { submitting.current = false; setBusy(false); }
   }
-  if (!required) return null;
+  if (!required || waveformTrigger && accepted) return null;
   return <div className={`demo-code-gate${waveformTrigger ? ' demo-code-gate--waveform' : ''}`}>
     {accepted ? <p role="status">{purpose === 'beta' ? 'Beta access unlocked' : 'Demo unlocked'}</p> : <form id={formId} onSubmit={submit}>
       <label className={waveformTrigger ? 'sr-only' : undefined} htmlFor="demo-code">{purpose === 'beta' ? 'Beta access code' : 'Demo code'}</label><div className="demo-code-entry">{waveformTrigger && <KeyRound aria-hidden="true" />}<input id="demo-code" placeholder={waveformTrigger ? 'Enter demo code' : purpose === 'beta' ? 'Enter your code' : undefined} aria-invalid={!!error} aria-describedby={error ? 'demo-code-error' : undefined} autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={80} required value={code} onChange={event => setCode(event.target.value)} disabled={busy} />

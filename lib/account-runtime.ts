@@ -5,7 +5,7 @@ import type { createVoiceServer } from './voice-server';
 import { configuredPublicOrigin } from './request-origin';
 import { localAppOrigin, localAppPath } from './local-app-runtime';
 import { cancelProductionOwnerVoice } from './production-voice-runtime';
-import { creationActor, creationReviewStore, creationSafetyEnabled, creationSafetyFixtures } from './creation-runtime';
+import { creationActor, creationReviewStore, creationSafetyEnabled, creationSafetyFixtures, creationSafetyRuntimeVersion } from './creation-runtime';
 import { applicationDatabase } from './application-database';
 import { demoGrantId } from './demo-access';
 import { demoAccess } from './demo-access-runtime';
@@ -38,9 +38,10 @@ const state = globalThis as typeof globalThis & {
   flowpathAccountSafetyVersion?: string;
 };
 // Refresh callbacks on the running local server; Firebase sessions/data stay durable.
-if (localAppOrigin() && state.flowpathAccountSafetyVersion !== 'creation-safety-v3') {
+const safetyVersion = creationSafetyRuntimeVersion();
+if (localAppOrigin() && state.flowpathAccountSafetyVersion !== safetyVersion) {
   state.flowpathAccounts = undefined;
-  state.flowpathAccountSafetyVersion = 'creation-safety-v3';
+  state.flowpathAccountSafetyVersion = safetyVersion;
 }
 export const accountServer = state.flowpathAccounts ??= createAccountServer({
   mode,

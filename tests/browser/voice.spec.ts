@@ -121,6 +121,31 @@ async function emit(page: Page, event: object) {
   await page.evaluate(event => (window as unknown as { voiceTest: MediaTracker }).voiceTest.emit(event), event);
 }
 
+for (const confirmed of [true, false]) test(`normal start ${confirmed ? 'connects after server recovery' : 'reports unresolved cleanup'} without a recovery button or automatic creation retry`, async ({ page }) => {
+  await fakeMedia(page); await mockSession(page);
+  const id = '00000000-0000-4000-8000-000000000076';
+  let starts = 0;
+  await page.route('**/api/waveform*', route => route.fulfill({ json: { waveform: { id, name: 'Recovery guide' } } }));
+  await page.route('**/api/session?*', route => {
+    if (route.request().method() === 'POST') {
+      starts++;
+      if (!confirmed) return route.fulfill({ status: 503, json: { error: 'The previous call could not be confirmed closed.' } });
+    }
+    return route.fallback();
+  });
+  await page.goto(`/w/${id}`);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End previous conversation', exact: true })).toHaveCount(0);
+  if (confirmed) {
+    await expect(page.locator('.voice-experience')).toHaveAttribute('data-connected', 'true');
+    await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  } else {
+    await expect(page.locator('#voice-status')).toContainText('could not be confirmed closed');
+    await expect.poll(async () => (await tracker(page)).stoppedTracks).toBe(1);
+  }
+  expect(starts).toBe(1);
+});
+
 test('Knowledge shows sourced passages on request and hiding it leaves voice connected', async ({ page }) => {
   const waveformId = '00000000-0000-4000-8000-000000000099';
   await fakeMedia(page); await mockSession(page);
@@ -134,7 +159,7 @@ test('Knowledge shows sourced passages on request and hiding it leaves voice con
   await page.goto(`/w/${waveformId}`);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
-  const panel = page.getByRole('region', { name: 'Text Box content', exact: true });
+  const panel = page.getByRole('region', { name: 'Knowledge content', exact: true });
   await expect(panel).toHaveCount(0);
   const backend = (event: object) => emit(page, { type: 'response.event', delegation_id: 'knowledge_1', event });
   await backend({ type: 'response.created', response: { id: 'knowledge_response' } });
@@ -157,7 +182,83 @@ test('Knowledge shows sourced passages on request and hiding it leaves voice con
   await page.getByRole('button', { name: 'End conversation', exact: true }).click();
 });
 
-test('source loaders stay inside Text Box, preserve content, and cannot reopen a hidden panel', async ({ page }) => {
+for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 }, { width: 640, height: 360 }]) {
+  test(`real plugin displays rotate while preserving notes, sources and continuous voice at ${viewport.width}×${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport); await fakeMedia(page); await mockSession(page);
+    const id = '00000000-0000-4000-8000-000000000077';
+    await page.route('**/api/waveform*', route => route.fulfill({ json: { waveform: { id, name: 'Benjamin Franklin',
+      textPanel: { type: 'text', version: 2 } } } }));
+    let searches = 0;
+    await page.route('**/api/knowledge/search', route => {
+      searches++;
+      return route.fulfill({ json: { revision: 1, passages: [{ id: 'source_1', documentId: id,
+        filename: 'Franklin-inventions.txt', quote: 'Bifocals combine reading and distance lenses.' }] } });
+    });
+    await page.goto(`/w/${id}`);
+    await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+    const end = page.getByRole('button', { name: 'End conversation', exact: true });
+    await expect(end).toBeVisible();
+    await expect(page.getByRole('navigation', { name: 'Plugin displays', exact: true })).toHaveCount(0);
+    await emit(page, { type: 'session.input_transcript.delta', delta: 'Start writing. My original notes. Stop writing.', start_ms: 0, end_ms: 100 });
+    const region = page.locator('.plugin-carousel__face:not(.plugin-carousel__outgoing) .live-text-panel__content');
+    await expect(region).toContainText('My original notes.');
+    await expect.poll(() => page.locator('.voice-text-panel--live').evaluate(node => getComputedStyle(node).translate)).toBe('none');
+    const header = await end.boundingBox();
+    await page.clock.install(); await page.clock.pauseAt(Date.now() + 100);
+    const backend = (event: object) => emit(page, { type: 'response.event', delegation_id: 'carousel_source', event });
+    await backend({ type: 'response.created', response: { id: 'carousel_response' } });
+    await backend({ type: 'response.output_item.done', response_id: 'carousel_response', item: { type: 'function_call',
+      name: 'search_waveform_knowledge', call_id: 'carousel_call', arguments: JSON.stringify({ query: 'Bifocals', display: true }) } });
+    await backend({ type: 'response.completed', response: { id: 'carousel_response', status: 'completed' } });
+    const deck = page.locator('.plugin-carousel');
+    const controls = page.getByRole('navigation', { name: 'Plugin displays', exact: true });
+    const notes = controls.getByRole('button', { name: 'Text Box', exact: true });
+    const knowledge = controls.getByRole('button', { name: 'Knowledge', exact: true });
+    await expect(knowledge).toHaveAttribute('aria-pressed', 'true');
+    await expect(deck).toHaveAttribute('data-turning', 'true');
+    await expect(deck).toHaveAttribute('data-duration', '800');
+    expect(await page.locator('.plugin-carousel__face:not(.plugin-carousel__outgoing)').evaluate(node => getComputedStyle(node).visibility)).toBe('hidden');
+    await page.clock.fastForward(400);
+    expect(await page.locator('.plugin-carousel__face:not(.plugin-carousel__outgoing)').evaluate(node => getComputedStyle(node).transform)).not.toBe('none');
+    if (viewport.width === 1280) await page.screenshot({ path: 'test-results/plugin-carousel-midturn.png' });
+    await page.clock.fastForward(400);
+    await expect(deck).toHaveAttribute('data-turning', 'false');
+    await expect(region).toContainText('Bifocals combine');
+    await expect(page.getByRole('complementary', { name: 'Sources', exact: true })).toContainText('Franklin-inventions.txt');
+    await page.screenshot({ path: `test-results/plugin-carousel-${viewport.width}-${viewport.height}.png` });
+    await notes.click(); await page.clock.fastForward(800);
+    await expect(region).toContainText('My original notes.');
+    await expect(page.getByRole('complementary', { name: 'Sources', exact: true })).toHaveCount(0);
+    await knowledge.click(); await notes.click(); await page.clock.fastForward(800);
+    await expect(notes).toHaveAttribute('aria-pressed', 'true');
+    await expect(region).toContainText('My original notes.');
+    await page.emulateMedia({ reducedMotion: 'reduce' }); await knowledge.click();
+    await expect(deck).toHaveAttribute('data-turning', 'false');
+    await expect(region).toContainText('Bifocals combine');
+    expect(await end.boundingBox()).toEqual(header);
+    expect((await tracker(page)).stoppedTracks).toBe(0); expect(searches).toBe(1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    for (const name of ['Undo', 'Clear', 'Copy text', 'Hide']) {
+      const box = (await page.getByRole('button', { name, exact: true }).boundingBox())!;
+      expect(box.y + box.height).toBeLessThanOrEqual(viewport.height - 12);
+    }
+    await page.emulateMedia({ reducedMotion: 'no-preference' }); await notes.click();
+    await controls.getByRole('button', { name: 'Hide', exact: true }).click();
+    await expect(deck).toHaveCount(0); await page.clock.fastForward(1_000); await expect(region).toHaveCount(0);
+    await expect(end).toBeVisible(); expect((await tracker(page)).stoppedTracks).toBe(0);
+    await end.click();
+    await page.getByRole('button', { name: 'Show text', exact: true }).click();
+    await expect(region).toContainText('My original notes.');
+    await page.emulateMedia({ reducedMotion: 'reduce' }); await knowledge.click();
+    await page.getByRole('button', { name: 'Clear', exact: true }).click();
+    await controls.getByRole('button', { name: 'Hide', exact: true }).click();
+    await page.getByRole('button', { name: 'Show text', exact: true }).click();
+    await expect(region).toContainText('My original notes.');
+    expect((await tracker(page)).microphoneCalls).toBe(1);
+  });
+}
+
+test('source loaders stay inside Knowledge, preserve content, and cannot reopen a hidden panel', async ({ page }) => {
   const waveformId = '00000000-0000-4000-8000-000000000078';
   await fakeMedia(page); await mockSession(page);
   await page.route('**/api/waveform*', route => route.fulfill({ json: { waveform: { id: waveformId,
@@ -185,7 +286,7 @@ test('source loaders stay inside Text Box, preserve content, and cannot reopen a
     await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
     await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
     await lookup(0);
-    const panel = page.getByRole('region', { name: 'Text Box content', exact: true });
+    const panel = page.getByRole('region', { name: 'Knowledge content', exact: true });
     await expect(panel).toHaveAttribute('aria-busy', 'true');
     await expect(panel.locator('.brand-loader--component')).toBeVisible();
     await expect(panel.locator('img')).toHaveAttribute('src', /flowpath-icon-square/);
@@ -225,7 +326,7 @@ async function syntheticProfilePhoto(page: Page) {
   });
 }
 
-async function mockSession(page: Page, options: { enabled?: boolean; delayPost?: Promise<void>; durationMs?: number; admin?: boolean; adminOverride?: boolean; adminDeadlineMs?: number } = {}) {
+async function mockSession(page: Page, options: { enabled?: boolean; delayPost?: Promise<void>; durationMs?: number; browserControl?: boolean; admin?: boolean; adminOverride?: boolean; adminDeadlineMs?: number } = {}) {
   const calls: { method: string; sessionId?: string; waveformId?: string; demoId?: string; diagnostics?: boolean; admin?: string; previous?: string }[] = [];
   await page.route('**/api/session*', async route => {
     const method = route.request().method();
@@ -237,7 +338,7 @@ async function mockSession(page: Page, options: { enabled?: boolean; delayPost?:
     else if (method === 'DELETE') await route.fulfill({ status: 204 });
     else {
       await options.delayPost;
-      await route.fulfill({ json: { sessionId: body.sessionId, sdp: 'v=0\r\n', expiresAt: Date.now() + (options.durationMs ?? 900_000),
+      await route.fulfill({ json: { sessionId: body.sessionId, sdp: 'v=0\r\n', expiresAt: Date.now() + (options.durationMs ?? 900_000), ...(options.browserControl ? { browserControl: true } : {}),
         ...(options.admin ? { adminEligible: true, adminOverride: options.adminOverride === true, adminDeadline: Date.now() + (options.adminDeadlineMs ?? 900_000) } : {}) } });
     }
   });
@@ -741,7 +842,7 @@ test('account changes unmount a private conversation and release its microphone'
 });
 
 for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }, { width: 844, height: 390 }]) {
-  test(`a private photo and color keep the opening transition aligned at ${viewport.width}px`, async ({ page }) => {
+  test(`a private photo and color align the opening transition and keep the workspace docked at ${viewport.width}px`, async ({ page }) => {
     const waveformId = '00000000-0000-4000-8000-000000000003';
     const profilePhoto = await syntheticProfilePhoto(page);
     await page.setViewportSize(viewport);
@@ -762,7 +863,6 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     await expect(accountLink).toBeVisible();
     const wave = page.locator('.wave-control');
     const initial = (await wave.boundingBox())!;
-    const identity = (await photo.boundingBox())!;
     expect(Math.abs(initial.y + initial.height / 2 - viewport.height / 2)).toBeLessThan(1);
     await page.screenshot({ path: `test-results/private-profile-${viewport.width}-idle.png` });
     await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
@@ -798,11 +898,11 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     expect(tinted).toBe(true);
     await page.screenshot({ path: `test-results/private-profile-${viewport.width}-connected.png` });
     await page.keyboard.press('Escape');
-    await expect.poll(async () => Math.abs((await photo.boundingBox())!.y - identity.y)).toBeLessThan(1);
+    await expect.poll(async () => Math.abs((await photo.boundingBox())!.y - connectedPhoto.y)).toBeLessThan(1);
     await expect(page.locator('.wordmark')).toHaveCSS('opacity', '1');
-    await expect(page.locator('.voice-hint')).toHaveCSS('opacity', '1');
+    await expect(page.locator('.voice-hint')).toHaveCSS('visibility', 'hidden');
     const returned = (await wave.boundingBox())!;
-    expect(Math.abs(returned.y - initial.y)).toBeLessThan(1);
+    expect(Math.abs(returned.y - connected.y)).toBeLessThan(1);
     await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeFocused();
     await page.goto('/');
     await expect(page.getByRole('img', { name: 'FlowPath', exact: true })).toHaveAttribute('src', /flowpath-logo-full/);
@@ -843,7 +943,8 @@ test('a private profile remains accessible with reduced motion and an immediate 
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeFocused();
   await expect(page.locator('.wordmark')).toHaveCSS('opacity', '1');
-  expect(Math.abs((await page.locator('.profile-photo').boundingBox())!.y - photo.y)).toBeLessThan(1);
+  expect(photo.y).toBeGreaterThan(connectedPhoto.y);
+  expect(Math.abs((await page.locator('.profile-photo').boundingBox())!.y - connectedPhoto.y)).toBeLessThan(1);
 });
 
 test('admin with testing off reaches the regular demo limit without a modal or automatic restart', async ({ page }) => {
@@ -943,7 +1044,7 @@ for (const admin of [true, false]) test(`Text Box survives settlement on the ${a
   }
 });
 
-test('normal account plugin flow supports dictation, delegated updates, controls and a fresh conversation', async ({ page }) => {
+test('normal account plugin flow supports dictation, delegated updates and retained notes on voice restart', async ({ page }) => {
   await fakeMedia(page);
   await mockSession(page);
   const waveformId = 'a1111111-1111-4111-8111-111111111111';
@@ -1001,7 +1102,10 @@ test('normal account plugin flow supports dictation, delegated updates, controls
     arguments: JSON.stringify({ action: 'replace', text: malicious }),
   } }));
   await emit(page, envelope({ type: 'response.completed', response: { id: 'resp_text', status: 'completed' } }));
-  await expect(box).toHaveText(malicious);
+  // Markdown creates paragraph elements, so compare the visible text rather
+  // than requiring the former plain text node's literal newline boundaries.
+  await expect(box).toHaveText(malicious, { useInnerText: true });
+  await expect(box.locator('script')).toHaveCount(0);
   expect(await page.evaluate(() => 'textPluginAttack' in window)).toBe(false);
   const sent = (await tracker(page)).sentEvents.map(value => JSON.parse(value));
   expect(sent.filter(event => event.type === 'response.create')).toHaveLength(1);
@@ -1032,7 +1136,7 @@ test('normal account plugin flow supports dictation, delegated updates, controls
   await expect(page.locator('.voice-text-panel--live')).toHaveCSS('animation-name', 'none');
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
-  await expect(box).toHaveCount(0);
+  await expect(box).toContainText('Another line.');
   await page.getByRole('button', { name: 'End conversation', exact: true }).click();
   await expect(page.locator('#voice-status')).toHaveText('');
   await page.goto('/account');
@@ -1077,7 +1181,7 @@ for (const viewport of [
   expect(bounds.y + bounds.height).toBeLessThanOrEqual(viewport.height - 12);
   for (const name of ['Stop writing', 'Undo', 'Clear', 'Copy text', 'Hide']) {
     const control = (await page.getByRole('button', { name, exact: true }).boundingBox())!;
-    expect(control.y).toBeGreaterThan(bounds.y);
+    expect(control.y).toBeGreaterThanOrEqual(bounds.y);
     expect(control.y + control.height).toBeLessThanOrEqual(viewport.height - 12);
     expect(control.x).toBeGreaterThanOrEqual(0);
     expect(control.x + control.width).toBeLessThanOrEqual(viewport.width);
@@ -1150,7 +1254,7 @@ test('entering the demo code and tapping the waveform validates once and begins 
   await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
   expect(calls.filter(value => value.method === 'POST')).toHaveLength(1);
   await page.getByRole('button', { name: 'End conversation', exact: true }).click();
-  await page.reload(); await expect(page.getByText('Demo unlocked', { exact: true })).toBeVisible(); expect(entries).toBe(2);
+  await page.reload(); await expect(page.locator('.wave-control')).toBeVisible(); await expect(page.getByText('Demo unlocked', { exact: true })).toHaveCount(0); expect(entries).toBe(2);
   const hint = await page.locator('#voice-hint').boundingBox(); expect(hint!.y + hint!.height).toBeLessThan(844);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
@@ -1215,4 +1319,245 @@ test('anonymous Franklin loads its public display and code gate before simulated
   await expect(page.getByRole('region', { name: 'Text Box content', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'End conversation', exact: true }).click();
   await expect.poll(async () => (await tracker(page)).stoppedTracks).toBe(1);
+});
+
+for (const viewport of [{ width: 1920, height: 936 }, { width: 1280, height: 720 }, { width: 390, height: 844 }, { width: 640, height: 360 }]) {
+  test(`Knowledge opens at the top and keeps its full frame after voice ends at ${viewport.width}×${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport); await fakeMedia(page); await mockSession(page);
+    const waveformId = '00000000-0000-4000-8000-000000000080';
+    await page.route('**/api/waveform*', route => route.fulfill({ json: { waveform: { id: waveformId,
+      name: 'Knowledge layout guide', textPanel: { type: 'text', version: 2 } } } }));
+    let searches = 0;
+    await page.route('**/api/knowledge/search', route => {
+      const result = searches++ === 0 ? 0 : 1;
+      return route.fulfill({ json: { revision: searches, passages: Array.from({ length: 4 }, (_, i) => ({
+        id: `source_${i + 1}`, documentId: waveformId, filename: `synthetic-source-${i + 1}.txt`,
+        quote: (`**Opening passage ${result}-${i}.**\n\n` + Array.from({ length: 12 }, (_, line) => `Paragraph ${line}: a synthetic source about libraries and useful inventions.`).join('\n\n')).slice(0, 800),
+      })) } });
+    });
+    const lookup = async (index: number) => {
+      const backend = (event: object) => emit(page, { type: 'response.event', delegation_id: `scroll_${index}`, event });
+      await backend({ type: 'response.created', response: { id: `scroll_response_${index}` } });
+      await backend({ type: 'response.output_item.done', response_id: `scroll_response_${index}`, item: { type: 'function_call',
+        name: 'search_waveform_knowledge', call_id: `scroll_call_${index}`, arguments: JSON.stringify({ query: 'Libraries', display: true }) } });
+      await backend({ type: 'response.completed', response: { id: `scroll_response_${index}`, status: 'completed' } });
+    };
+    const panel = page.getByRole('region', { name: 'Knowledge content', exact: true });
+    const frame = page.locator('.plugin-carousel__face:not(.plugin-carousel__outgoing) .live-text-panel');
+    const assertFit = async () => {
+      const box = (await frame.boundingBox())!;
+      const footer = (await frame.locator('footer').boundingBox())!;
+      expect(box.y).toBeGreaterThan(0);
+      expect(box.y + box.height).toBeLessThanOrEqual(viewport.height - 12);
+      expect(footer.y + footer.height).toBeLessThanOrEqual(box.y + box.height + 1);
+      expect(await panel.evaluate(node => node.clientHeight)).toBeGreaterThan(0);
+      for (const name of ['Undo', 'Clear', 'Copy text', 'Hide']) {
+        const control = (await page.getByRole('button', { name, exact: true }).boundingBox())!;
+        expect(control.y + control.height).toBeLessThanOrEqual(viewport.height - 12);
+      }
+    };
+    await page.goto(`/w/${waveformId}`);
+    await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+    await lookup(0);
+    await expect(panel).toContainText('Opening passage 0-0.');
+    await expect(page.locator('.plugin-carousel')).toHaveAttribute('data-turning', 'false');
+    await expect.poll(() => page.locator('.voice-text-panel--live').evaluate(node => getComputedStyle(node).translate)).toBe('none');
+    await expect.poll(() => panel.evaluate(node => node.scrollTop)).toBe(0);
+    expect(await panel.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
+    await expect(panel.locator('.streaming-text strong').first()).toHaveText('Opening passage 0-0.');
+    await expect(page.getByRole('button', { name: 'Jump to latest', exact: true })).toHaveCount(0);
+    await assertFit();
+    await panel.evaluate(node => { node.scrollTop = node.scrollHeight; });
+    await page.getByText('1. synthetic-source-1.txt', { exact: true }).click();
+    await expect(panel.locator('.knowledge-sources blockquote').first()).toBeVisible();
+    expect(await panel.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+    await lookup(1);
+    await expect(panel).toContainText('Opening passage 1-0.');
+    await expect.poll(() => panel.evaluate(node => node.scrollTop)).toBe(0);
+    await panel.evaluate(node => { node.scrollTop = node.scrollHeight; });
+    await lookup(2); // Same result text still represents a fresh requested retrieval.
+    await expect.poll(() => searches).toBe(3);
+    await expect(panel).toHaveAttribute('aria-busy', 'false');
+    await expect.poll(() => panel.evaluate(node => node.scrollTop)).toBe(0);
+    await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+    await expect(page.getByRole('link', { name: 'My waveform', exact: true })).toBeVisible();
+    await assertFit();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1)).toBe(true);
+    await page.screenshot({ path: `test-results/knowledge-frame-${viewport.width}-${viewport.height}.png` });
+    await page.setViewportSize({ width: viewport.width, height: viewport.height - 32 });
+    const resized = (await frame.boundingBox())!;
+    expect(resized.y + resized.height).toBeLessThanOrEqual(viewport.height - 32 - 12);
+    expect((await tracker(page)).microphoneCalls).toBe(1);
+  });
+}
+
+test('Streamdown keeps dictation following until the user scrolls away and blocks executable content', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 }); await fakeMedia(page); await mockSession(page);
+  const waveformId = '00000000-0000-4000-8000-000000000081';
+  await page.route('**/api/waveform*', route => route.fulfill({ json: { waveform: { id: waveformId,
+    name: 'Streaming notes guide', textPanel: { type: 'text', version: 2 } } } }));
+  await page.goto(`/w/${waveformId}`);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  const panel = page.getByRole('region', { name: 'Text Box content', exact: true });
+  const notes = Array.from({ length: 30 }, (_, i) => `Note ${i}: **useful information** for this synthetic conversation.`).join('\n\n');
+  await emit(page, { type: 'session.input_transcript.delta', event_id: 'streamdown_notes', delta: `Start writing. ${notes}`, start_ms: 0, end_ms: 100 });
+  await expect(panel.locator('.streaming-text strong').first()).toHaveText('useful information');
+  await expect.poll(() => panel.evaluate(node => node.scrollHeight - node.clientHeight - node.scrollTop)).toBeLessThanOrEqual(2);
+  await panel.evaluate(node => { node.scrollTop = 0; });
+  const latest = page.getByRole('button', { name: 'Jump to latest', exact: true });
+  await expect(latest).toBeVisible();
+  await emit(page, { type: 'session.input_transcript.delta', event_id: 'streamdown_later', delta: '\n\nA later sentence.', start_ms: 101, end_ms: 200 });
+  await expect(panel).toContainText('A later sentence.');
+  expect(await panel.evaluate(node => node.scrollTop)).toBe(0);
+  await latest.click();
+  await expect.poll(() => panel.evaluate(node => node.scrollHeight - node.clientHeight - node.scrollTop)).toBeLessThanOrEqual(2);
+  await emit(page, { type: 'session.input_transcript.delta', event_id: 'streamdown_attack', delta: '\n\n<img src="https://invalid.test/pixel" onerror="window.syntheticAttack=true"> [unsafe](javascript:alert(1))', start_ms: 201, end_ms: 300 });
+  await expect(panel).toContainText('<img');
+  await expect(panel.locator('img, iframe, script, a')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as unknown as { syntheticAttack?: boolean }).syntheticAttack)).toBeUndefined();
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(panel.locator('[data-sd-animate]').first()).toHaveCSS('animation-name', 'none');
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+});
+
+for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 }]) test(`one click restarts voice with the ${viewport.width}px plugin workspace and reading position fixed`, async ({ page }) => {
+  await page.setViewportSize(viewport); await page.emulateMedia({ reducedMotion: 'reduce' });
+  await fakeMedia(page); await mockSession(page);
+  const id = '00000000-0000-4000-8000-000000000073';
+  await page.route('**/api/waveform*', route => route.fulfill({ json: { waveform: { id, name: 'Franklin restart', textPanel: { type: 'text', version: 2 } } } }));
+  let starts = 0, searches = 0;
+  let close!: () => void, connect!: () => void;
+  const closing = new Promise<void>(resolve => { close = resolve; });
+  const connecting = new Promise<void>(resolve => { connect = resolve; });
+  await page.route('**/api/session?*', async route => {
+    if (route.request().method() === 'DELETE') { await closing; return route.fulfill({ status: 204 }); }
+    if (route.request().method() === 'POST') { starts++; if (starts === 2) await connecting; }
+    return route.fallback();
+  });
+  await page.route('**/api/knowledge/search', route => {
+    searches++;
+    return route.fulfill({ json: { revision: 1, passages: [{ id: 'source_1', documentId: id, filename: 'Franklin.txt', quote: 'Franklin practiced careful observation. '.repeat(20) }] } });
+  });
+  await page.goto(`/w/${id}`);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.locator('.voice-experience')).toHaveAttribute('data-connected', 'true');
+  await emit(page, { type: 'session.input_transcript.delta', delta: 'Start writing. My notes. Stop writing.', start_ms: 0, end_ms: 100 });
+  const envelope = (event: object) => ({ type: 'response.event', delegation_id: 'restart_job', event });
+  await emit(page, envelope({ type: 'response.created', response: { id: 'restart_response' } }));
+  await emit(page, envelope({ type: 'response.output_item.done', response_id: 'restart_response', item: { type: 'function_call', name: 'search_waveform_knowledge', call_id: 'restart_search', arguments: JSON.stringify({ query: 'What did Franklin practice?', display: true }) } }));
+  const content = page.getByRole('region', { name: 'Knowledge content', exact: true });
+  await expect(content).toContainText('careful observation');
+  await content.evaluate(node => { node.scrollTop = 80; });
+  const scroll = await content.evaluate(node => node.scrollTop);
+  const before = { wave: await page.locator('.wave-control').boundingBox(), panel: await page.locator('.voice-text-panel--live').boundingBox(), content: await content.boundingBox() };
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.locator('#voice-status')).toContainText('Finishing the previous conversation');
+  expect(starts).toBe(1);
+  close();
+  await expect.poll(() => starts).toBe(2);
+  await expect(page.locator('#voice-status')).toHaveText('Connecting…');
+  const after = { wave: await page.locator('.wave-control').boundingBox(), panel: await page.locator('.voice-text-panel--live').boundingBox(), content: await content.boundingBox() };
+  expect(after).toEqual(before); expect(await content.evaluate(node => node.scrollTop)).toBe(scroll);
+  await expect(content).toContainText('careful observation');
+  const logo = page.locator('.voice-status .brand-loader__image');
+  await expect(logo).toHaveCSS('width', '32px');
+  const logoBox = await logo.boundingBox(), panelBox = await page.locator('.voice-text-panel--live').boundingBox();
+  expect(logoBox!.y + logoBox!.height).toBeLessThanOrEqual(panelBox!.y);
+  connect();
+  await expect(page.locator('.voice-experience')).toHaveAttribute('data-connected', 'true');
+  expect(starts).toBe(2); expect(searches).toBe(1);
+  await page.getByRole('button', { name: 'Text Box', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Text Box content', exact: true })).toHaveText('My notes. ');
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+});
+
+test('canceling a restart while cleanup is pending never creates another call', async ({ page }) => {
+  await fakeMedia(page); const calls = await mockSession(page);
+  let closed!: () => void; const closing = new Promise<void>(resolve => { closed = resolve; });
+  await page.route('**/api/session', async route => route.request().method() === 'DELETE'
+    ? (await closing, route.fulfill({ status: 204 })) : route.fallback());
+  await page.goto('/'); await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Cancel connection', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Cancel connection', exact: true }).click(); closed();
+  await expect(page.locator('#voice-status')).toHaveText('');
+  expect(calls.filter(call => call.method === 'POST')).toHaveLength(1);
+});
+
+for (const display of ['text', 'knowledge'] as const) test(`Streamdown visibly reveals ${display} batches in order even when dictation is paused`, async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await fakeMedia(page); await mockSession(page);
+  const id = '00000000-0000-4000-8000-000000000074';
+  await page.route('**/api/waveform*', route => route.fulfill({ json: { waveform: { id, name: 'Reveal guide', textPanel: { type: 'text', version: 2 } } } }));
+  const passage = 'Franklin shared practical ideas with his neighbors. '.repeat(12);
+  await page.route('**/api/knowledge/search', route => route.fulfill({ json: { revision: 1, passages: [{ id: 'source_1', documentId: id, filename: 'Franklin.txt', quote: passage }] } }));
+  await page.goto(`/w/${id}`); await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.locator('.voice-experience')).toHaveAttribute('data-connected', 'true');
+  const envelope = (event: object) => ({ type: 'response.event', delegation_id: 'reveal_job', event });
+  await emit(page, envelope({ type: 'response.created', response: { id: 'reveal_response' } }));
+  await emit(page, envelope({ type: 'response.output_item.done', response_id: 'reveal_response', item: { type: 'function_call',
+    name: display === 'text' ? 'update_text_box' : 'search_waveform_knowledge', call_id: 'reveal_call', arguments: JSON.stringify(display === 'text' ? { action: 'replace', text: passage } : { query: 'What did Franklin share?', display: true }) } }));
+  const content = page.getByRole('region', { name: display === 'text' ? 'Text Box content' : 'Knowledge content', exact: true });
+  await expect(content).toContainText('Franklin shared practical ideas');
+  // Inspect actual painted words, not only DOM text / installed package / flags.
+  const spans = content.locator('.streaming-text [data-sd-animate]');
+  await expect.poll(() => spans.count()).toBeGreaterThan(30);
+  await expect.poll(() => spans.first().evaluate(node => Number(getComputedStyle(node).opacity))).toBeGreaterThan(.2);
+  const paint = await spans.evaluateAll(nodes => nodes.map(node => ({ text: node.textContent, opacity: Number(getComputedStyle(node).opacity), delay: parseFloat(getComputedStyle(node).animationDelay) })));
+  expect(paint[0].delay).toBeLessThan(paint.at(-1)!.delay);
+  expect(paint.some(word => word.opacity > .2)).toBe(true);
+  expect(paint.some(word => word.opacity < .1)).toBe(true);
+  await page.screenshot({ path: `/private/tmp/flowpath-streamdown-${display}-revealing.png` });
+  await expect.poll(() => spans.evaluateAll(nodes => nodes.every(node => Number(getComputedStyle(node).opacity) > .99))).toBe(true);
+  await expect(content).toContainText(passage.trim());
+  await page.screenshot({ path: `/private/tmp/flowpath-streamdown-${display}-settled.png` });
+  if (display === 'knowledge') expect(await content.evaluate(node => node.scrollTop)).toBe(0);
+  if (display === 'text') {
+    await expect(page.getByRole('button', { name: 'Stop writing', exact: true })).toBeDisabled();
+    await emit(page, envelope({ type: 'response.output_item.done', response_id: 'reveal_response', item: { type: 'function_call', name: 'update_text_box', call_id: 'reveal_replacement', arguments: JSON.stringify({ action: 'replace', text: 'A replacement explains another idea. '.repeat(12) }) } }));
+    await expect(content).toContainText('A replacement');
+    await expect.poll(() => spans.evaluateAll(nodes => nodes.some(node => Number(getComputedStyle(node).opacity) < .1))).toBe(true);
+  }
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect.poll(() => spans.evaluateAll(nodes => nodes.every(node => getComputedStyle(node).animationName === 'none'))).toBe(true);
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+});
+
+test('initial connection has a larger one-second loader and no redundant unlocked banner', async ({ page }) => {
+  await fakeMedia(page);
+  let ready!: () => void; const pending = new Promise<void>(resolve => { ready = resolve; });
+  await mockSession(page, { delayPost: pending });
+  await page.route('**/api/demo-access', route => route.fulfill({ json: { enabled: true, allowed: true } }));
+  await page.goto('/');
+  await expect(page.locator('.demo-code-gate')).toHaveCount(0);
+  await expect(page.getByText('Demo unlocked', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  const logo = page.locator('.voice-status .brand-loader__image');
+  await expect(logo).toHaveCSS('width', '40px');
+  await expect(logo).toHaveCSS('animation-duration', '1s');
+  await expect(page.locator('#voice-hint')).toHaveCSS('opacity', '0');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(logo).toHaveCSS('animation-name', 'none');
+  await page.getByRole('button', { name: 'Cancel connection', exact: true }).click(); ready();
+});
+
+test('a queued restart stays blocked when old-call cleanup is unconfirmed', async ({ page }) => {
+  await fakeMedia(page); const calls = await mockSession(page, { browserControl: true });
+  let closed!: () => void; const closing = new Promise<void>(resolve => { closed = resolve; });
+  await page.route('**/api/session', async route => {
+    if (route.request().method() !== 'DELETE') return route.fallback();
+    await closing; return route.fulfill({ status: 503, json: { closed: false } });
+  });
+  await page.goto('/'); await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click(); closed();
+  await expect(page.locator('#voice-status')).toContainText('disconnection could not be confirmed');
+  expect(calls.filter(call => call.method === 'POST')).toHaveLength(1);
 });

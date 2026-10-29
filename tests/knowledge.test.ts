@@ -10,6 +10,42 @@ import type { VoiceDatabase } from '../lib/production-voice-store';
 
 const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', second = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
+for (const status of ['pending', 'manual-review', 'allowed'] as const) {
+  test(`removing Knowledge prunes its ${status} review from the queue without erasing review history`, async () => {
+    const db = database(), h = setup(), actor = { uid: h.scope.uid, accountSessionId: 'synthetic' };
+    const reviews = createCreationReviewStore(db, { mode: 'fixture', policy: () => CONSERVATIVE_CREATION_POLICY,
+      verifyOwner: async () => {}, verifyAdmin: async () => {},
+      validateCandidate: async (tx, uid, candidate) => {
+        if (candidate.document && !await knowledgeDocumentForReview(tx, uid, candidate.document)) throw new CreationSafetyError('Removed');
+      },
+      reviewer: { mode: 'fixture', review: async () => ({ findings: {
+        ...Object.fromEntries(CREATION_SAFETY_CATEGORIES.map(key => [key, 'clear'])),
+        [status === 'manual-review' ? 'credible-harm' : 'controversial-identity']: 'uncertain',
+      } as CreationReviewerResult['findings'] }) },
+    });
+    const knowledge = createKnowledgeStore(db, h.provider, () => 100000);
+    await knowledge.upload(h.scope, id, h.file()); await knowledge.refresh(h.scope);
+    await knowledge.upload(h.scope, second, new File(['Another reference.'], 'keep.txt', { type: 'text/plain' }));
+    await knowledge.refresh(h.scope);
+    const docs = (await knowledge.view(h.scope)).documents;
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('Synthetic opening hours: Monday at nine.'));
+    const input = knowledgeReviewCandidate({ ...docs[0], digest: Buffer.from(digest).toString('hex') });
+    const requested = await reviews.request(actor, input);
+    const record = status === 'pending' ? requested.record : await reviews.runReview(requested.record);
+    assert.equal(record.status, status);
+    // Keep an unrelated waveform review visible during document cleanup.
+    const other = await reviews.request(actor, { name: 'Keep this waveform', initialPrompt: 'An unrelated draft.' });
+    assert.equal((await reviews.listManual(actor)).length, 2);
+    await knowledge.remove(h.scope, id);
+    await assert.rejects(reviews.getForAdmin(actor, record.reviewId), /Removed/);
+    assert.deepEqual((await reviews.listManual(actor)).map(row => row.reviewId), [other.record.reviewId]);
+    assert.deepEqual((await reviews.listManual(actor)).map(row => row.reviewId), [other.record.reviewId]);
+    assert.equal((await reviews.get(actor, id))?.reviewId, record.reviewId, 'historical review remains stored');
+    await assert.rejects(reviews.decide(actor, { ...record, decision: status === 'allowed' ? 'revoked' : 'allowed' }), CreationSafetyError);
+    assert.equal((await knowledge.view(h.scope)).documents[0].filename, 'keep.txt');
+  });
+}
+
 test('legacy documents require explicit review; exact approvals guard selection/search and policy changes', async () => {
   const db = database(), h = setup(); let calls = 0, policy = structuredClone(CONSERVATIVE_CREATION_POLICY);
   const reviews = createCreationReviewStore(db, { mode: 'fixture', policy: () => policy,

@@ -3,7 +3,7 @@ import type { AccountMode, AccountUser } from './account-model';
 import { applicationDatabase } from './application-database';
 import { createCreationReviewStore, type CreationActor } from './creation-review';
 import { createFixtureCreationReviewer } from './creation-safety-fixtures';
-import { CREATION_SAFETY_CATEGORIES, CreationSafetyError, type CreationSafetyPolicy } from './creation-safety';
+import { CREATION_SAFETY_CATEGORIES, CreationSafetyError, creationPolicyDigest, type CreationSafetyPolicy } from './creation-safety';
 import type { VoiceTransaction } from './production-voice-store';
 import { localAppOrigin } from './local-app-runtime';
 import { CONSERVATIVE_CREATION_POLICY } from './creation-policy';
@@ -15,6 +15,8 @@ import { configuredCreationPolicy, hostedCreationReviewConfigured } from './crea
 export type CreationIdentity = { owner: AccountUser; mode: AccountMode; cookie: string; accountSessionId?: string; isCurrent(): boolean | Promise<boolean> };
 export const creationSafetyFixtures = process.env.NODE_ENV === 'development' && process.env.FLOWPATH_ACCOUNT_MODE === 'local' && process.env.FLOWPATH_SAFETY_FIXTURES === '1';
 export const creationSafetyEnabled = () => creationSafetyFixtures || !!localAppOrigin() || process.env.FLOWPATH_CREATION_SAFETY_ENABLED === '1';
+// Cached local validators must follow the same policy as newly completed reviews.
+export const creationSafetyRuntimeVersion = () => creationPolicyDigest(CONSERVATIVE_CREATION_POLICY);
 export const creationActor = (identity: CreationIdentity): CreationActor => ({ uid: identity.owner.uid, accountSessionId: identity.accountSessionId ?? accountSessionId(identity.cookie) });
 
 function policy(): CreationSafetyPolicy | null {

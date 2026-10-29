@@ -6,10 +6,12 @@ import { CreationSafetyError, creationContentDigest } from './creation-safety';
 import { serverAnalytics } from './analytics-runtime';
 
 type Socket = Pick<WebSocket, 'readyState' | 'send' | 'terminate'> & {
-  on(event: 'open' | 'close' | 'error', listener: () => void): unknown;
+  on(event: 'open' | 'close', listener: () => void): unknown;
+  on(event: 'error', listener: (error: Error) => void): unknown;
   on(event: 'message', listener: (data: WebSocket.RawData) => void): unknown;
 };
-type Finalization = { finalized: boolean; seconds?: number };
+export type Finalization = { finalized: boolean; seconds?: number };
+export type VoiceControl = { ready: Promise<void>; closed: Promise<Finalization>; close(): Promise<Finalization>; dispose(): void };
 type Options = {
   enabled?: () => boolean;
   apiKey?: () => string | undefined;
@@ -31,10 +33,14 @@ type Options = {
   authorizeStart?: (request: Request) => Promise<boolean>;
   demoGrant?: (request: Request) => string | undefined;
   greeting?: boolean;
+  /** Local lifecycle diagnosis only. Emits fixed fields, never provider messages or identifiers. */
+  localRecoveryDiagnostics?: boolean;
   production?: {
     store: ProductionVoiceStore;
     policy: () => VoicePolicy | null;
     scheduleDeadline: (id: string, expiresAt: number) => Promise<void>;
+    /** Local unlimited calls keep an independent observer alive across web-server shutdown. */
+    supervise?: (id: string, onStarted: () => void) => VoiceControl;
     preCancel?: (owner: VoiceOwner, id: string) => Promise<void>;
     beginConnection?: (owner: VoiceOwner, id: string) => Promise<StoredVoice>;
     confirmConnection?: (id: string) => Promise<{ expiresAt: number }>;
@@ -52,7 +58,7 @@ type Conversation = {
   apiKey: string;
   canceled: boolean;
   providerId?: string;
-  control?: ReturnType<typeof attachControl>;
+  control?: VoiceControl;
   timer?: ReturnType<typeof setTimeout>;
   startTimer?: ReturnType<typeof setTimeout>;
   ending?: Promise<boolean>;
@@ -61,6 +67,7 @@ type Conversation = {
   durable?: StoredVoice;
   connected?: Promise<void>;
 };
+export type VoiceControllers = Map<string, Conversation>;
 const MAX_BODY_BYTES = 65_536;
 const validId = (value: unknown): value is string => typeof value === 'string'
   && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -159,7 +166,13 @@ function attachControl(session: Conversation, options: Options, onFatal: () => v
     void close();
   }
   socket.on('open', () => { clearTimeout(readyTimer); resolveReady(); });
-  socket.on('error', fatal);
+  socket.on('error', error => {
+    if (options.localRecoveryDiagnostics) {
+      const match = /^Unexpected server response: (\d{3})$/.exec(error.message);
+      console.warn('Local voice controller transport failed', { status: match ? Number(match[1]) : null });
+    }
+    fatal();
+  });
   socket.on('close', () => {
     if (finished) return;
     finish({ finalized: false });
@@ -219,12 +232,11 @@ function attachControl(session: Conversation, options: Options, onFatal: () => v
 }
 
 /** Local fixtures retain their process budget; public sessions require durable admission. */
-export function createVoiceServer(options: Options = {}) {
+export function createVoiceServer(options: Options = {}, active: VoiceControllers = new Map()) {
   const enabled = options.enabled ?? (() => process.env.NODE_ENV === 'development' && process.env.FLOWPATH_LIVE_ENABLED === '1');
   const key = options.apiKey ?? (() => process.env.OPENAI_API_KEY);
   const requestProvider = options.requestProvider ?? fetch;
   const now = options.now ?? Date.now;
-  const active = new Map<string, Conversation>();
   let blocked = false;
   let starts: number[] = [];
   const maxStarts = options.maxStarts ?? 3;
@@ -332,9 +344,9 @@ export function createVoiceServer(options: Options = {}) {
     return session.ending;
   }
 
-  async function closeStored(call: StoredVoice) {
+  async function closeStored(call: StoredVoice, recover = false) {
     if (call.state === 'closed' || call.state === 'rejected') return true;
-    if (options.requestOwnedCleanup) {
+    if (options.requestOwnedCleanup || recover) {
       // No active-map shortcut: old processes and duplicate tasks are fenced by the database.
       const apiKey = key();
       if (!apiKey || !options.production?.store.claimCleanup) return false;
@@ -433,7 +445,56 @@ export function createVoiceServer(options: Options = {}) {
   const failure = (error: unknown, admin = false) => error instanceof CreationSafetyError ? waveformFailure(error) : error instanceof VoiceAdmissionError
     ? json({ error: error.message, ...(admin && error.normalLimit ? { adminLimit: true } : {}) }, error.status) : json({ error: 'Voice admission is temporarily unavailable.' }, 503);
 
+  const canRecover = (error: unknown, owner: VoiceOwner | null, policy: VoicePolicy | null | undefined) =>
+    !options.requestScopedDemo && !options.requestOwnedCleanup && policy?.unmeteredAdminTesting && owner && !owner.kind && !owner.paid
+    && error instanceof VoiceAdmissionError && error.recoverable;
+
+  async function recoverBeforeStart(owner: VoiceOwner, signal: AbortSignal) {
+    const store = options.production!.store;
+    if (!store.previous || !store.reservation) return false;
+    let call = await store.previous(owner.ownerUid, owner.waveformId);
+    if (!call) return true;
+    // A healthy call in another tab is not an orphan. Never end it just for a readiness check/start race.
+    const existing = active.get(call.id);
+    if (existing && !existing.canceled) throw new VoiceAdmissionError('A conversation is already open in another tab. End that conversation before starting another.');
+    call = await store.cancel(owner.ownerUid, owner.waveformId, call.id);
+    if (!call) return false;
+    // Give the independent observer ownership of finalization. A restart must not
+    // race its close with a new attachment that cannot replay the final event.
+    for (let attempts = 0; call.cleanup && call.cleanup.until > now() && attempts < 40; attempts++) {
+      if (signal.aborted) return false;
+      await new Promise(resolve => setTimeout(resolve, 200));
+      call = await store.reservation(call.id);
+      if (!call) return false;
+      if (call.state === 'closed' || call.state === 'rejected') return true;
+    }
+    if (signal.aborted) return false;
+    if (call.state === 'closed' || call.state === 'rejected') return true;
+    return existing ? closeStored(call) : closeStored(call, true);
+  }
+
   return {
+    async superviseReservation(id: string, onStarted: () => void): Promise<VoiceControl> {
+      const store = options.production?.store;
+      if (!options.production?.policy()?.unmeteredAdminTesting || !store?.claimSupervision || !store.renewSupervision) throw new Error('Local supervision is unavailable');
+      const call = await store.claimSupervision(id);
+      const apiKey = key();
+      if (!call || !apiKey) throw new Error('Local supervision could not be claimed');
+      const session: Conversation = { id, apiKey, canceled: false, providerId: call.providerId, waveformId: call.waveformId };
+      const control = attachControl(session, { ...options, connected: async () => onStarted() }, () => {});
+      let renewing = false;
+      const timer = setInterval(() => {
+        if (renewing) return;
+        renewing = true;
+        void store.renewSupervision!(id, call.cleanup.epoch).then(keep => { if (!keep) void control.close(); }, () => { void control.close(); }).finally(() => { renewing = false; });
+      }, 5_000);
+      const closed = control.closed.then(async result => {
+        clearInterval(timer);
+        try { await store.finish(id, { ...result, providerId: call.providerId, cleanupEpoch: call.cleanup.epoch }); return result; }
+        catch { return { finalized: false }; }
+      });
+      return { ready: control.ready, closed, close: () => { void control.close(); return closed; }, dispose: control.dispose };
+    },
     async cancelReservation(id: string, ownerUid: string, waveformId: string) {
       if (!options.production || !validId(id)) return false;
       try { const call = await options.production.store.cancel(ownerUid, waveformId, id); return call ? await closeStored(call) : true; }
@@ -469,7 +530,22 @@ export function createVoiceServer(options: Options = {}) {
         if (!policy) return json({ enabled: false, message: 'Live voice is paused while launch allowances are configured.' });
         if (access.visitor && !policy.publicDemoSeconds) return json({ enabled: false, message: 'Public voice is paused.' });
         try { await options.production.store.available(productionOwner(access)!, policy); }
-        catch (error) { if (error instanceof CreationSafetyError) return waveformFailure(error); return json({ enabled: false, message: error instanceof VoiceAdmissionError ? error.message : 'Voice admission is temporarily unavailable.',
+        catch (error) { if (error instanceof CreationSafetyError) return waveformFailure(error);
+          // GET stays read-only. The deliberate, authenticated POST closes an orphan before reserving once.
+          if (canRecover(error, productionOwner(access), policy)) {
+            try {
+              const previous = await options.production.store.previous?.(productionOwner(access)!.ownerUid, access.waveformId!);
+              if (options.localRecoveryDiagnostics) console.info('Local voice recovery readiness', {
+                state: previous?.state ?? 'missing', providerKnown: !!previous?.providerId,
+                cleanupBusy: !!previous?.cleanup && previous.cleanup.until > now(),
+                olderThan15Minutes: !!previous && previous.createdAt < now() - 900_000,
+              });
+              const controller = previous && active.get(previous.id);
+              if (controller && !controller.canceled) return json({ enabled: false, message: 'A conversation is already open in another tab. End that conversation before starting another.' });
+              return json({ enabled: Boolean(key()), ...(access.admin ? { adminEligible: true } : {}) });
+            } catch { return json({ enabled: false, message: 'The previous conversation record could not be verified.' }); }
+          }
+          return json({ enabled: false, message: error instanceof VoiceAdmissionError ? error.message : 'Voice admission is temporarily unavailable.',
           ...(error instanceof VoiceAdmissionError && error.normalLimit && access.admin && !access.admin.override ? { adminLimit: true } : {}) }); }
         const configured = Boolean(key());
         return json({ enabled: configured, ...((options.requestScopedDemo ? productionOwner(access)?.tester?.founder : access.admin) ? { adminEligible: true } : {}), ...(!configured ? { message: 'The voice connection is not configured.' } : {}) });
@@ -524,7 +600,13 @@ export function createVoiceServer(options: Options = {}) {
       };
       if (options.production) {
         try {
-          session.durable = await options.production.store.reserve(owner!, session.id, policy!);
+          try { session.durable = await options.production.store.reserve(owner!, session.id, policy!); }
+          catch (error) {
+            if (!canRecover(error, owner, policy)) throw error;
+            if (!await recoverBeforeStart(owner!, request.signal)) throw new VoiceAdmissionError('The previous voice connection could not be confirmed closed. No new conversation was started.', 503);
+            if (request.signal.aborted) return json({ error: 'The conversation was canceled.' }, 409);
+            session.durable = await options.production.store.reserve(owner!, session.id, policy!);
+          }
           try { if (!session.durable.admin?.unmeteredLocal) await options.production.scheduleDeadline(session.id, session.durable.controlExpiresAt ?? session.durable.expiresAt); }
           catch {
             await options.production.store.finish(session.id, { finalized: true, rejected: true });
@@ -603,7 +685,9 @@ export function createVoiceServer(options: Options = {}) {
         }
         session.startTimer = setTimeout(() => { void close(session); }, 30_000);
         session.startTimer.unref?.();
-        session.control = attachControl(session, options, () => { void close(session); });
+        session.control = session.durable?.admin?.unmeteredLocal && options.production?.supervise
+          ? options.production.supervise(session.id, () => { clearTimeout(session.startTimer); })
+          : attachControl(session, options, () => { void close(session); });
         await session.control.ready;
         void session.control.closed.then(async result => {
           await session.connected?.catch(() => undefined);

@@ -46,7 +46,9 @@ test('Create reuses exact completed background review; direct save and material 
   const f = await fixture();
   try {
     const cookie = await f.signIn();
-    assert.equal((await f.accounts.waveformPUT(request('/api/waveform', 'PUT', f.candidate, cookie))).status, 409);
+    const rejected = await f.accounts.waveformPUT(request('/api/waveform', 'PUT', f.candidate, cookie));
+    assert.equal(rejected.status, 409);
+    assert.equal((await rejected.json()).reviewRequired, true);
     assert.equal((await f.api.POST(request('/api/creation-review', 'POST', { candidate: f.candidate }, cookie))).status, 200);
     assert.equal(f.calls(), 1);
     assert.equal((await f.accounts.waveformPUT(request('/api/waveform', 'PUT', f.candidate, cookie))).status, 200);

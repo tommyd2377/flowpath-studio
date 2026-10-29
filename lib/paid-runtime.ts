@@ -6,7 +6,7 @@ import { createStripeTest } from './stripe-test';
 import { configuredPublicOrigin } from './request-origin';
 import { localAppOrigin } from './local-app-runtime';
 import { applicationDatabase } from './application-database';
-import { creationReviewStore, creationSafetyEnabled } from './creation-runtime';
+import { creationReviewStore, creationSafetyEnabled, creationSafetyRuntimeVersion } from './creation-runtime';
 import { CreationSafetyError } from './creation-safety';
 import { productionVoicePolicy } from './production-voice-store';
 import { localStripeSandboxOrigin } from './paid-local-sandbox';
@@ -17,9 +17,10 @@ export const paidEnabled = paidFixtures || !!localStripeOrigin || process.env.FL
 // No live processing or paid voice switch: a documented bounded provider cutoff is still required.
 export const paidVoiceReady = () => paidFixtures;
 const shared = globalThis as typeof globalThis & { flowpathPaidStore?: PaidStore; flowpathPaidSafetyVersion?: string };
-if (localAppOrigin() && shared.flowpathPaidSafetyVersion !== 'creation-safety-v3-draft-snapshots-v1') {
+const safetyVersion = `${creationSafetyRuntimeVersion()}:draft-snapshots-v1`;
+if (localAppOrigin() && shared.flowpathPaidSafetyVersion !== safetyVersion) {
   shared.flowpathPaidStore = undefined;
-  shared.flowpathPaidSafetyVersion = 'creation-safety-v3-draft-snapshots-v1';
+  shared.flowpathPaidSafetyVersion = safetyVersion;
 }
 export function getPaidStore() {
   if (!paidEnabled) throw new Error('Paid test preview is disabled');

@@ -1,5 +1,13 @@
 # Waveform experience: desktop design direction
 
+## October 29 local carousel integration
+
+The actual local app now uses the selected circular motion for the existing Text Box notes and Knowledge source views. They are staged 120 degrees apart with an 800 ms cubic ease-in/out. A turn renders only the requested face plus an inert, accessibility-hidden snapshot of the outgoing face; the incoming back face stays hidden initially. The voice/portrait/End row stays fixed. New requests interrupt from the current rotation; ordinary text updates do not restart it. Hide remains outside the moving faces, immediately unmounts the display, and cancels its animation. Reduced motion switches immediately, including when the preference changes during a turn. No eight-placeholder controls, simulated voice, sample inline content or graph from the design study is shipped into the app.
+
+Each display keeps its own bounded text/source/Undo buffer for this page. Explicit Knowledge display pauses dictation safely; Start writing returns to notes. Ordinary Q&A stays audio-only. Display buttons select already-held content without a new backend call. Search and text delivery run independently of the 800 ms presentation. Latest display choice wins over late retrieval. Stopping/restarting voice retains the layout, content, Undo and reading position; leaving/reloading clears it. Model, auth, document review, usage rules and backend routes remain unchanged. This local integration is not a production rollout or a paid voice acceptance claim.
+
+Validation: lint, types, production build and all 393 source tests passed; the complete isolated browser suite passed 93/93. Three focused cases passed again after the final ended-call/reopen adjustment, covering 1280×720, 390×844 and 640×360. They exercise the mid-turn transform and hidden incoming back face, 800 ms completion, rapid changes, reduced motion, immediate Hide, stable End geometry, preserved notes/sources/Undo, no duplicate retrieval, and retained content after voice ends. Desktop, mobile and mid-turn screenshots were inspected. Full-local readiness reports Firebase accounts and enabled voice, with payments disabled. No actual Google login, voice call, document upload, search or model review was triggered by Codex; real paid acceptance remains the owner's manual test. The actual server stays running on localhost:3220; isolated test servers are stopped. No push or deployment occurred.
+
 October 26, 2026. Initial design baseline: `bd24198` on `codex/mvp-integration`; concepts were saved in `28be2a6`. The user then selected the first mockup (portrait left) and authorized implementation plus actual-local-app acceptance in Brave. The compact row and on-demand Text Box are now implemented locally. Verification is recorded in [Text Box](text-panel.md). No deployment is authorized.
 
 ## Product direction
@@ -62,7 +70,7 @@ Compare the [left portrait](design/desktop-portrait-left.png) and [right portrai
 2. **Connected, no display requested:** glide the waveform upward over approximately 800 ms and move the portrait into the compact conversation row simultaneously. Leave the display area empty.
 3. **Display requested:** reveal Text Box below that row over approximately 800 ms with a subtle fade and short vertical movement. Capture/process text immediately; animation must not delay capture or lose early words.
 4. **Writing/paused:** keep the complete panel and toolbar inside the browser content viewport. Replace the fixed square aspect ratio with available-height sizing.
-5. **Ended with text:** retain the panel for copying/local controls. The next conversation starts empty, as currently documented.
+5. **Ended with text:** retain the panel for copying/local controls. Restarting voice keeps the row and workspace fixed; the new call starts with dictation paused.
 
 At a typical 1440×900 browser content viewport, explore a centered workspace up to about 1120 px wide, a conversation row around 112–144 px high and a panel using the remaining height with 24–32 px bottom clearance. These are mockup proportions, not approved hardcoded dimensions. Validate actual browser content height after browser chrome, plus shorter 1280×720/1366×768 windows and browser zoom.
 
@@ -79,7 +87,7 @@ Implemented host state: available capability with presentation closed → openin
 | Trigger | Implemented behavior |
 | --- | --- |
 | Creator applies/saves Text Box | Capability is available; visitor presentation remains closed. |
-| New conversation / ordinary speech | No panel, placeholder, invisible controls or reserved blank card. |
+| Fresh page / ordinary speech | No panel, placeholder, invisible controls or reserved blank card. |
 | Explicit Start writing / Start dictation | Open panel and capture immediately. |
 | Explicit Show the text box | Open existing content without starting capture. |
 | Explicit Put/write this in the box | Open and display the requested result. |
@@ -87,7 +95,7 @@ Implemented host state: available capability with presentation closed → openin
 | Hide/close the text box | Pause capture and dismiss; retain text for reopening in this conversation; voice continues. |
 | Clear / Undo | Change text without ending voice. Clear does not dismiss an open panel. A background clear need not reopen a closed panel. |
 | End voice | Preserve already revealed text for copying. Do not reveal a panel that was never requested. |
-| New conversation / navigate away | Preserve the current ephemeral-data lifecycle; no cross-session storage. |
+| Voice restart / navigate away | Restart retains page-local displays; navigation clears them. No persistent storage. |
 
 Closed means absent from the rendered UI and accessibility tree: no opacity-only hiding, invisible pointer targets or focusable controls. Hide immediately pauses and unmounts. Opening does not steal focus; button dismissal returns focus to the waveform. Reduced motion disables glides/reveal. Only state changes are announced, not every fragment. After ending, an explicit Show text control can reopen previously requested, retained text without starting another call; it is absent before any text exists.
 
@@ -109,7 +117,7 @@ Before offering a curated plugin, verify:
 - Complete frame/actions on desktop, short windows, zoom and mobile; clear Writing/Paused state and readable text.
 - Start/stop dictation, display/edit, hide/reopen, Clear/Undo/Copy and long-content behavior without losing voice or microphone cleanup.
 - Escaping, capability/owner authorization, bounded data, stale-event rejection and ephemeral privacy boundaries.
-- Delayed/rejected/duplicate tool calls, interrupted/reconnecting voice, ended-call retention and next-call reset.
+- Delayed/rejected/duplicate tool calls, interrupted/reconnecting voice, ended-call/restart retention, queued-start cancellation and fresh-page reset.
 - Keyboard, screen-reader, reduced-motion and touch behavior.
 - Existing unit/browser checks plus explicitly authorized real-host/provider/spoken acceptance. A mocked pass or successful connection alone is insufficient evidence of full behavior or latency.
 

@@ -7,6 +7,8 @@ import { useCreationReview } from '../lib/use-creation-review';
 import { canDecideCreationReview, canonicalCreationReviewCandidate, creationReviewDecisionPayload, creationReviewQueueRecords,
   creationReviewResponseCategories, creationReviewResponseStatus, creationReviewView, type CreationReviewCandidate, type CreationReviewClientResult, type CreationReviewStatus } from '../lib/creation-review-client';
 import CreationSafetyStatus from '../components/CreationSafetyStatus';
+import { CREATION_SAFETY_CATEGORIES } from '../lib/creation-safety';
+import { CREATION_REVIEW_EXPLANATIONS, creationReviewExplanation } from '../lib/creation-review-explanations';
 
 const candidate = { name: 'Waveform', initialPrompt: 'Helpful instructions' };
 const proof = { ownerUid: 'synthetic-owner', reviewId: 'synthetic-review', digest: 'synthetic-digest', policyVersion: 'policy-v1', policyDigest: 'synthetic-policy' };
@@ -23,7 +25,38 @@ test('review flags are bounded display data and disappear for a different versio
   assert.deepEqual(creationReviewView({ enabled: true, ownerKey: 'owner-a', key: 'another version', result }), { status: 'stale', canSave: false });
   const view = creationReviewView({ enabled: true, ownerKey: 'owner-a', key, result });
   assert.equal(view.canSave, false);
-  assert.match(renderToStaticMarkup(createElement(CreationSafetyStatus, view)), /Review flags: controversial-identity, portrait-provenance/);
+  const markup = renderToStaticMarkup(createElement(CreationSafetyStatus, view));
+  assert.match(markup, /Historical context for founder follow-up/);
+  assert.match(markup, /Portrait source or permission/);
+  assert.doesNotMatch(markup, /Review flags:|portrait-provenance/);
+});
+
+test('every safety flag has readable guidance without inventing model evidence', () => {
+  assert.deepEqual(Object.keys(CREATION_REVIEW_EXPLANATIONS).sort(), [...CREATION_SAFETY_CATEGORIES].sort());
+  for (const category of CREATION_SAFETY_CATEGORIES) {
+    const markup = renderToStaticMarkup(createElement(CreationSafetyStatus, { status: 'manual-review', categories: [category] }));
+    const explanation = creationReviewExplanation(category);
+    assert.ok(explanation.title.length > 5 && explanation.detail.length > 30);
+    assert.match(markup, /Sent to the founder for a decision/);
+    assert.match(markup, /not a finding of wrongdoing/);
+    assert.match(markup, /sentence-by-sentence explanation/);
+    assert.doesNotMatch(markup, /Review flags:/);
+  }
+  const allowed = renderToStaticMarkup(createElement(CreationSafetyStatus, { status: 'allowed', categories: ['portrait-provenance'] }));
+  assert.match(allowed, /can be used now/);
+  assert.match(allowed, /This flag alone allows use/);
+  assert.equal(creationReviewExplanation('<script>').title, 'Additional safety concern');
+  assert.equal(creationReviewExplanation('__proto__').title, 'Additional safety concern');
+  assert.doesNotMatch(renderToStaticMarkup(createElement(CreationSafetyStatus, { status: 'stale', categories: ['fraud-impersonation'] })), /Possible identity deception/);
+});
+
+test('outdated queue results are display-only and preserve their original proof', () => {
+  const records = creationReviewQueueRecords({ reviews: [{ ...proof, candidate, status: 'blocked', categories: ['fraud-impersonation'], policyCurrent: false }] });
+  assert.equal(records?.[0].policyCurrent, false);
+  assert.equal(records?.[0].status, 'blocked');
+  assert.equal(canDecideCreationReview(records![0].status), false);
+  assert.deepEqual(creationReviewDecisionPayload(records![0], 'allowed'), { ...proof, decision: 'allowed' });
+  assert.equal(creationReviewQueueRecords({ reviews: [{ ...proof, candidate, status: 'blocked', categories: [], policyCurrent: 'yes' }] }), null);
 });
 
 test('review keys match server trim rules while preserving internal newlines and exact text-panel whitespace', () => {

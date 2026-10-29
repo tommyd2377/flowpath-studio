@@ -1,5 +1,5 @@
 import { curatedDemo } from './curated-demo-runtime';
-import { createVoiceServer } from './voice-server';
+import { createVoiceServer, type VoiceControllers } from './voice-server';
 import { configuredFirebaseProjectId, getFirebaseAccountServices } from './firebase-accounts';
 import { configuredPublicOrigin } from './request-origin';
 import { createProductionVoiceStore, firestoreVoiceDatabase, type VoiceOwner, type VoiceTransaction } from './production-voice-store';
@@ -12,8 +12,9 @@ import { hostedTesterDemo, hostedTesterRuntime } from './tester-voice-config';
 import { createTesterVoiceStore } from './tester-voice-store';
 import { scheduleTesterVoiceDeadline } from './voice-deadline';
 import { scheduleLocalVoiceDeadline } from './local-voice-deadline';
+import { superviseLocalVoice } from './local-voice-supervisor';
 import { publicVoiceOwner } from './public-voice-identity';
-import { creationReviewStore, creationSafetyEnabled } from './creation-runtime';
+import { creationReviewStore, creationSafetyEnabled, creationSafetyRuntimeVersion } from './creation-runtime';
 import { creationContentDigest, CreationSafetyError } from './creation-safety';
 import { waveformRecord } from './account-server';
 import { requirePublishedPreview } from './published-preview';
@@ -24,9 +25,11 @@ type Resolver = NonNullable<Parameters<typeof createVoiceServer>[0]>['resolveWav
 const shared = globalThis as typeof globalThis & {
   flowpathProductionVoiceServer?: ReturnType<typeof createVoiceServer>;
   flowpathProductionVoiceConfigVersion?: string;
+  flowpathProductionVoiceFactory?: typeof createVoiceServer;
   flowpathProductionWaveformResolver?: Resolver;
   flowpathProductionAdminResolver?: AdminResolver;
   flowpathProductionVisitorResolver?: VisitorResolver;
+  flowpathLocalVoiceControllers?: VoiceControllers;
 };
 
 /** Also initialized by logout/deadline routes, which must work on a fresh instance. */
@@ -37,10 +40,13 @@ export function getProductionVoiceServer(resolveWaveform?: Resolver, resolveAdmi
   const local = !!localAppOrigin();
   const testerDemo = hostedTesterRuntime();
   // Dev hot reload may change registered tools while keeping the process online.
-  // Old calls keep their sideband/timers; durable cleanup supports either instance.
-  if (process.env.NODE_ENV === 'development' && shared.flowpathProductionVoiceConfigVersion !== 'creation-safety-v3-draft-publication-v1') {
+  // Retain local control handles across module replacement, including independent workers.
+  const configVersion = `local-independent-supervision-v1:${creationSafetyRuntimeVersion()}`;
+  if (process.env.NODE_ENV === 'development' && (shared.flowpathProductionVoiceConfigVersion !== configVersion
+    || shared.flowpathProductionVoiceFactory !== createVoiceServer)) {
     shared.flowpathProductionVoiceServer = undefined;
-    shared.flowpathProductionVoiceConfigVersion = 'creation-safety-v3-draft-publication-v1';
+    shared.flowpathProductionVoiceConfigVersion = configVersion;
+    shared.flowpathProductionVoiceFactory = createVoiceServer;
   }
   const database = local ? localFirebaseDatabase() : firestoreVoiceDatabase(() => {
     const projectId = configuredFirebaseProjectId();
@@ -69,6 +75,7 @@ export function getProductionVoiceServer(resolveWaveform?: Resolver, resolveAdmi
       && Boolean(configuredFirebaseProjectId()) && (local || Boolean(configuredPublicOrigin(process.env.FLOWPATH_PUBLIC_ORIGIN)))
       && (local || productionVoiceDeadlineConfigured()) && Boolean(localTestingVoicePolicy()),
     requestOwnedCleanup: !local,
+    localRecoveryDiagnostics: local,
     requestScopedDemo: testerDemo,
     ...(testerDemo ? { authorizeStart: demoAccess.allowed, demoGrant: demoGrantId } : {}),
     resolveWaveform: (request, id) => shared.flowpathProductionWaveformResolver?.(request, id) ?? Promise.resolve(null),
@@ -77,6 +84,7 @@ export function getProductionVoiceServer(resolveWaveform?: Resolver, resolveAdmi
     resolveAdmin: request => shared.flowpathProductionAdminResolver?.(request) ?? Promise.resolve(null),
     production: {
       store,
+      ...(local ? { supervise: superviseLocalVoice } : {}),
       ...(testerDemo && 'heartbeat' in store ? { heartbeat: store.heartbeat, preCancel: store.preCancel, beginConnection: store.beginConnection,
         confirmConnection: async (id: string) => {
           const meter = await store.connectionDeadline(id);
@@ -86,7 +94,7 @@ export function getProductionVoiceServer(resolveWaveform?: Resolver, resolveAdmi
       policy: () => localTestingVoicePolicy(),
       scheduleDeadline: local ? scheduleLocalVoiceDeadline : testerDemo ? scheduleTesterVoiceDeadline : scheduleProductionVoiceDeadline,
     },
-  });
+  }, local ? shared.flowpathLocalVoiceControllers ??= new Map() : undefined);
 }
 
 export const cancelProductionOwnerVoice = (uid: string) => getProductionVoiceServer().cancelOwner(uid);

@@ -7,7 +7,7 @@ export type CanonicalCreationReviewCandidate = { name: string; initialPrompt: st
   document?: { id: string; digest: string; filename: string } };
 export type CreationReviewProof = { ownerUid: string; reviewId: string; digest: string; policyVersion: string; policyDigest: string };
 export type CreationReviewQueueRecord = { proof: CreationReviewProof; candidate: CanonicalCreationReviewCandidate;
-  status: CreationReviewStatus; categories: string[]; issue?: 'budget' | 'coverage' | 'provider' | 'abandoned' };
+  status: CreationReviewStatus; categories: string[]; policyCurrent?: boolean; issue?: 'budget' | 'coverage' | 'provider' | 'abandoned' };
 export type CreationReviewClientResult = { ownerKey: string; key: string; status: CreationReviewStatus; categories?: string[] };
 
 export const canDecideCreationReview = (status: CreationReviewStatus): boolean => status === 'manual-review';
@@ -77,7 +77,8 @@ export function creationReviewQueueRecords(input: unknown): CreationReviewQueueR
       const row = object(input), proof = row, content = object(row?.candidate);
       if (!row || !proof || !content || !['ownerUid', 'reviewId', 'digest', 'policyVersion', 'policyDigest'].every(key => identifier(proof[key]))
         || !statuses.includes(row.status as CreationReviewStatus) || !Array.isArray(row.categories) || row.categories.length > 20
-        || !row.categories.every(category => typeof category === 'string' && category.length <= 80)) return null;
+        || !row.categories.every(category => typeof category === 'string' && category.length <= 80)
+        || row.policyCurrent !== undefined && typeof row.policyCurrent !== 'boolean') return null;
       const normalized = canonicalCreationReviewCandidate(content as CreationReviewCandidate);
       if (!normalized) return null;
       if (content.document !== undefined) {
@@ -89,6 +90,7 @@ export function creationReviewQueueRecords(input: unknown): CreationReviewQueueR
       records.push({ proof: { ownerUid: proof.ownerUid as string, reviewId: proof.reviewId as string, digest: proof.digest as string,
         policyVersion: proof.policyVersion as string, policyDigest: proof.policyDigest as string },
       candidate: normalized.candidate, status: row.status as CreationReviewStatus, categories: [...row.categories],
+      ...(typeof row.policyCurrent === 'boolean' ? { policyCurrent: row.policyCurrent } : {}),
       ...(['budget', 'coverage', 'provider', 'abandoned'].includes(String(row.issue)) ? { issue: row.issue as CreationReviewQueueRecord['issue'] } : {}) });
     }
     return records;

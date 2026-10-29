@@ -1,8 +1,13 @@
 import { createPluginSession, pluginObject as object } from './plugin-session';
 import { validKnowledgeResult, type KnowledgePassage, type PluginContext } from './plugin-contract';
 
-export type LiveTextState = { text: string; writing: boolean; visible: boolean; canUndo: boolean; message: string; sources?: KnowledgePassage[]; pending?: boolean };
-type Options = { onChange: (state: LiveTextState) => void; send: (event: Record<string, unknown>) => void; textEnabled?: boolean; searchKnowledge?: (query: string, signal: AbortSignal) => Promise<unknown> };
+export type LiveTextDisplay = 'text' | 'knowledge';
+export type LiveTextState = { text: string; writing: boolean; visible: boolean; canUndo: boolean; message: string; sources?: KnowledgePassage[]; pending?: boolean;
+  display?: LiveTextDisplay; hasKnowledge?: boolean };
+type Snapshot = { text: string; sources: KnowledgePassage[] };
+type DisplayBuffer = Snapshot & { undo: Snapshot[]; message: string };
+type Workspace = { display: LiveTextDisplay; visible: boolean; hasKnowledge: boolean; buffers: Record<LiveTextDisplay, DisplayBuffer> };
+type Options = { workspace?: Workspace; onChange: (state: LiveTextState) => void; send: (event: Record<string, unknown>) => void; textEnabled?: boolean; searchKnowledge?: (query: string, signal: AbortSignal) => Promise<unknown> };
 type TextAction = 'start_dictation' | 'stop_dictation' | 'show' | 'hide' | 'replace' | 'append' | 'clear' | 'undo' | 'read';
 
 const MAX_TEXT = 4_000, MAX_EVENTS = 8_000;
@@ -18,17 +23,34 @@ const identifier = (value: unknown): value is string => typeof value === 'string
 const validText = (value: unknown): value is string => typeof value === 'string' && value.length <= MAX_TEXT
   && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value);
 
-/** One conversation's ephemeral text. No storage, logging, extra model or financial authority. */
-export function createLiveTextSession({ onChange, send, textEnabled = true, searchKnowledge }: Options) {
+/** Page-local display buffers; each voice connection gets fresh tool/async authority. */
+export function createLiveTextSession({ onChange, send, textEnabled = true, searchKnowledge, workspace }: Options) {
   let text = '', writing = false, visible = false, message = '', finished = false, generation = 0;
   let transcriptBuffer = '', lastTranscriptEnd = -1, dictationCheckpoint = false, bufferBoundary = true;
   let controlBarrier = -1, textRevision = 0;
   let sources: KnowledgePassage[] = [];
   let pendingSearch: object | null = null;
-  const undo: { text: string; sources: KnowledgePassage[] }[] = [];
+  let undo: Snapshot[] = [];
+  let display: LiveTextDisplay = 'text', hasKnowledge = false;
+  const buffers: Record<LiveTextDisplay, DisplayBuffer> = {
+    text: { text: '', sources: [], undo: [], message: '' }, knowledge: { text: '', sources: [], undo: [], message: '' },
+  };
+  if (workspace && textEnabled) {
+    Object.assign(buffers, workspace.buffers);
+    ({ display, visible, hasKnowledge } = workspace);
+    ({ text, sources, undo } = buffers[display]);
+  }
   const events = new Set<string>();
   const readRevisions = new Map<string, number>();
-  const emit = () => onChange({ text, writing, visible, canUndo: undo.length > 0, message, sources, pending: !!pendingSearch });
+  const emit = () => onChange({ text, writing, visible, canUndo: undo.length > 0, message, sources, pending: !!pendingSearch, display, hasKnowledge });
+  function activate(next: LiveTextDisplay) {
+    if (next === display) return;
+    buffers[display] = { text, sources, undo, message };
+    ({ text, sources, undo, message } = buffers[next]);
+    display = next;
+    writing = false; dictationCheckpoint = false;
+    textRevision++;
+  }
   function checkpoint() {
     if (undo.at(-1)?.text !== text || undo.at(-1)?.sources !== sources) undo.push({ text, sources });
     if (undo.length > 10) undo.shift();
@@ -54,6 +76,12 @@ export function createLiveTextSession({ onChange, send, textEnabled = true, sear
   }
   function control(action: TextAction, value = '', local = false) {
     if (local || action === 'hide') { generation++; controlBarrier = lastTranscriptEnd; }
+    if (action === 'show' || action === 'start_dictation') activate('text');
+    if ((action === 'replace' || action === 'append') && display === 'knowledge') {
+      const original = { text, sources };
+      activate('text');
+      replace(original.text, true, original.sources);
+    }
     message = '';
     if (action === 'read') return;
     pendingSearch = null;
@@ -135,9 +163,14 @@ export function createLiveTextSession({ onChange, send, textEnabled = true, sear
         const args = object(input);
         if (!args || Object.keys(args).length !== 2 || typeof args.query !== 'string' || !args.query.trim()
           || args.query.length > 1000 || typeof args.display !== 'boolean') return { status: 'invalid_action' };
-        const expectedRevision = textRevision;
         const ticket = {};
-        if (args.display && textEnabled && !writing) { pendingSearch = ticket; visible = true; message = ''; emit(); }
+        if (args.display && textEnabled) {
+          appendDictation(transcriptBuffer); transcriptBuffer = ''; bufferBoundary = true;
+          writing = false; dictationCheckpoint = false;
+          activate('knowledge'); hasKnowledge = true;
+          pendingSearch = ticket; visible = true; message = ''; emit();
+        }
+        const expectedRevision = textRevision;
         let result: unknown;
         try { result = await searchKnowledge(args.query, context.signal); }
         catch {
@@ -145,14 +178,15 @@ export function createLiveTextSession({ onChange, send, textEnabled = true, sear
           return { status: 'unavailable' };
         }
         if (!context.isCurrent()) return { status: 'superseded' };
-        if (pendingSearch === ticket) pendingSearch = null;
-        if (!validKnowledgeResult(result)) { message = 'Sources could not be verified.'; emit(); return { status: 'unavailable' }; }
+        const currentDisplay = pendingSearch === ticket;
+        if (currentDisplay) pendingSearch = null;
+        if (!validKnowledgeResult(result)) { if (currentDisplay) { message = 'Sources could not be verified.'; emit(); } return { status: 'unavailable' }; }
         let displayed = false;
-        if (args.display && textEnabled && result.passages.length && expectedRevision === textRevision && !writing) {
+        if (args.display && textEnabled && currentDisplay && result.passages.length && expectedRevision === textRevision && !writing) {
           replace(result.passages.map((p, i) => `[${i + 1}] “${p.quote}”`).join('\n\n'), true, result.passages);
           visible = true; writing = false; transcriptBuffer = ''; bufferBoundary = true; message = ''; displayed = true; emit();
         }
-        if (args.display && textEnabled && !result.passages.length) message = 'No relevant passages found in your selected documents.';
+        if (args.display && textEnabled && currentDisplay && !result.passages.length) message = 'No relevant passages found in your selected documents.';
         emit();
         return { status: result.passages.length ? 'found' : 'no_matches', ...result, displayed };
       } } : {}),
@@ -161,6 +195,14 @@ export function createLiveTextSession({ onChange, send, textEnabled = true, sear
 
   emit();
   return {
+    // Copy only display content/Undo, never pending work, tool IDs or microphone history.
+    workspace(): Workspace {
+      const held = { ...buffers, [display]: { text, sources, undo, message: '' } };
+      return { display, visible, hasKnowledge, buffers: {
+        text: { ...held.text, undo: [...held.text.undo], message: '' },
+        knowledge: { ...held.knowledge, undo: [...held.knowledge.undo], message: '' },
+      } };
+    },
     event(input: unknown) {
       if (finished) return;
       try {
@@ -194,6 +236,14 @@ export function createLiveTextSession({ onChange, send, textEnabled = true, sear
       bufferBoundary = true;
       control(action === 'stop' ? 'stop_dictation' : action, '', true);
       emit();
+    },
+    display(next: LiveTextDisplay) {
+      if (!textEnabled || !['text', 'knowledge'].includes(next) || next === 'knowledge' && !hasKnowledge) return;
+      if (next === display && visible) return;
+      appendDictation(transcriptBuffer); transcriptBuffer = ''; bufferBoundary = true;
+      generation++; controlBarrier = lastTranscriptEnd; pendingSearch = null;
+      writing = false; dictationCheckpoint = false;
+      activate(next); visible = true; emit();
     },
     finish() {
       if (finished) return;

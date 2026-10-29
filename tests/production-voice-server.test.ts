@@ -535,6 +535,115 @@ test('local unmetered founder starts have no restart throttle or app deadline an
   assert.equal(f.calls.filter(url => url.endsWith('/live/sessions')).length, 5);
 });
 
+test('local readiness permits an automatic recovery start without performing cleanup', async () => {
+  for (const founder of [false, true]) {
+    const f = fixture(), id = randomUUID();
+    const admin = { uid: owner.ownerUid, accountSessionId: owner.accountSessionId, override: true };
+    await f.store.reserve({ ...owner, ...(founder ? { admin } : {}) }, id, policy);
+    for (const local of [false, true]) {
+      const server = createVoiceServer({ ...f.options,
+        ...(founder ? { resolveAdmin: async () => ({ ...admin, testing: true, isCurrent: () => true }) } : {}),
+        production: { ...f.options.production, policy: () => ({ ...policy, ...(local ? { unmeteredAdminTesting: true } : {}) }) } });
+      const body = await (await server.GET(request('GET'))).json();
+      assert.equal(body.enabled, local, `founder=${founder}, local=${local}`); assert.equal(body.recoverable, undefined);
+    }
+    assert.equal(f.calls.length, 0, 'readiness never triggers provider cleanup or creation');
+  }
+});
+
+test('a normal local start closes a known orphan once, retains its usage and creates one replacement', async () => {
+  const f = fixture(), old = randomUUID(), next = randomUUID();
+  const reserved = await f.store.reserve(owner, old, policy);
+  await f.store.created(old, 'old_local_provider', reserved.expiresAt);
+  const server = createVoiceServer({ ...f.options, production: { ...f.options.production, policy: () => ({ ...policy, unmeteredAdminTesting: true }) } });
+  assert.equal((await (await server.GET(request('GET'))).json()).enabled, true);
+  assert.equal(f.calls.length, 0); assert.equal(f.sent.length, 0, 'readiness is read-only');
+  assert.equal((await server.POST(request('POST', next))).status, 201);
+  assert.equal((await f.store.reservation(old))!.state, 'closed');
+  assert.equal((await f.store.reservation(old))!.seconds, 2.5);
+  assert.equal(f.calls.length, 1, 'cleanup never creates an extra provider');
+  assert.equal(f.rows().get('voiceAdmission/global')!.reservedSeconds, 1800, 'no refund or budget reset');
+  assert.equal((await server.DELETE(request('DELETE', next))).status, 200);
+});
+
+test('local automatic recovery never creates a replacement without known, confirmed closure', async () => {
+  for (const known of [true, false]) {
+    const f = fixture(false), old = randomUUID();
+    const reserved = await f.store.reserve(owner, old, policy);
+    if (known) await f.store.created(old, 'old_local_provider', reserved.expiresAt);
+    const server = createVoiceServer({ ...f.options, connectMs: 5, closeMs: 5,
+      production: { ...f.options.production, policy: () => ({ ...policy, unmeteredAdminTesting: true }) } });
+    const result = await server.POST(request('POST', randomUUID()));
+    assert.ok([409, 503].includes(result.status));
+    assert.equal(f.calls.length, 0);
+    assert.notEqual((await f.store.reservation(old))!.state, 'closed');
+    assert.equal((await f.store.reservation(old))!.seconds, undefined);
+  }
+});
+
+test('a hot-reloaded controller retains the active call and cannot kill it from a second tab', async () => {
+  const f = fixture(), controllers = new Map(), first = randomUUID();
+  const options = { ...f.options, production: { ...f.options.production, policy: () => ({ ...policy, unmeteredAdminTesting: true }) } };
+  assert.equal((await createVoiceServer(options, controllers).POST(request('POST', first))).status, 201);
+  const reloaded = createVoiceServer(options, controllers);
+  assert.equal((await reloaded.POST(request('POST', randomUUID()))).status, 409);
+  assert.equal(f.calls.length, 1); assert.equal(f.sent.length, 0, 'healthy controller is never canceled by another start');
+  assert.equal((await reloaded.DELETE(request('DELETE', first))).status, 200);
+});
+
+test('concurrent orphan recovery creates at most one replacement and one closer', async () => {
+  const f = fixture(), old = randomUUID();
+  const reserved = await f.store.reserve(owner, old, policy);
+  await f.store.created(old, 'old_local_provider', reserved.expiresAt);
+  const server = createVoiceServer({ ...f.options, production: { ...f.options.production, policy: () => ({ ...policy, unmeteredAdminTesting: true }) } });
+  const ids = [randomUUID(), randomUUID()];
+  const results = await Promise.all(ids.map(id => server.POST(request('POST', id))));
+  assert.equal(results.filter(result => result.status === 201).length, 1);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.sent.filter(event => event.type === 'session.close').length, 1);
+  await server.DELETE(request('DELETE', ids[results.findIndex(result => result.status === 201)]));
+});
+
+test('unlimited local observer retains finalization ownership and records closure independently', async () => {
+  const f = fixture(), id = randomUUID();
+  const localPolicy = { ...policy, unmeteredAdminTesting: true };
+  const reserved = await f.store.reserve({ ...owner, admin: { uid: owner.ownerUid, accountSessionId: owner.accountSessionId, override: true } }, id, localPolicy);
+  await f.store.created(id, 'independent_local_provider', reserved.expiresAt);
+  const observer = await createVoiceServer({ ...f.options, production: { ...f.options.production, policy: () => localPolicy } }).superviseReservation(id, () => {});
+  await observer.ready;
+  const call = (await f.store.reservation(id))!;
+  for (let i = 0; i < 250; i++) {
+    f.advance(4_000);
+    assert.equal(await f.store.renewSupervision(id, call.cleanup!.epoch), true, 'healthy observer renews well beyond 15 minutes');
+  }
+  await f.store.cancel(owner.ownerUid, owner.waveformId, id);
+  assert.equal(await f.store.claimCleanup(id), null, 'a restarted server cannot steal an observing worker’s final event');
+  assert.deepEqual(await observer.close(), { finalized: true, seconds: 2.5 });
+  assert.equal((await f.store.reservation(id))!.state, 'closed');
+  await f.store.available(owner, localPolicy);
+  assert.equal(f.calls.length, 0, 'observer never creates a provider session');
+});
+
+test('unlimited local start waits for the independent observer instead of attaching a parent socket', async () => {
+  const f = fixture(), id = randomUUID();
+  let attached = 0, complete!: (value: { finalized: boolean; seconds: number }) => void;
+  const closed = new Promise<{ finalized: boolean; seconds: number }>(resolve => { complete = resolve; });
+  const server = createVoiceServer({ ...f.options,
+    socketFactory() { throw new Error('The parent must not open a second provider socket'); },
+    resolveAdmin: async () => ({ uid: owner.ownerUid, accountSessionId: owner.accountSessionId, testing: true, isCurrent: () => true }),
+    production: { ...f.options.production, policy: () => ({ ...policy, unmeteredAdminTesting: true }),
+      supervise: (reservation, onStarted) => {
+        assert.equal(reservation, id); attached++; queueMicrotask(onStarted);
+        return { ready: Promise.resolve(), closed, dispose() {}, close() { complete({ finalized: true, seconds: 2.5 }); return closed; } };
+      },
+    },
+  });
+  assert.equal((await server.POST(request('POST', id))).status, 201);
+  assert.equal(attached, 1); assert.equal(f.calls.length, 1); assert.equal(f.scheduled.length, 0);
+  assert.equal((await server.DELETE(request('DELETE', id))).status, 200);
+  assert.equal((await f.store.reservation(id))!.state, 'closed');
+});
+
 test('a preview query cannot select a draft or published snapshot without corresponding server authority', async () => {
   const f = fixture(); const server = createVoiceServer(f.options);
   const scoped = (value: string) => {

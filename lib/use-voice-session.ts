@@ -130,6 +130,7 @@ const emptyTextState = (): LiveTextState => ({ text: '', writing: false, visible
 export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'self', textBoxEnabled = false, draftPreview = false, publishedPreview = false) {
   const [phase, setPhase] = useState<VoicePhase>('idle');
   const [active, setActive] = useState(false);
+  const [hasConnected, setHasConnected] = useState(false);
   const [status, setStatus] = useState('');
   const [reviewRequired, setReviewRequired] = useState(false);
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
@@ -146,13 +147,20 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
   const current = useRef<VoiceSession | null>(null);
   const closing = useRef<Promise<boolean> | null>(null);
   const closingSession = useRef<VoiceSession | null>(null);
+  const queuedStart = useRef<object | null>(null);
   const mounted = useRef(true);
   const revision = useRef(0);
   const publicDemoId = useRef<string | null>(null);
 
   const stop = useCallback((notice = '', reason: VoiceDiagnosticFinishReason = 'user_stop') => {
     const session = current.current;
-    if (!session) return;
+    if (!session) {
+      if (queuedStart.current) {
+        queuedStart.current = null;
+        setActive(false); setPhase('idle'); setStatus(closing.current ? 'Finishing the conversation…' : notice);
+      }
+      return;
+    }
     current.current = null;
     const stoppedRevision = ++revision.current;
     session.diagnostic?.lifecycle('stopping');
@@ -172,7 +180,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
       session.diagnostic?.lifecycle('ended');
       session.diagnostic?.finish(reason);
       if (closing.current === promise) { closing.current = null; closingSession.current = null; }
-      if (!mounted.current || revision.current !== stoppedRevision) return;
+      if (!mounted.current || revision.current !== stoppedRevision || queuedStart.current) return;
       setDiagnosticRecording(false);
       if (closed) {
         setStatus(notice);
@@ -194,7 +202,21 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
   }, [stop]);
 
   const start = useCallback(async (recordDiagnostics = false) => {
-    if (closing.current) return;
+    if (closing.current) {
+      // One explicit click may wait for confirmed cleanup. Paid sessions still
+      // return through payer selection/consent rather than reusing a payer.
+      if (paidPayer || queuedStart.current) return;
+      const ticket = {}; queuedStart.current = ticket;
+      setActive(true); setPhase('connecting'); setStatus('Finishing the previous conversation…');
+      const closed = await closing.current;
+      if (!mounted.current || queuedStart.current !== ticket) return;
+      queuedStart.current = null;
+      if (!closed) {
+        setActive(false); setPhase('error');
+        setStatus('Your microphone is off, but disconnection could not be confirmed. Wait for the session limit before reconnecting.');
+        return;
+      }
+    }
     const existing = current.current;
     if (existing) {
       if (!existing.needsAudioResume || !existing.audio || !existing.context) return;
@@ -226,10 +248,11 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
       diagnostic: diagnostic.current ?? undefined,
     };
     textController.current?.finish();
+    const workspace = textController.current?.workspace();
     textController.current = null;
-    setTextState(emptyTextState());
     if (textBoxEnabled || waveformId && !paidPayer && !publishedPreview) {
       const controller = createLiveTextSession({
+        workspace,
         textEnabled: textBoxEnabled,
         ...(!paidPayer && waveformId && !publishedPreview ? { searchKnowledge: async (query: string, signal: AbortSignal) => {
           const response = await fetch('/api/knowledge/search', { method: 'POST', credentials: 'same-origin',
@@ -238,7 +261,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
           if (!response.ok) throw new Error('Knowledge search was unavailable.');
           return response.json();
         } } : {}),
-        onChange: state => { if (mounted.current && session.text && textController.current === session.text) setTextState(state); },
+        onChange: state => { if (mounted.current && (!session.text || textController.current === session.text)) setTextState(state); },
         send: event => {
           if (current.current === session && !session.controller.signal.aborted && session.channel?.readyState === 'open') {
             session.channel.send(JSON.stringify(event));
@@ -247,7 +270,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
       });
       session.text = controller;
       textController.current = controller;
-    }
+    } else setTextState(emptyTextState());
     session.diagnostic?.lifecycle('connecting');
     current.current = session;
     revision.current++;
@@ -261,6 +284,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
       session.diagnostic?.lifecycle('connected');
       session.lastActivity = Date.now();
       clearTimeout(session.setupTimer);
+      setHasConnected(true);
       setPhase('listening');
       if (!session.needsAudioResume) setStatus('Getting ready…');
     };
@@ -479,6 +503,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
   useEffect(() => {
     mounted.current = true;
     const leave = () => {
+      queuedStart.current = null;
       const session = current.current ?? closingSession.current;
       current.current = null;
       revision.current++;
@@ -492,6 +517,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
       textController.current = null;
       if (mounted.current) {
         setActive(false);
+        setHasConnected(false);
         setNeedsAudioResume(false);
         setPhase('idle');
         setStatus('');
@@ -517,6 +543,8 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
   const undoText = useCallback(() => textController.current?.action('undo'), []);
   const hideText = useCallback(() => textController.current?.action('hide'), []);
   const showText = useCallback(() => textController.current?.action('show'), []);
+  const showNotes = useCallback(() => textController.current?.display('text'), []);
+  const showKnowledge = useCallback(() => textController.current?.display('knowledge'), []);
   const markDiagnostic = useCallback(() => diagnostic.current?.mark() ?? false, []);
   const stopDiagnostic = useCallback(() => {
     diagnostic.current?.finish('capture_stopped');
@@ -530,7 +558,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
     setDiagnosticVersion(value => value + 1);
   }, []);
 
-  return { phase, active, status, reviewRequired, remainingSeconds, inputAnalyser, outputAnalyser, needsAudioResume, start, stop, settledVersion,
-    textState, stopWriting, clearText, undoText, hideText, showText,
+  return { phase, active, hasConnected, status, reviewRequired, remainingSeconds, inputAnalyser, outputAnalyser, needsAudioResume, start, stop, settledVersion,
+    textState, stopWriting, clearText, undoText, hideText, showText, showNotes, showKnowledge,
     hasDiagnostic, diagnosticRecording, diagnosticVersion, getDiagnostic, markDiagnostic, stopDiagnostic, clearDiagnostic };
 }

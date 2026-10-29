@@ -10,6 +10,35 @@ import { getProductionVoiceServer } from '../lib/production-voice-runtime';
 import { paidVoiceReady } from '../lib/paid-runtime';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+test('development reload replaces an older cached supervisor and then retains the current instance', () => {
+  const shared = globalThis as typeof globalThis & {
+    flowpathProductionVoiceServer?: ReturnType<typeof createVoiceServer>;
+    flowpathProductionVoiceConfigVersion?: string;
+    flowpathProductionVoiceFactory?: typeof createVoiceServer;
+  };
+  const savedServer = shared.flowpathProductionVoiceServer, savedVersion = shared.flowpathProductionVoiceConfigVersion, savedFactory = shared.flowpathProductionVoiceFactory;
+  const env: Record<string, string | undefined> = process.env;
+  const previous = env.NODE_ENV;
+  try {
+    env.NODE_ENV = 'development';
+    const old = createVoiceServer({ enabled: () => false });
+    shared.flowpathProductionVoiceServer = old;
+    shared.flowpathProductionVoiceConfigVersion = 'creation-safety-v3-draft-publication-owner-recovery-v1';
+    const updated = getProductionVoiceServer();
+    assert.notEqual(updated, old);
+    assert.equal(typeof updated.superviseReservation, 'function');
+    assert.equal(getProductionVoiceServer(), updated, 'routine reads retain the current supervisor');
+    shared.flowpathProductionVoiceFactory = () => old;
+    assert.notEqual(getProductionVoiceServer(), updated, 'changed server code invalidates the dev cache even without a version-string edit');
+  } finally {
+    if (savedServer === undefined) delete shared.flowpathProductionVoiceServer; else shared.flowpathProductionVoiceServer = savedServer;
+    if (savedVersion === undefined) delete shared.flowpathProductionVoiceConfigVersion; else shared.flowpathProductionVoiceConfigVersion = savedVersion;
+    if (savedFactory === undefined) delete shared.flowpathProductionVoiceFactory; else shared.flowpathProductionVoiceFactory = savedFactory;
+    if (previous === undefined) delete env.NODE_ENV; else env.NODE_ENV = previous;
+  }
+});
+
 async function fixture(known = true) {
   const db = new PaidMemoryDatabase();
   let time = Date.UTC(2026, 9, 27, 12);
@@ -107,6 +136,13 @@ test('duplicate concurrent delivery has one closer; busy delivery is retryable, 
   assert.equal(f.sockets.length, 1);
 });
 
+test('an owner pointer with a missing durable record cannot be reported as closed', async () => {
+  const f = await fixture(); f.db.rows.delete(`voiceConversations/${f.id}`);
+  await assert.rejects(f.store.previous(f.owner.ownerUid, f.owner.waveformId), /could not be verified/);
+  assert.equal(f.sockets.length, 0);
+  await assert.rejects(f.store.available(f.owner, f.policy), /previous/);
+});
+
 test('attach timeout, transport failure and absent finalization preserve holds and close every socket', async () => {
   for (const failure of ['attach', 'transport', 'finalization']) {
     const f = await fixture(); f.setFinalize(false);
@@ -119,6 +155,22 @@ test('attach timeout, transport failure and absent finalization preserve holds a
     assert.ok(f.sockets.every(socket => socket.readyState === WebSocket.CLOSED));
     await assert.rejects(f.store.reserve(f.owner, randomUUID(), f.policy), /cleanup|previous/);
     assert.equal((await f.worker().POST(f.req('POST'))).status, 503);
+  }
+});
+
+test('local transport diagnosis reports only the bounded HTTP status, never raw provider data', async () => {
+  for (const message of ['Unexpected server response: 404', 'private-provider-message synthetic-key']) {
+    const f = await fixture(); f.setFinalize(false);
+    const warnings: unknown[][] = [], original = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args); };
+    try {
+      const closing = createVoiceServer({ ...f.options, localRecoveryDiagnostics: true }).cancelReservation(f.id, f.owner.ownerUid, f.owner.waveformId);
+      await tick();
+      f.sockets[0].emit('error', new Error(message));
+      assert.equal(await closing, false);
+      assert.deepEqual(warnings, [['Local voice controller transport failed', { status: message.endsWith('404') ? 404 : null }]]);
+      assert.equal(JSON.stringify(warnings).includes('synthetic-key'), false);
+    } finally { console.warn = original; }
   }
 });
 

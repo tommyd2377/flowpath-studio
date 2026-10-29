@@ -389,7 +389,7 @@ export function createAccountServer(options: Options = {}) {
         await options.afterWaveformSaved?.(request, waveform);
         return json({ waveform });
       }
-      catch (error) { return error instanceof CreationSafetyError ? json({ error: error.message }, error.status) : error instanceof AccountSessionInactiveError ? unauthorized()
+      catch (error) { return error instanceof CreationSafetyError ? json({ error: error.message, reviewRequired: true }, error.status) : error instanceof AccountSessionInactiveError ? unauthorized()
         : json({ error: 'Your waveform could not be saved. Please try again.' }, 503); }
     },
   };
