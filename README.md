@@ -1,5 +1,7 @@
 # FlowPath Studio
 
+October 29 release candidate: the tested voice lifecycle, creation-review explanations, carousel and shared Streamdown displays are on GitHub main. [Private hosted Knowledge](docs/hosted-knowledge.md) is now prepared with the approved $5/month estimated storage guard, 18+ upload confirmation and complete known-resource deletion. Production activation/verification awaits the rollout; the October 27 deployment details below describe the earlier release. Customer payments stay disabled.
+
 Deployed October 27: homepage top-left links stack **Benjamin Franklin** above **News** (the separate `https://flowpathapp.com` app), with no extra heading. Both accept only the exact lowercase demo code `nyc-1776`. Franklin's `/w/c538ac44-883b-4d96-8785-4ddf8a151efb` has an approved public demonstration snapshot; visitors need the code to start voice. The introduction and Franklin share three minutes total per UTC day per browser, also checked against a regular signed-in account's daily allowance. The verified founder's own waveform stays unlimited. Other waveforms and Knowledge documents stay private; payments and hosted Knowledge remain off. See [the release notes](docs/hosted-beta.md#curated-franklin-and-exact-code-release).
 
 **Save draft** keeps edits private. **Preview draft** opens your saved private version; **Publish / Update published version** explicitly updates the visitor-facing snapshot, opened through **View published version**. Saving alone does not change an existing publication.

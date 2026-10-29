@@ -1,13 +1,16 @@
-import { KnowledgeError } from './knowledge-model';
+import { KnowledgeError, KnowledgeProviderRefusal } from './knowledge-model';
 
+export type KnowledgeProviderStatus = 'preparing' | 'ready' | 'failed';
+export type ProviderProgress = KnowledgeProviderStatus | { status: KnowledgeProviderStatus; usageBytes: number };
 export type ProviderMatch = { fileId: string; text: string };
 export type KnowledgeProvider = {
   createStore(): Promise<string>;
   upload(file: File): Promise<string>;
   attach(storeId: string, fileId: string, documentId: string): Promise<void>;
-  status(storeId: string, fileId: string): Promise<'preparing' | 'ready' | 'failed'>;
+  status(storeId: string, fileId: string): Promise<ProviderProgress>;
   search(storeId: string, documentIds: string[], query: string, signal?: AbortSignal): Promise<ProviderMatch[]>;
   remove(storeId: string, fileId: string): Promise<void>;
+  removeStore?(storeId: string): Promise<void>;
 };
 const providerId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(value);
 
@@ -21,13 +24,18 @@ export function openAIKnowledgeProvider(key: () => string | undefined, request: 
       body: body ? body instanceof FormData ? body : JSON.stringify(body) : undefined,
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
     });
-    if (method === 'DELETE' && response.status === 404) return {};
+    if (method === 'DELETE' && response.status === 404) return { deleted: true, id: path.split('/').at(-1) };
+    if (response.status === 401 || response.status === 403) throw new KnowledgeProviderRefusal();
     if (!response.ok) throw new KnowledgeError('The document service could not complete this request. No automatic retry was made.', 503);
     return await response.json() as Record<string, unknown>;
   }
   function readId(row: Record<string, unknown>) {
     if (!providerId(row.id)) throw new KnowledgeError('The document service returned an invalid response.', 503);
     return row.id;
+  }
+  async function removeConfirmed(path: string, expectedId: string) {
+    const row = await call(path, 'DELETE');
+    if (row.deleted !== true || row.id !== expectedId) throw new KnowledgeError('Stored-file removal could not be confirmed.', 503);
   }
   const path = (storeId: string) => `/vector_stores/${encodeURIComponent(storeId)}`;
   return {
@@ -41,7 +49,10 @@ export function openAIKnowledgeProvider(key: () => string | undefined, request: 
     },
     async status(storeId, fileId) {
       const row = await call(`${path(storeId)}/files/${encodeURIComponent(fileId)}`);
-      return row.status === 'completed' ? 'ready' : row.status === 'in_progress' ? 'preparing' : 'failed';
+      if (row.id !== fileId || row.vector_store_id !== storeId) throw new KnowledgeError('The document service returned an invalid response.', 503);
+      const status = row.status === 'completed' ? 'ready' : row.status === 'in_progress' ? 'preparing' : 'failed';
+      if (!Number.isSafeInteger(row.usage_bytes) || Number(row.usage_bytes) < 0) throw new KnowledgeError('Document storage usage could not be verified.', 503);
+      return { status, usageBytes: row.usage_bytes as number };
     },
     async search(storeId, documentIds, query, signal) {
       const row = await call(`${path(storeId)}/search`, 'POST', { query, max_num_results: 4, rewrite_query: false,
@@ -54,9 +65,10 @@ export function openAIKnowledgeProvider(key: () => string | undefined, request: 
         return text ? [{ fileId: value.file_id, text }] : [];
       });
     },
+    async removeStore(storeId) { await removeConfirmed(path(storeId), storeId); },
     async remove(storeId, fileId) {
-      await call(`${path(storeId)}/files/${encodeURIComponent(fileId)}`, 'DELETE');
-      await call(`/files/${encodeURIComponent(fileId)}`, 'DELETE');
+      await removeConfirmed(`${path(storeId)}/files/${encodeURIComponent(fileId)}`, fileId);
+      await removeConfirmed(`/files/${encodeURIComponent(fileId)}`, fileId);
     },
   };
 }

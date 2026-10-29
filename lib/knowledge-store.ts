@@ -1,14 +1,15 @@
 import { createHash } from 'node:crypto';
 import type { VoiceDatabase, VoiceTransaction } from './production-voice-store';
-import type { KnowledgeProvider } from './knowledge-provider';
-import { KnowledgeError, KNOWLEDGE_DOCUMENTS, type KnowledgeDocument, type KnowledgeView } from './knowledge-model';
+import type { KnowledgeProvider, KnowledgeProviderStatus } from './knowledge-provider';
+import type { KnowledgeStorageBudget } from './knowledge-storage-budget';
+import { KnowledgeError, KnowledgeProviderRefusal, KNOWLEDGE_DOCUMENTS, type KnowledgeDocument, type KnowledgeView } from './knowledge-model';
 import type { KnowledgeResult } from './plugin-contract';
 import type { CreationIdentity } from './creation-runtime';
 import type { CreationCandidate, CreationSafetyStatus, ReviewDocument } from './creation-safety';
 
 export type StoredKnowledgeDocument = KnowledgeDocument & { digest: string; fileId: string | null; fileUncertain?: boolean; checkedAt: number; useWhenApproved?: boolean };
 type StoredDocument = StoredKnowledgeDocument;
-type Index = { waveformId: string; revision: number; storeId: string | null; storeUncertain?: boolean; documents: StoredDocument[] };
+type Index = { waveformId: string; revision: number; storeId: string | null; storeUncertain?: boolean; removing?: string; documents: StoredDocument[] };
 export type KnowledgeScope = { uid: string; waveformId: string; isCurrent(): boolean | Promise<boolean>; reviewIdentity?: CreationIdentity };
 const path = (uid: string) => `waveformKnowledge/${createHash('sha256').update(uid).digest('hex')}`;
 const safeQuote = (text: string) => text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').slice(0, 850).trim();
@@ -27,7 +28,7 @@ type Safety = {
 };
 
 /** Provider IDs never leave this server boundary. Uploads are private, immutable versions. */
-export function createKnowledgeStore(database: VoiceDatabase, provider: KnowledgeProvider, now = Date.now, safety?: Safety) {
+export function createKnowledgeStore(database: VoiceDatabase, provider: KnowledgeProvider, now = Date.now, safety?: Safety, storage?: KnowledgeStorageBudget) {
   async function read(scope: KnowledgeScope): Promise<Index> {
     // The existing waveform safety check may itself transact. Never nest it in this transaction.
     if (!await scope.isCurrent()) throw new KnowledgeError('Sign in again to continue.', 401);
@@ -57,7 +58,9 @@ export function createKnowledgeStore(database: VoiceDatabase, provider: Knowledg
       try { await database.transaction(tx => safety.assertAllowed(tx, scope, doc)); }
       catch { doc.status = 'review-required'; doc.selected = false; doc.message = 'Safety review is required. Choose Review document safety before using this document.'; }
     }
-    return view(projected, available);
+    const result = view(projected, available);
+    if (storage && scope.reviewIdentity?.owner.role === 'admin') result.storage = await database.transaction(tx => storage.view(tx));
+    return result;
   }
   return {
     async view(scope: KnowledgeScope, available = true) {
@@ -66,28 +69,31 @@ export function createKnowledgeStore(database: VoiceDatabase, provider: Knowledg
     async enabled(scope: KnowledgeScope) {
       const index = await read(scope);
       for (const doc of index.documents.filter(d => d.status === 'ready' && d.selected)) {
-        try { if (safety) await database.transaction(tx => safety.assertAllowed(tx, scope, doc)); return true; } catch { /* Unreviewed files grant no tool. */ }
+        try { await database.transaction(async tx => { if (safety) await safety.assertAllowed(tx, scope, doc); if (storage) await storage.assertKnown(tx, scope.uid, doc.id); }); return true; } catch { /* Unreviewed files grant no tool. */ }
       }
       return false;
     },
     async upload(scope: KnowledgeScope, id: string, file: File) {
       const digest = createHash('sha256').update(new Uint8Array(await file.arrayBuffer())).digest('hex');
-      const claimed = await change(scope, index => {
+      const claimed = await change(scope, async (index, tx) => {
         const prior = index.documents.find(d => d.id === id);
         if (prior) {
           if (prior.digest !== digest || prior.filename !== file.name) throw new KnowledgeError('This upload identifier already belongs to another document.', 409);
           return false;
         }
+        if (index.removing) throw new KnowledgeError('Wait for document removal to finish before uploading.', 409);
         if (index.storeUncertain) throw new KnowledgeError('An earlier index creation could not be confirmed. Provider cleanup must be checked before another upload.', 409);
         if (index.documents.some(d => d.digest === digest && d.status !== 'removing')) throw new KnowledgeError('This document is already in Knowledge.', 409);
         if (index.documents.length >= KNOWLEDGE_DOCUMENTS) throw new KnowledgeError(`Knowledge supports ${KNOWLEDGE_DOCUMENTS} documents per waveform in this version.`, 409);
         if (index.documents.some(d => d.status === 'uploading')) throw new KnowledgeError('Another document upload is still being confirmed. Refresh its status first.', 409);
+        if (storage) await storage.reserve(tx, scope.uid, id);
         index.documents.push({ id, filename: file.name, bytes: file.size, digest, fileId: null, checkedAt: now(),
           status: 'uploading', selected: false, createdAt: now(), message: 'Uploading…' });
         index.revision++;
         return true;
       });
       if (!claimed) return safeView(scope, await read(scope));
+      let stage: 'store' | 'upload' | 'attach' = 'store';
       try {
         let index = await read(scope);
         if (!index.storeId) {
@@ -97,9 +103,11 @@ export function createKnowledgeStore(database: VoiceDatabase, provider: Knowledg
           await change(scope, row => { row.storeId = storeId; row.storeUncertain = false; }, true);
           index = await read(scope);
         }
+        stage = 'upload';
         await change(scope, row => { row.documents.find(d => d.id === id)!.fileUncertain = true; }, true);
         const fileId = await provider.upload(file);
         await change(scope, row => { const doc = row.documents.find(d => d.id === id)!; doc.fileId = fileId; doc.fileUncertain = false; }, true);
+        stage = 'attach';
         await provider.attach(index.storeId!, fileId, id);
         // TXT originals may not be downloadable from the provider after ingestion.
         // Review the hash-bound upload bytes now, without persisting another copy.
@@ -111,9 +119,14 @@ export function createKnowledgeStore(database: VoiceDatabase, provider: Knowledg
           const doc = row.documents.find(d => d.id === id)!;
           doc.status = 'preparing'; doc.message = 'Preparing for questions…'; doc.checkedAt = 0; row.revision++;
         }, true);
-      } catch {
+      } catch (error) {
         await change(scope, row => {
           const doc = row.documents.find(d => d.id === id)!;
+          // Authorization refusal is proven rejection; network/5xx outcomes remain uncertain.
+          if (error instanceof KnowledgeProviderRefusal) {
+            if (stage === 'store') row.storeUncertain = false;
+            if (stage === 'upload') doc.fileUncertain = false;
+          }
           doc.status = 'failed'; doc.selected = false;
           doc.message = row.storeUncertain ? 'Index creation could not be confirmed. Provider reconciliation is required before another upload.'
             : doc.fileUncertain ? 'The stored-file identifier could not be confirmed. Provider reconciliation is required; this entry cannot be removed safely yet.'
@@ -145,8 +158,17 @@ export function createKnowledgeStore(database: VoiceDatabase, provider: Knowledg
           });
           continue;
         }
-        let status: 'preparing' | 'ready' | 'failed';
-        try { status = doc.status === 'preparing' ? index.storeId && doc.fileId ? await provider.status(index.storeId, doc.fileId) : 'failed' : 'ready'; }
+        let status: KnowledgeProviderStatus;
+        try {
+          const progress = doc.status === 'preparing' ? index.storeId && doc.fileId ? await provider.status(index.storeId, doc.fileId) : 'failed' : 'ready';
+          status = typeof progress === 'string' ? progress : progress.status;
+          if (storage && doc.status === 'preparing' && status !== 'preparing') {
+            if (typeof progress === 'string') throw new Error('Missing storage usage');
+            await change(scope, async (row, tx) => {
+              if (row.documents.some(d => d.id === doc.id && d.status !== 'removing')) await storage.report(tx, scope.uid, doc.id, progress.usageBytes);
+            });
+          }
+        }
         catch {
           if (now() - doc.createdAt < 10 * 60_000) continue;
           status = 'failed';
@@ -184,6 +206,7 @@ export function createKnowledgeStore(database: VoiceDatabase, provider: Knowledg
         const doc = row.documents.find(d => d.id === id);
         if (!doc || doc.status !== 'ready') throw new KnowledgeError('Only ready documents can be used.', 409);
         if (safety && selected) await safety.assertAllowed(tx, scope, doc);
+        if (storage && selected) await storage.assertKnown(tx, scope.uid, doc.id);
         if (doc.selected !== selected) { doc.selected = selected; row.revision++; }
       });
       return safeView(scope, await read(scope));
@@ -192,23 +215,32 @@ export function createKnowledgeStore(database: VoiceDatabase, provider: Knowledg
       const target = await change(scope, row => {
         const doc = row.documents.find(d => d.id === id);
         if (!doc) return null;
-        if (doc.fileUncertain) throw new KnowledgeError('The upload result is uncertain. Provider reconciliation is required before this entry can be removed.', 409);
+        if (row.removing && row.removing !== id) throw new KnowledgeError('Another document is being removed. Finish that removal first.', 409);
+        if (storage && row.storeUncertain || doc.fileUncertain) throw new KnowledgeError('The upload result is uncertain. Provider reconciliation is required before this entry can be removed.', 409);
         if (doc.status === 'uploading') throw new KnowledgeError('Wait for this upload to finish before removing it.', 409);
+        row.removing = id;
         doc.selected = false; doc.status = 'removing'; doc.message = 'Unavailable to the waveform. Removing stored file…'; row.revision++;
-        return { fileId: doc.fileId, storeId: row.storeId };
+        return { fileId: doc.fileId, storeId: row.storeId, last: row.documents.length === 1 };
       });
-      if (target?.fileId && target.storeId) {
-        try { await provider.remove(target.storeId, target.fileId); }
-        catch { throw new KnowledgeError('The document is disabled. Stored-file removal is not confirmed; use Remove to retry cleanup.', 503); }
-      }
-      await change(scope, row => { row.documents = row.documents.filter(d => d.id !== id); row.revision++; });
+      if (!target) return safeView(scope, await read(scope));
+      try {
+        if (target.fileId && target.storeId) await provider.remove(target.storeId, target.fileId);
+        if (target.last && target.storeId && provider.removeStore) await provider.removeStore(target.storeId);
+      } catch { throw new KnowledgeError('The document is disabled. Stored-file or index removal is not confirmed; use Remove to retry cleanup.', 503); }
+      await change(scope, async (row, tx) => {
+        if (row.removing !== id) return;
+        if (storage) await storage.release(tx, scope.uid, id);
+        row.documents = row.documents.filter(d => d.id !== id);
+        if (target.last && provider.removeStore && row.storeId === target.storeId) row.storeId = null;
+        delete row.removing; row.revision++;
+      }, true);
       return safeView(scope, await read(scope));
     },
     async search(scope: KnowledgeScope, query: string, signal?: AbortSignal): Promise<KnowledgeResult> {
       const index = await read(scope), selected = index.documents.filter(d => d.status === 'ready' && d.selected);
-      const docs = safety ? await database.transaction(async tx => {
+      const docs = safety || storage ? await database.transaction(async tx => {
         const allowed: StoredDocument[] = [];
-        for (const doc of selected) { try { await safety.assertAllowed(tx, scope, doc); allowed.push(doc); } catch { /* Exclude unreviewed legacy versions. */ } }
+        for (const doc of selected) { try { if (safety) await safety.assertAllowed(tx, scope, doc); if (storage) await storage.assertKnown(tx, scope.uid, doc.id); allowed.push(doc); } catch { /* Exclude unreviewed legacy versions. */ } }
         return allowed;
       }) : selected;
       if (selected.length && !docs.length) throw new KnowledgeError('Selected documents must pass their current safety review before search.', 409);
@@ -216,7 +248,7 @@ export function createKnowledgeStore(database: VoiceDatabase, provider: Knowledg
       const matches = await provider.search(index.storeId, docs.map(d => d.id), query, signal);
       // Re-check selection/revocation after the provider returns (including eventually consistent deletion).
       const current = await read(scope);
-      if (safety) await database.transaction(async tx => { for (const doc of docs) await safety.assertAllowed(tx, scope, doc); });
+      if (safety || storage) await database.transaction(async tx => { for (const doc of docs) { if (safety) await safety.assertAllowed(tx, scope, doc); if (storage) await storage.assertKnown(tx, scope.uid, doc.id); } });
       if (signal?.aborted || current.revision !== index.revision) throw new KnowledgeError('Knowledge changed during this search. Ask again using the current documents.', 409);
       const passages = matches.slice(0, 4).flatMap(match => {
         const doc = docs.find(d => d.fileId === match.fileId), quote = safeQuote(match.text);

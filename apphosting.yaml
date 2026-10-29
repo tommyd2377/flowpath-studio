@@ -43,7 +43,10 @@ env:
   - variable: FLOWPATH_TESTER_ALLOWANCE_PERIOD
     value: daily
     availability: [RUNTIME]
-  # Existing creation policy/budget; Knowledge ingestion and customer charging remain off.
+  # Owner-approved private Knowledge, $5/month estimated storage guard; customer charging stays off.
+  - variable: FLOWPATH_KNOWLEDGE_ENABLED
+    value: "1"
+    availability: [RUNTIME]
   - variable: FLOWPATH_CREATION_SAFETY_ENABLED
     value: "1"
     availability: [RUNTIME]

@@ -9,6 +9,8 @@ import { CreationSafetyError } from './creation-safety';
 import { curatedDemo } from './curated-demo-runtime';
 import { FRANKLIN_DEMO_ID, publicVoiceOwner } from './public-voice-identity';
 import { resolvePublishedPreview } from './published-preview';
+import { hostedKnowledgeConfigured } from './knowledge-config';
+import { createKnowledgeStorageBudget } from './knowledge-storage-budget';
 
 const fixtures = process.env.NODE_ENV === 'development' && process.env.FLOWPATH_ACCOUNT_MODE === 'local' && process.env.FLOWPATH_KNOWLEDGE_FIXTURES === '1';
 const shared = globalThis as typeof globalThis & { flowpathKnowledgeFixtures?: Map<string, string> };
@@ -22,8 +24,9 @@ function fixtureProvider(): KnowledgeProvider {
     remove: async (_storeId, fileId) => { files.delete(fileId); },
   };
 }
-// Local MVP only. Hosted activation needs explicit ingestion/storage funding and publication policy.
-const available = () => fixtures || !!localAppOrigin() && process.env.FLOWPATH_LIVE_ENABLED === '1' && !!process.env.OPENAI_API_KEY;
+// Explicit private hosted activation; public/published visitors never receive documents.
+const hosted = hostedKnowledgeConfigured(process.env);
+const available = () => fixtures || (!!localAppOrigin() || hosted) && process.env.FLOWPATH_LIVE_ENABLED === '1' && !!process.env.OPENAI_API_KEY;
 export const knowledgeStore = createKnowledgeStore(applicationDatabase(), fixtures ? fixtureProvider() : openAIKnowledgeProvider(() => process.env.OPENAI_API_KEY), Date.now, creationSafetyEnabled() ? {
   review: async (scope, doc, source) => {
     if (!scope.reviewIdentity || !doc.fileId) throw new CreationSafetyError('Sign in again to review this document.', 403);
@@ -33,8 +36,8 @@ export const knowledgeStore = createKnowledgeStore(applicationDatabase(), fixtur
     return (result.needsReview ? await store.runReview(result.record) : result.record).status;
   },
   assertAllowed: (tx, scope, doc) => creationReviewStore().requireAllowed(tx, scope.uid, knowledgeReviewCandidate(doc)).then(() => undefined),
-} : undefined);
-export const knowledgeServer = createKnowledgeServer({ store: knowledgeStore, available,
+} : undefined, hosted ? createKnowledgeStorageBudget() : undefined);
+export const knowledgeServer = createKnowledgeServer({ store: knowledgeStore, available, requireAdultConsent: hosted,
   publicOrigin: localAppOrigin() ? undefined : process.env.FLOWPATH_PUBLIC_ORIGIN,
   trustedProxyHost: process.env.FLOWPATH_TRUSTED_PROXY_HOST,
   scope: async request => {

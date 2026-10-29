@@ -1,10 +1,10 @@
 import { isAllowedRequest } from './request-origin';
 import { readBody } from './account-server';
 import type { KnowledgeScope, KnowledgeStore } from './knowledge-store';
-import { KnowledgeError, KNOWLEDGE_FILE_BYTES, knowledgeFilename, knowledgeId } from './knowledge-model';
+import { KnowledgeError, type KnowledgeView, KNOWLEDGE_FILE_BYTES, knowledgeFilename, knowledgeId } from './knowledge-model';
 
 type Options = { store: KnowledgeStore; scope(request: Request): Promise<KnowledgeScope | null>; available(): boolean;
-  publicOrigin?: string; trustedProxyHost?: string };
+  requireAdultConsent?: boolean; publicOrigin?: string; trustedProxyHost?: string };
 const json = (body: object, status = 200) => Response.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
 
 async function uploadBody(request: Request) {
@@ -48,30 +48,32 @@ export function createKnowledgeServer(options: Options) {
       return await work(request, scope);
     } catch (error) { return json({ error: error instanceof KnowledgeError ? error.message : 'Knowledge is temporarily unavailable.' }, error instanceof KnowledgeError ? error.status : 503); }
   };
+  const present = (view: KnowledgeView) => ({ ...view, requiresAdultConsent: options.requireAdultConsent === true });
   const requireAvailable = () => { if (!options.available()) throw new KnowledgeError('Knowledge is not enabled on this server.', 503); };
   return {
-    GET: handle(async (_request, scope) => json(await options.store.view(scope, options.available()))),
+    GET: handle(async (_request, scope) => json(present(await options.store.view(scope, options.available())))),
     POST: handle(async (request, scope) => {
       requireAvailable();
+      if (options.requireAdultConsent && request.headers.get('X-FlowPath-Adult') !== '1') throw new KnowledgeError('Confirm you are at least 18 before uploading documents.', 403);
       const id = request.headers.get('X-FlowPath-Upload');
       if (!knowledgeId(id)) throw new KnowledgeError('A valid upload identifier is required.');
-      return json(await options.store.upload(scope, id, await uploadBody(request)), 202);
+      return json(present(await options.store.upload(scope, id, await uploadBody(request))), 202);
     }),
     PATCH: handle(async (request, scope) => {
       const body = await readBody(request);
       if (Object.keys(body).length !== 2 || !knowledgeId(body.id) || typeof body.selected !== 'boolean') throw new KnowledgeError('Choose a ready document.');
-      return json(await options.store.select(scope, body.id, body.selected));
+      return json(present(await options.store.select(scope, body.id, body.selected)));
     }),
     DELETE: handle(async (request, scope) => {
       const body = await readBody(request);
       if (Object.keys(body).length !== 1 || !knowledgeId(body.id)) throw new KnowledgeError('Choose a document to remove.');
-      return json(await options.store.remove(scope, body.id));
+      return json(present(await options.store.remove(scope, body.id)));
     }),
     refresh: handle(async (request, scope) => {
       requireAvailable();
       const body = request.headers.get('content-type')?.includes('application/json') ? await readBody(request) : {};
       if (Object.keys(body).some(key => key !== 'reviewExisting') || body.reviewExisting !== undefined && typeof body.reviewExisting !== 'boolean') throw new KnowledgeError('Invalid refresh request.');
-      return json(await options.store.refresh(scope, body.reviewExisting === true));
+      return json(present(await options.store.refresh(scope, body.reviewExisting === true)));
     }),
     search: handle(async (request, scope) => {
       requireAvailable();

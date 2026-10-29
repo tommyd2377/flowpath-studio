@@ -19,6 +19,7 @@ export default function KnowledgeSettings() {
   const busy = busyAction !== null;
   const [error, setError] = useState(''), [message, setMessage] = useState('');
   const [query, setQuery] = useState(''), [result, setResult] = useState<KnowledgeResult | null>(null);
+  const [adult, setAdult] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const generation = useRef(0), revision = useRef(-1);
   const accept = useCallback((next: KnowledgeView, expected: number) => {
@@ -28,7 +29,7 @@ export default function KnowledgeSettings() {
   useEffect(() => {
     const load = () => {
       const expected = ++generation.current;
-      revision.current = -1; setView(null); setResult(null); setQuery(''); setError(''); setMessage(''); setBusyAction(null); setLoading(true);
+      revision.current = -1; setView(null); setResult(null); setQuery(''); setError(''); setMessage(''); setBusyAction(null); setAdult(false); setLoading(true);
       void fetch('/api/knowledge', { cache: 'no-store' }).then(read<KnowledgeView>).then(next => accept(next, expected))
         .catch(e => { if (generation.current === expected) setError(e.message); })
         .finally(() => { if (generation.current === expected) setLoading(false); });
@@ -64,7 +65,7 @@ export default function KnowledgeSettings() {
     event.preventDefault();
     const file = fileInput.current?.files?.[0]; if (!file) return;
     const form = new FormData(); form.set('file', file);
-    await mutation(() => fetch('/api/knowledge', { method: 'POST', headers: { 'X-FlowPath-Upload': crypto.randomUUID() }, body: form })
+    await mutation(() => fetch('/api/knowledge', { method: 'POST', headers: { ...(adult ? { 'X-FlowPath-Adult': '1' } : {}), 'X-FlowPath-Upload': crypto.randomUUID() }, body: form })
       .then(read<KnowledgeView>), 'Uploaded. We’re preparing it for questions. You can keep editing your waveform.');
     if (fileInput.current) fileInput.current.value = '';
   }
@@ -88,14 +89,16 @@ export default function KnowledgeSettings() {
     {error && <p className="account-error" role="alert">{error}</p>}
     {message && <p className="account-status" role="status">{message}</p>}
     {view && <>
+      {view.storage && <p className="field-help" role="status">Platform document-storage estimate: ${(view.storage.estimatedMonthlyMicroUsd / 1_000_000).toFixed(2)} / ${(view.storage.budgetMicroUsd / 1_000_000).toFixed(2)} per month. Includes temporary indexing reservations, without assuming free storage. {view.storage.estimatedMonthlyMicroUsd >= view.storage.budgetMicroUsd * .8 ? 'Storage is approaching its budget. ' : ''}{!view.storage.uploadCapacityAvailable ? 'New uploads need indexing to finish or storage to be freed. ' : ''}This estimates document storage, not your total API bill.</p>}
       <form className="knowledge-upload" onSubmit={event => void upload(event)}>
+        {view.requiresAdultConsent && <label className="knowledge-consent"><input type="checkbox" required checked={adult} disabled={busy} onChange={event => setAdult(event.target.checked)} /> I am at least 18 and have permission to upload these documents.</label>}
         <Upload aria-hidden="true" /><label htmlFor="knowledge-file">Add a document</label>
         <input ref={fileInput} id="knowledge-file" type="file" accept=".pdf,.docx,.txt" required disabled={busy || !view.available} aria-describedby="knowledge-upload-help" />
         <button className="primary-button" disabled={busy || !view.available} aria-busy={busyAction === 'upload'}>{busyAction === 'upload' && <BrandLoader variant="inline" />}{busyAction === 'upload' ? 'Uploading…' : 'Upload document'}</button>
         <p id="knowledge-upload-help" className="field-help">PDF, DOCX or UTF-8 TXT · 10 MB each · up to 20 documents. Use text-based files; scanned images may not be readable.</p>
       </form>
       {!view.available && <p role="status">Knowledge needs the configured document service enabled on this server.</p>}
-      <p className="field-help">Documents are processed and stored by OpenAI using this app’s configured account. Processing and storage can incur API costs. Remove a document to delete its stored file. This version keeps Knowledge private to you; published visitor links do not receive it.</p>
+      <p className="field-help">Documents are processed and stored by OpenAI using this app’s configured account. Processing and storage can incur API costs. Files stay until you remove them. Remove a document to delete its stored file and search copy. This version keeps Knowledge private to you; published visitor links do not receive it.</p>
       <div className="knowledge-library" aria-label="Knowledge documents">
         {!view.documents.length && <div className="knowledge-empty"><FileText aria-hidden="true" /><p>Your knowledge library starts here.</p><span>Ready documents become available in your next conversation.</span></div>}
         {view.documents.map(doc => <article className="knowledge-document" key={doc.id}>

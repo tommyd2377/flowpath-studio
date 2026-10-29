@@ -87,7 +87,7 @@ October 26 local-testing exception: `localTestingVoicePolicy` can mark validated
 
 ## First text panel: implemented local interface
 
-Knowledge follow-up: private document retrieval now pairs with the Text Box without changing its saved v2 schema. See [Knowledge](../knowledge.md) for local-only activation, provider retention and the separate future public-document review/funding gate.
+Knowledge follow-up: private document retrieval pairs with Text Box without changing its saved v2 schema. The October 29 hosted candidate adds strict activation, adult upload confirmation and the separate transactional estimated storage guard; see [hosted Knowledge](../hosted-knowledge.md). See [Knowledge](../knowledge.md) for local-only activation, provider retention and the separate future public-document review/funding gate.
 
 October 26 user-approved extension: `{ type: 'text', version: 2 }` enables the interactive Text Box through the waveform settings plugin dropdown. It contains no saved visitor text. The server registers its narrow `update_text_box` function only from authenticated saved configuration; GPT-6 Luna is the default delegation model. `live-text-session.ts` holds each conversation's dictation and edits in tab memory, with Stop/Clear/Undo/Copy and stale-event protection. Its output/acknowledgments have no financial authority. See [Text Box](../text-panel.md) for event, retention and timing details.
 
