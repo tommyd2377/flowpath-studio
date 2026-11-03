@@ -416,3 +416,18 @@ test('a failed or incomplete reasoning response closes cleanly without an automa
     assert.equal((await server.DELETE(request('DELETE', { sessionId }))).status, 200);
   }
 });
+
+test('Visual Display registration comes only from the authorized selected saved waveform snapshot', async () => {
+  const { visualFixture } = await import('./visual-display-fixture');
+  const visualDisplay = await visualFixture(), waveformId = randomUUID();
+  const { server, calls } = harness({ resolveWaveform: async (req, id) => req.headers.get('x-test-owner') === 'owner-a' && id === waveformId
+    ? { ownerUid: 'owner-a', waveform: { name: 'Picture guide', initialPrompt: 'Friendly.', visualDisplay }, isCurrent: () => true } : null });
+  assert.equal((await server.POST(request('POST', { sessionId: randomUUID(), sdp, visualDisplay }))).status, 400);
+  assert.equal(calls.length, 0);
+  const sessionId = randomUUID();
+  assert.equal((await server.POST(privateRequest('POST', waveformId, { sessionId, sdp }))).status, 201);
+  const config = JSON.parse(String(calls.at(-1)!.options.body)).session;
+  assert.deepEqual(config.delegation.responses.tools.map((t: { name: string }) => t.name), ['update_visual_display']);
+  assert.equal(JSON.stringify(config).includes(visualDisplay.images[0].src), false);
+  assert.equal((await server.DELETE(privateRequest('DELETE', waveformId, { sessionId }))).status, 200);
+});

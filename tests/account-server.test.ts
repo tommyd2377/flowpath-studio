@@ -89,7 +89,7 @@ test('one saved waveform stays private to its verified owner and keeps its stabl
   assert.equal((await server.waveformGET(request('waveform'))).status, 401);
   assert.equal((await server.waveformPUT(request('waveform', 'PUT', input))).status, 401);
   const ownerA = await signIn();
-  assert.deepEqual(await (await server.waveformGET(request('waveform', 'GET', undefined, ownerA))).json(), { waveform: null });
+  assert.deepEqual(await (await server.waveformGET(request('waveform', 'GET', undefined, ownerA))).json(), { waveform: null, waveforms: [], limit: 10 });
   const saved = (await (await server.waveformPUT(request('waveform', 'PUT', input, ownerA))).json()).waveform as Waveform;
   assert.match(saved.id, /^[0-9a-f-]{36}$/);
   assert.deepEqual({ name: saved.name, initialPrompt: saved.initialPrompt }, input);
@@ -97,7 +97,7 @@ test('one saved waveform stays private to its verified owner and keeps its stabl
   const edited = (await (await server.waveformPUT(request('waveform', 'PUT', { ...input, name: 'Updated waveform' }, ownerA))).json()).waveform;
   assert.equal(edited.id, saved.id);
   const ownerB = await signIn('owner-b');
-  assert.deepEqual(await (await server.waveformGET(request('waveform', 'GET', undefined, ownerB))).json(), { waveform: null });
+  assert.deepEqual(await (await server.waveformGET(request('waveform', 'GET', undefined, ownerB))).json(), { waveform: null, waveforms: [], limit: 10 });
   assert.equal((await server.waveformGET(request(`waveform?id=${saved.id}`, 'GET', undefined, ownerB))).status, 404);
   assert.equal(await server.resolveVoiceWaveform(request('session', 'GET', undefined, ownerB), saved.id), null);
   const resolved = await server.resolveVoiceWaveform(request('session', 'GET', undefined, ownerA), saved.id);
@@ -143,7 +143,7 @@ test('synthetic prompts persist across sign-out and a fresh server without retai
   assert.equal(await fresh.resolveOwner(request('account', 'GET', undefined, cookie)), null);
   const login = await fresh.accountPOST(request('account', 'POST', { localAccount: 'owner-a' }));
   const nextCookie = login.headers.get('set-cookie')!.split(';')[0];
-  assert.deepEqual(await (await fresh.waveformGET(request('waveform', 'GET', undefined, nextCookie))).json(), { waveform });
+  assert.deepEqual(await (await fresh.waveformGET(request('waveform', 'GET', undefined, nextCookie))).json(), { waveform, waveforms: [{ id: waveform.id, name: waveform.name }], limit: 10 });
 });
 
 test('simultaneous first saves create one stable waveform rather than duplicate documents', async t => {
@@ -180,7 +180,7 @@ test('prompt validation rejects oversized bodies, owner fields, invalid content 
   assert.equal((await server.waveformGET(request('waveform?id=a&id=b', 'GET', undefined, cookie))).status, 400);
   assert.equal((await server.waveformPUT(request('waveform', 'PUT', input, cookie, { 'content-type': 'text/plain' }))).status, 400);
   assert.equal((await server.waveformPUT(request('waveform', 'PUT', input, cookie, { 'content-length': '999999' }))).status, 400);
-  assert.deepEqual(await (await server.waveformGET(request('waveform', 'GET', undefined, cookie))).json(), { waveform: null });
+  assert.deepEqual(await (await server.waveformGET(request('waveform', 'GET', undefined, cookie))).json(), { waveform: null, waveforms: [], limit: 10 });
 });
 
 test('a saved voice survives reload and changing it preserves waveform identity and prompt', async t => {
@@ -268,7 +268,7 @@ test('appearance rejects remote, executable, corrupt, animated, oversized and mi
     { profilePhoto: 'data:image/webp;base64,' + animation.toString('base64') },
     { profilePhoto: 'data:image/png;base64,abcd===' }, { profilePhoto: false },
   ]) assert.equal((await server.waveformPUT(request('waveform', 'PUT', { ...input, ...fields }, cookie))).status, 400);
-  assert.deepEqual(await (await server.waveformGET(request('waveform', 'GET', undefined, cookie))).json(), { waveform: null });
+  assert.deepEqual(await (await server.waveformGET(request('waveform', 'GET', undefined, cookie))).json(), { waveform: null, waveforms: [], limit: 10 });
 });
 
 test('expired local sessions cannot read or overwrite the saved prompt', async t => {
@@ -335,7 +335,7 @@ test('a delayed settings save cannot write after its account signs out', async t
   complete();
   assert.equal((await save).status, 401);
   const nextCookie = await signIn();
-  assert.deepEqual(await (await server.waveformGET(request('waveform', 'GET', undefined, nextCookie))).json(), { waveform: null });
+  assert.deepEqual(await (await server.waveformGET(request('waveform', 'GET', undefined, nextCookie))).json(), { waveform: null, waveforms: [], limit: 10 });
 });
 
 test('Firebase adapter verifies server cookies and derives document ownership from that verification', async t => {
@@ -425,4 +425,79 @@ test('a full-length multibyte prompt and a permitted photo fit the settings requ
   const saved = (await response.json()).waveform;
   assert.equal(saved.initialPrompt, body.initialPrompt);
   assert.match(saved.profilePhoto, /^data:image\/webp;base64,/);
+});
+
+test('ordinary local owners create independent waveforms, preserve legacy links, and reject an eleventh concurrent save', async t => {
+  const { server, signIn, directory } = await harness(t);
+  const cookie = await signIn();
+  const id = randomUUID();
+  const legacy = { id, name: 'Legacy', initialPrompt: 'Legacy instructions.', updatedAt: new Date().toISOString() };
+  const file = join(directory, `${createHash('sha256').update('local-owner-a').digest('hex')}.json`);
+  await writeFile(file, JSON.stringify(legacy));
+  await server.waveformGET(request(`waveform?id=${id}`, 'GET', undefined, cookie));
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), legacy);
+  const replies = await Promise.all(Array.from({ length: 11 }, (_, i) => server.waveformPUT(request(`waveform?id=${randomUUID()}`, 'POST', { ...input, name: `New ${i}` }, cookie), true)));
+  assert.equal(replies.filter(r => r.status === 200).length, 9);
+  assert.equal(replies.filter(r => r.status === 409).length, 2);
+  const list = await (await server.waveformGET(request('waveform', 'GET', undefined, cookie))).json();
+  const other = list.waveforms[1];
+  const changed = { ...input, name: 'Independent', voice: 'meridian', accentColor: '#e25555', textPanel: { type: 'text', version: 2 } };
+  assert.equal((await server.waveformPUT(request(`waveform?id=${other.id}`, 'PUT', changed, cookie))).status, 200);
+  assert.equal((await server.resolveVoiceWaveform(request('session', 'GET', undefined, cookie), other.id))?.waveform.voice, 'meridian');
+  assert.equal((await server.resolveVoiceWaveform(request('session', 'GET', undefined, cookie), id))?.waveform.initialPrompt, legacy.initialPrompt);
+  const cookieB = await signIn('owner-b');
+  assert.equal((await server.waveformGET(request(`waveform?id=${other.id}`, 'GET', undefined, cookieB))).status, 404);
+  assert.equal((await server.waveformPUT(request(`waveform?id=${other.id}`, 'PUT', input, cookieB))).status, 404);
+  assert.equal(await server.resolveVoiceWaveform(request('session', 'DELETE', undefined, cookieB), other.id), null);
+});
+
+test('new-draft nonces cannot claim another owner’s stable ID and repeated creation is idempotently rejected', async t => {
+  const { server, signIn } = await harness(t);
+  const a = await signIn(), b = await signIn('owner-b'), nonce = randomUUID();
+  const create = (cookie: string) => server.waveformPUT(request(`waveform?id=${nonce}`, 'POST', input, cookie), true);
+  const wa = (await (await create(a)).json()).waveform;
+  const wb = (await (await create(b)).json()).waveform;
+  assert.notEqual(wa.id, wb.id); assert.notEqual(wa.id, nonce);
+  const { validWaveformId } = await import('../lib/paid-model');
+  assert.equal(validWaveformId(wa.id), true); assert.equal(validWaveformId(wb.id), true);
+  assert.equal((await create(a)).status, 409);
+  assert.equal((await (await server.waveformGET(request('waveform', 'GET', undefined, a))).json()).waveforms.length, 1);
+});
+
+test('founder testing follows the account across current and new waveforms without granting ordinary owners authority', async t => {
+  const { server, signIn } = await harness(t, { safetyAdminFixture: true });
+  const cookie = await signIn('owner-admin');
+  const first = (await (await server.waveformPUT(request('waveform', 'PUT', { ...input, adminTesting: true }, cookie))).json()).waveform;
+  const second = (await (await server.waveformPUT(request(`waveform?id=${randomUUID()}`, 'POST', input, cookie), true)).json()).waveform;
+  assert.equal((await server.resolveAdmin(request(`session?waveformId=${first.id}`, 'GET', undefined, cookie)))?.testing, true);
+  assert.equal((await server.resolveAdmin(request(`session?waveformId=${second.id}`, 'GET', undefined, cookie)))?.testing, true);
+  assert.equal((await server.waveformPUT(request(`waveform?id=${second.id}`, 'PUT', { ...input, adminTesting: false }, cookie))).status, 200);
+  for (const id of [first.id, second.id]) assert.equal((await server.resolveAdmin(request(`session?waveformId=${id}`, 'GET', undefined, cookie)))?.testing, false);
+  assert.equal((await server.waveformPUT(request(`waveform?id=${first.id}`, 'PUT', { ...input, adminTesting: true }, cookie))).status, 200);
+  const third = (await (await server.waveformPUT(request(`waveform?id=${randomUUID()}`, 'POST', input, cookie), true)).json()).waveform;
+  for (const id of [first.id, second.id, third.id]) assert.equal((await server.resolveAdmin(request(`session?waveformId=${id}`, 'GET', undefined, cookie)))?.testing, true);
+  const ordinary = await signIn('owner-a');
+  assert.equal(await server.resolveAdmin(request(`session?waveformId=${first.id}`, 'GET', undefined, ordinary)), null);
+});
+
+test('Visual Display saves normalized assets per waveform and never exposes another owner or sibling assets', async t => {
+  const { visualFixture } = await import('./visual-display-fixture');
+  const visualDisplay = await visualFixture();
+  const f = await harness(t), cookie = await f.signIn();
+  const first = await f.server.waveformPUT(request('waveform', 'PUT', { ...input, visualDisplay }, cookie));
+  assert.equal(first.status, 200);
+  const a = (await first.json()).waveform as Waveform;
+  assert.match(a.visualDisplay!.images[0].src, /^data:image\/webp;base64,/);
+  const second = await f.server.waveformPUT(request(`waveform?id=${randomUUID()}`, 'POST', { ...input, name: 'Second', visualDisplay: null }, cookie), true);
+  assert.equal(second.status, 200); const b = (await second.json()).waveform as Waveform;
+  assert.equal(b.visualDisplay, null);
+  const aView = await (await f.server.waveformGET(request(`waveform?id=${a.id}`, 'GET', undefined, cookie))).json();
+  assert.deepEqual(aView.waveform.visualDisplay, a.visualDisplay);
+  assert.equal(JSON.stringify(aView.waveforms).includes('src'), false, 'list projection contains only IDs and names');
+  const other = await f.signIn('owner-b');
+  assert.equal((await f.server.waveformGET(request(`waveform?id=${a.id}`, 'GET', undefined, other))).status, 404);
+  assert.equal((await f.server.waveformPUT(request(`waveform?id=${a.id}`, 'PUT', { ...input, visualDisplay }, other))).status, 404);
+  const bad = { ...visualDisplay, images: [{ ...visualDisplay.images[0], src: 'data:image/png;base64,iVBORw0KGgo=' }] };
+  assert.equal((await f.server.waveformPUT(request(`waveform?id=${a.id}`, 'PUT', { ...input, visualDisplay: bad }, cookie))).status, 400);
+  assert.deepEqual((await (await f.server.waveformGET(request(`waveform?id=${a.id}`, 'GET', undefined, cookie))).json()).waveform.visualDisplay, a.visualDisplay);
 });

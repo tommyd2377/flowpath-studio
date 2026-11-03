@@ -1,12 +1,13 @@
-import { readBody, type createAccountServer } from './account-server';
+import { creationWaveformId, readBody, type createAccountServer } from './account-server';
 import { canonicalCreationCandidate, CreationSafetyError, type CanonicalCreationCandidate } from './creation-safety';
-import type { CreationReviewRecord, CreationReviewStore } from './creation-review';
+import { RejectedCreationItem, type CreationReviewRecord, type CreationReviewStore } from './creation-review';
 import type { CreationIdentity } from './creation-runtime';
 import { accountSessionId } from './production-account-session';
 import { isAllowedRequest } from './request-origin';
 
 type Options = { accounts: Pick<ReturnType<typeof createAccountServer>, 'resolveIdentity'>; enabled(): boolean;
   store(identity: CreationIdentity): CreationReviewStore; publicOrigin?: string; trustedProxyHost?: string;
+  waveformId?(request: Request): Promise<string | undefined>;
   prepare?(request: Request, candidate: CanonicalCreationCandidate): Promise<CanonicalCreationCandidate>;
   file?(record: CreationReviewRecord): Promise<Response> };
 const json = (data: object, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'private, no-store', Vary: 'Cookie' } });
@@ -18,9 +19,9 @@ export function createCreationApi(options: Options) {
     if (!isAllowedRequest(request, request.method !== 'GET', options.publicOrigin, options.trustedProxyHost)) throw new CreationSafetyError('Only same-origin requests are allowed.', 403);
     const identity = await options.accounts.resolveIdentity(request);
     if (!identity || !await identity.isCurrent() || admin && identity.owner.role !== 'admin') throw new CreationSafetyError(admin ? 'Admin access is required.' : 'Sign in to continue.', 403);
-    return { store: options.store(identity), actor: { uid: identity.owner.uid, accountSessionId: identity.accountSessionId ?? accountSessionId(identity.cookie) } };
+    return { store: options.store(identity), actor: { waveformId: creationWaveformId(request, identity.owner.uid) ?? await options.waveformId?.(request), uid: identity.owner.uid, accountSessionId: identity.accountSessionId ?? accountSessionId(identity.cookie) } };
   }
-  const failure = (error: unknown) => json({ error: error instanceof CreationSafetyError ? error.message : 'Safety review is unavailable.' }, error instanceof CreationSafetyError ? error.status : 503);
+  const failure = (error: unknown) => json({ ...(error instanceof RejectedCreationItem ? { code: 'rejected-item' } : {}), error: error instanceof CreationSafetyError ? error.message : 'Safety review is unavailable.' }, error instanceof CreationSafetyError ? error.status : 503);
   return {
     async GET(request: Request) {
       if (!options.enabled()) return json({ enabled: false, review: null });
@@ -30,7 +31,7 @@ export function createCreationApi(options: Options) {
     async POST(request: Request) {
       try {
         const { store, actor } = await authority(request);
-        const body = await readBody(request, 256 * 1024);
+        const body = await readBody(request, 512 * 1024);
         if (Object.keys(body).length !== 1 || !Object.hasOwn(body, 'candidate')) throw new CreationSafetyError('Invalid review request.', 400);
         let candidate = canonicalCreationCandidate(body.candidate);
         if (candidate.document) throw new CreationSafetyError('Documents must be reviewed through their authorized Knowledge upload.', 400);
@@ -47,7 +48,9 @@ export function createCreationApi(options: Options) {
       try {
         const { store, actor } = await authority(request, true);
         const body = await readBody(request);
-        if (Object.keys(body).sort().join(',') !== 'decision,digest,ownerUid,policyDigest,policyVersion,reviewId') throw new CreationSafetyError('Invalid decision request.', 400);
+        if (!['decision,digest,ownerUid,policyDigest,policyVersion,reviewId',
+          'decision,digest,item,ownerUid,policyDigest,policyVersion,reviewId'].includes(Object.keys(body).sort().join(','))
+          || ('item' in body && (typeof body.item !== 'string' || body.item.length > 70))) throw new CreationSafetyError('Invalid decision request.', 400);
         const record = await store.decide(actor, body as unknown as Parameters<CreationReviewStore['decide']>[1]);
         return json({ review: view(record) });
       } catch (error) { return failure(error); }

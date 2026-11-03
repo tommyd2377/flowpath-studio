@@ -7,9 +7,11 @@ import { configuredPublicOrigin, isAllowedRequest } from './request-origin';
 import { AccountSessionInactiveError, accountSessionId, type DurableAccountSessions } from './production-account-session';
 import { BetaAccessRequiredError } from './membership';
 import { validateTextPanelConfiguration } from './text-panel';
+import { validateVisualDisplay } from './visual-display';
+import { normalizeVisualDisplay } from './visual-display-images';
 import { CreationSafetyError } from './creation-safety';
 import {
-  WAVEFORM_DEFAULT_COLOR, WAVEFORM_NAME_LIMIT, WAVEFORM_PROMPT_LIMIT,
+  WAVEFORM_DEFAULT_COLOR, WAVEFORM_NAME_LIMIT, WAVEFORM_PROMPT_LIMIT, WAVEFORMS_PER_OWNER,
   type AccountMode, type AccountUser, type FirebasePublicConfig, type Waveform, type WaveformInput,
 } from './account-model';
 
@@ -20,8 +22,9 @@ export type FirebaseAccountAdapter = {
   signIn(idToken: string, demoGrant?: string): Promise<{ user: AccountUser; cookie: string }>;
   authenticate(cookie: string): Promise<AccountUser | null>;
   sessions?: DurableAccountSessions;
-  readWaveform(uid: string): Promise<Waveform | null>;
-  saveWaveform(uid: string, input: WaveformInput, accountSessionId?: string): Promise<Waveform>;
+  readWaveform(uid: string, id?: string): Promise<Waveform | null>;
+  listWaveforms?(uid: string): Promise<Waveform[]>;
+  saveWaveform(uid: string, input: WaveformInput, accountSessionId?: string, id?: string, create?: boolean): Promise<Waveform>;
 };
 
 type Options = {
@@ -89,7 +92,7 @@ export async function readBody(request: Request, maxBytes = 20_000) {
 }
 
 function waveformInput(value: Record<string, unknown>): WaveformInput | null {
-  if (Object.keys(value).some(key => !['name', 'initialPrompt', 'voice', 'accentColor', 'profilePhoto', 'adminTesting', 'textPanel'].includes(key))
+  if (Object.keys(value).some(key => !['name', 'initialPrompt', 'voice', 'accentColor', 'profilePhoto', 'adminTesting', 'textPanel', 'visualDisplay'].includes(key))
     || typeof value.name !== 'string' || typeof value.initialPrompt !== 'string'
     || value.adminTesting !== undefined && typeof value.adminTesting !== 'boolean') return null;
   const voice = value.voice === undefined ? DEFAULT_VOICE : value.voice;
@@ -101,12 +104,14 @@ function waveformInput(value: Record<string, unknown>): WaveformInput | null {
   const name = value.name.trim();
   const initialPrompt = value.initialPrompt.trim();
   const textPanel = validateTextPanelConfiguration(value.textPanel);
-  if (!textPanel.ok) return null;
+  const visualDisplay = validateVisualDisplay(value.visualDisplay);
+  if (!textPanel.ok || !visualDisplay.ok) return null;
   if (!name || name.length > WAVEFORM_NAME_LIMIT || /[\u0000-\u001f\u007f]/.test(name)
     || !initialPrompt || initialPrompt.length > WAVEFORM_PROMPT_LIMIT
     || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(initialPrompt)) return null;
   return { name, initialPrompt, voice, accentColor: accentColor.toLowerCase(), profilePhoto,
     ...(value.textPanel !== undefined ? { textPanel: textPanel.value } : {}),
+    ...(value.visualDisplay !== undefined ? { visualDisplay: visualDisplay.value } : {}),
     ...(value.adminTesting !== undefined ? { adminTesting: value.adminTesting as boolean } : {}) };
 }
 
@@ -118,43 +123,81 @@ export function waveformRecord(value: unknown): Waveform | null {
     name: row.name, initialPrompt: row.initialPrompt, voice: row.voice,
     accentColor: row.accentColor, profilePhoto: row.profilePhoto,
     adminTesting: row.adminTesting,
-    textPanel: row.textPanel,
+    textPanel: row.textPanel, visualDisplay: row.visualDisplay,
   });
   return input ? { id: row.id, ...input, updatedAt: row.updatedAt } : null;
 }
+
+export class WaveformStoreError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+export function requestWaveformId(request: Request) {
+  const query = new URL(request.url).searchParams;
+  const values = [...query.getAll('id'), ...query.getAll('waveformId')];
+  if (values.length > 1 || values.length === 1 && !/^[0-9a-f-]{36}$/.test(values[0])) {
+    throw new WaveformStoreError('Invalid waveform request.', 400);
+  }
+  return values[0];
+}
+/** A browser's new-draft nonce cannot claim another owner's stable URL. */
+export function creationWaveformId(request: Request, uid: string) {
+  const id = requestWaveformId(request), query = new URL(request.url).searchParams;
+  if (query.getAll('create').length > 1 || query.has('create') && query.get('create') !== '1') throw new WaveformStoreError('Invalid creation request.', 400);
+  const creating = query.get('create') === '1' || request.method === 'POST' && new URL(request.url).pathname === '/api/waveform';
+  if (!id || !creating) return id;
+  const hex = createHash('sha256').update(JSON.stringify([uid, id])).digest('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+export function waveformSelection(waveforms: Waveform[], id?: string) {
+  return (id === undefined ? waveforms[0] : waveforms.find(w => w.id === id)) ?? null;
+}
+
+/** Legacy first-waveform preferences remain readable without rewriting saved content. */
+export function accountTestingPreference(metadata: Record<string, unknown> | null | undefined, first: Waveform | null) {
+  const value = metadata?.adminTesting !== undefined ? metadata.adminTesting : first?.adminTesting;
+  if (value !== undefined && typeof value !== 'boolean') throw new Error('Invalid account testing preference');
+  return value;
+}
+export const withAccountTesting = (waveform: Waveform, testing: boolean | undefined): Waveform =>
+  testing === undefined ? waveform : { ...waveform, adminTesting: testing };
 
 /** Dedicated synthetic fixtures only. Never reads Studio's private data directory. */
 export function createLocalWaveformStore(directory: string, now: () => number = Date.now) {
   let pending = Promise.resolve();
   const pathFor = (uid: string) => join(directory, `${createHash('sha256').update(uid).digest('hex')}.json`);
-
-  async function read(uid: string) {
+  async function read(uid: string): Promise<{ waveforms: Waveform[]; adminTesting?: boolean }> {
     try {
-      const parsed = waveformRecord(JSON.parse(await readFile(pathFor(uid), 'utf8')));
-      if (!parsed) throw new Error('Invalid saved waveform');
-      return parsed;
+      const value = JSON.parse(await readFile(pathFor(uid), 'utf8'));
+      const rows: unknown[] = Array.isArray(value.waveforms) ? value.waveforms : [value];
+      const parsed = rows.map(waveformRecord);
+      if (parsed.some(w => !w) || parsed.length > WAVEFORMS_PER_OWNER
+        || new Set(parsed.map(w => w!.id)).size !== parsed.length) throw new Error('Invalid saved waveforms');
+      return { waveforms: parsed as Waveform[], adminTesting: accountTestingPreference(value, parsed[0]) };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { waveforms: [] };
       throw error;
     }
   }
-
   return {
-    async readWaveform(uid: string) { await pending; return read(uid); },
-    async saveWaveform(uid: string, input: WaveformInput) {
+    async listWaveforms(uid: string) { await pending; const saved = await read(uid); return saved.waveforms.map(w => withAccountTesting(w, saved.adminTesting)); },
+    async readWaveform(uid: string, id?: string) { await pending; const saved = await read(uid), waveform = waveformSelection(saved.waveforms, id); return waveform ? withAccountTesting(waveform, saved.adminTesting) : null; },
+    async saveWaveform(uid: string, input: WaveformInput, _session?: string, id?: string, create = false) {
       const save = pending.then(async () => {
-        const existing = await read(uid);
-        const waveform: Waveform = {
-          id: existing?.id ?? randomUUID(), ...input, updatedAt: new Date(now()).toISOString(),
-        };
+        const saved = await read(uid), rows = saved.waveforms;
+        const adminTesting = input.adminTesting ?? saved.adminTesting;
+        const existing = create ? null : waveformSelection(rows, id);
+        if (!create && id && !existing) throw new WaveformStoreError('This waveform is unavailable.', 404);
+        if (create && id && rows.some(w => w.id === id)) throw new WaveformStoreError('This waveform already exists.', 409);
+        if (!existing && rows.length >= WAVEFORMS_PER_OWNER) throw new WaveformStoreError(`You can save up to ${WAVEFORMS_PER_OWNER} waveforms.`, 409);
+        const waveform: Waveform = { id: existing?.id ?? id ?? randomUUID(), ...input, updatedAt: new Date(now()).toISOString() };
+        const next = existing ? rows.map(w => w.id === existing.id ? waveform : w) : [...rows, waveform];
         await mkdir(directory, { recursive: true, mode: 0o700 });
-        const target = pathFor(uid);
-        const temporary = `${target}.${randomUUID()}.tmp`;
+        const target = pathFor(uid), temporary = `${target}.${randomUUID()}.tmp`;
         try {
-          await writeFile(temporary, JSON.stringify(waveform), { flag: 'wx', mode: 0o600 });
+          await writeFile(temporary, JSON.stringify({ waveforms: next, ...(adminTesting !== undefined ? { adminTesting } : {}) }), { flag: 'wx', mode: 0o600 });
           await rename(temporary, target);
         } finally { await rm(temporary, { force: true }); }
-        return waveform;
+        return withAccountTesting(waveform, adminTesting);
       });
       pending = save.then(() => undefined, () => undefined);
       return save;
@@ -231,7 +274,7 @@ export function createAccountServer(options: Options = {}) {
   async function resolveVoiceWaveform(request: Request, id?: string, purpose: 'admission' | 'cleanup' | 'voice' = 'admission') {
     const identity = await resolveIdentity(request);
     if (!identity) return null;
-    const waveform = await (identity.mode === 'firebase' ? options.firebase! : localStore).readWaveform(identity.owner.uid);
+    const waveform = await (identity.mode === 'firebase' ? options.firebase! : localStore).readWaveform(identity.owner.uid, id);
     if (!waveform || !await identity.isCurrent() || id !== undefined && waveform.id !== id) return null;
     if (options.checkWaveform && request.method !== 'DELETE' && purpose !== 'cleanup') {
       try { await options.checkWaveform(request, waveform); } catch (error) { if (purpose === 'voice') throw error; return null; }
@@ -248,7 +291,9 @@ export function createAccountServer(options: Options = {}) {
   async function resolveAdmin(request: Request) {
     const identity = await resolveIdentity(request);
     if (identity?.owner.role !== 'admin') return null;
-    const waveform = await store().readWaveform(identity.owner.uid);
+    let id: string | undefined;
+    try { id = requestWaveformId(request); } catch { return null; }
+    const waveform = await store().readWaveform(identity.owner.uid, id);
     return await identity.isCurrent() ? { uid: identity.owner.uid, accountSessionId: identity.accountSessionId,
       isCurrent: identity.isCurrent, testing: waveform?.adminTesting === true } : null;
   }
@@ -354,26 +399,32 @@ export function createAccountServer(options: Options = {}) {
         const query = new URL(request.url).searchParams;
         if ([...query.keys()].some(key => key !== 'id') || query.getAll('id').length > 1) return json({ error: 'Invalid waveform request.' }, 400);
         const id = query.get('id');
-        const waveform = await store().readWaveform(identity.owner.uid);
+        const selected = store();
+        const waveforms = selected.listWaveforms ? await selected.listWaveforms(identity.owner.uid)
+          : [await selected.readWaveform(identity.owner.uid)].filter((w): w is Waveform => !!w);
+        const waveform = waveformSelection(waveforms, id ?? undefined);
         if (!await identity.isCurrent()) return unauthorized();
         if (id !== null && (!id || !waveform || waveform.id !== id)) return json({ error: 'This waveform is unavailable.' }, 404);
-        return json({ waveform });
+        return json({ waveform, waveforms: waveforms.map(({ id, name }) => ({ id, name })), limit: WAVEFORMS_PER_OWNER });
       } catch { return json({ error: 'Your waveform could not be loaded. Please try again.' }, 503); }
     },
-    async waveformPUT(request: Request) {
+    async waveformPUT(request: Request, create = false) {
       if (!allowed(request, true)) return forbidden();
       if (mode() === 'unavailable') return unavailable();
       const identity = await resolveIdentity(request);
       if (!identity) return unauthorized();
       if (options.authorizeWaveformSave && !await options.authorizeWaveformSave(request)) return json({ error: 'Enter the demo code before saving your waveform.' }, 403);
+      let id: string | undefined;
+      try { id = create ? creationWaveformId(request, identity.owner.uid) : requestWaveformId(request); } catch { return json({ error: 'Invalid waveform request.' }, 400); }
+      if (create && !id) return json({ error: 'A new-draft identifier is required.' }, 400);
       let input: WaveformInput | null;
-      try { input = waveformInput(await readBody(request, 256 * 1024)); } catch { input = null; }
-      if (!input) return json({ error: `Use a name up to ${WAVEFORM_NAME_LIMIT} characters, instructions up to ${WAVEFORM_PROMPT_LIMIT} characters, a six-digit hex color and a PNG, JPEG or WebP photo up to 128 KB and 512 pixels.` }, 400);
+      try { input = waveformInput(await readBody(request, 512 * 1024)); } catch { input = null; }
+      if (!input) return json({ error: `Use a name up to ${WAVEFORM_NAME_LIMIT} characters, instructions up to ${WAVEFORM_PROMPT_LIMIT} characters, a six-digit hex color, a PNG, JPEG or WebP photo up to 128 KB and 512 pixels, and up to four valid named Visual Display pictures with descriptions.` }, 400);
       if (input.adminTesting !== undefined && identity.owner.role !== 'admin') return json({ error: 'Admin access is required for testing mode.' }, 403);
       if (!await identity.isCurrent()) return unauthorized();
       try {
         if (input.profilePhoto !== null) {
-          const existing = await store().readWaveform(identity.owner.uid);
+          const existing = create ? null : await store().readWaveform(identity.owner.uid, id);
           if (!await identity.isCurrent()) return unauthorized();
           if (input.profilePhoto !== existing?.profilePhoto) {
             const normalized = await normalizeProfilePhoto(input.profilePhoto);
@@ -382,14 +433,20 @@ export function createAccountServer(options: Options = {}) {
           }
         }
         if (!await identity.isCurrent()) return unauthorized();
+        if (input.visualDisplay) {
+          const existing = create ? null : await store().readWaveform(identity.owner.uid, id);
+          try { input.visualDisplay = await normalizeVisualDisplay(input.visualDisplay, existing?.visualDisplay); }
+          catch { return json({ error: 'Choose up to four valid static PNG, JPEG or WebP pictures, each up to 32 KB and 1024 pixels.' }, 400); }
+        }
+        if (!await identity.isCurrent()) return unauthorized();
         await options.validateWaveform?.(request, input);
         const waveform = identity.mode === 'firebase'
-          ? await options.firebase!.saveWaveform(identity.owner.uid, input, identity.accountSessionId)
-          : await localStore.saveWaveform(identity.owner.uid, input);
+          ? await options.firebase!.saveWaveform(identity.owner.uid, input, identity.accountSessionId, id, create)
+          : await localStore.saveWaveform(identity.owner.uid, input, undefined, id, create);
         await options.afterWaveformSaved?.(request, waveform);
         return json({ waveform });
       }
-      catch (error) { return error instanceof CreationSafetyError ? json({ error: error.message, reviewRequired: true }, error.status) : error instanceof AccountSessionInactiveError ? unauthorized()
+      catch (error) { return error instanceof WaveformStoreError ? json({ error: error.message }, error.status) : error instanceof CreationSafetyError ? json({ error: error.message, reviewRequired: true }, error.status) : error instanceof AccountSessionInactiveError ? unauthorized()
         : json({ error: 'Your waveform could not be saved. Please try again.' }, 503); }
     },
   };

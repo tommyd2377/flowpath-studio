@@ -356,3 +356,16 @@ test('public waveform scope uses the curated prompt while reserving visitor, not
   assert.equal(call?.kind, 'visitor'); assert.equal(call?.ownerUid, visitor.ownerUid); assert.equal(call?.allowanceSeconds, 180);
   assert.equal(call?.tester, undefined);
 });
+
+test('additional private waveforms share the same UID allowance and active-call guard', async () => {
+  const f = fixture(), first = f.personal(), second = { ...first, waveformId: randomUUID() };
+  f.db.rows.set(`ownerWaveforms/${first.ownerUid}/waveforms/${second.waveformId}`, { id: second.waveformId });
+  const store = createTesterVoiceStore(f.db, f.now, 'daily');
+  const call = await store.reserve(first, randomUUID());
+  await assert.rejects(store.reserve(second, randomUUID()), /previous conversation/);
+  await f.connect(store, call.id); f.advance(180_000); await f.finish(store, call.id, 180);
+  await assert.rejects(store.reserve(second, randomUUID()), /allowance has ended/);
+  const foreign = { ...second, waveformId: randomUUID() };
+  f.db.rows.set(`ownerWaveforms/other/waveforms/${foreign.waveformId}`, { id: foreign.waveformId });
+  await assert.rejects(store.reserve(foreign, randomUUID()), /another account/);
+});

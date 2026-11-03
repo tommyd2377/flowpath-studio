@@ -1,3 +1,4 @@
+import { pluginAudienceProjection } from './plugin-access-runtime';
 import { accountServer } from './account-runtime';
 import { createPaidStore, type PaidStore } from './paid-store';
 import { createPaidApi } from './paid-api';
@@ -31,7 +32,7 @@ export function getPaidStore() {
         if (scope === 'published') await reviews.requireSnapshotAllowed(tx, uid, waveform);
         else await reviews.requireAllowed(tx, uid, waveform);
       }
-      else if (waveform.textPanel?.version === 1) throw new CreationSafetyError('Creator text display is paused until safety review is available.', 503);
+      else if (waveform.textPanel?.version === 1 || waveform.visualDisplay) throw new CreationSafetyError('Creator text display is paused until safety review is available.', 503);
     },
   });
 }
@@ -49,7 +50,7 @@ export function getPaidApi() {
     accountId: process.env.FLOWPATH_STRIPE_TEST_ACCOUNT_ID, pack, origin: checkoutOrigin,
     key: () => process.env.FLOWPATH_STRIPE_TEST_KEY, webhookSecret: () => process.env.FLOWPATH_STRIPE_TEST_WEBHOOK_SECRET,
   }, store) : undefined;
-  return { ...createPaidApi({ store, accounts: accountServer, enabled: paidEnabled, fixtures: paidFixtures,
+  return { ...createPaidApi({ store, projectPlugins: pluginAudienceProjection, accounts: accountServer, enabled: paidEnabled, fixtures: paidFixtures,
     publicOrigin, trustedProxyHost: process.env.FLOWPATH_TRUSTED_PROXY_HOST, pack, stripe, voiceReady: paidVoiceReady,
     adminVoiceReady: () => !!localAppOrigin() && !!productionVoicePolicy(process.env) && !!process.env.OPENAI_API_KEY }), stripe };
 }

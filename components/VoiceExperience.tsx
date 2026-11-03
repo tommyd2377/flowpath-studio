@@ -8,41 +8,91 @@ import Waveform from './Waveform';
 import PersonalFooter from './PersonalFooter';
 import { appearanceTheme } from '@/lib/appearance-theme';
 import { WAVEFORM_DEFAULT_COLOR } from '@/lib/account-model';
-import VoiceDiagnostics, { useDiagnosticsMode } from './VoiceDiagnostics';
+import VoiceDiagnostics, { useDiagnosticsMode, useStartupTimingMode } from './VoiceDiagnostics';
+import VoiceStartupTiming from './VoiceStartupTiming';
 import TextPanel from './TextPanel';
 import LiveTextPanel from './LiveTextPanel';
+import type { VisualDisplayConfiguration } from '@/lib/visual-display';
+import VisualDisplay from './VisualDisplay';
 import PluginCarousel from './PluginCarousel';
 import { liveTextPanelEnabled, type TextPanelConfiguration } from '@/lib/text-panel';
 import { clientAnalytics, observeVisit } from '@/lib/analytics-runtime';
-import { BookOpen, EyeOff, Square, TextCursorInput } from 'lucide-react';
+import { BookOpen, Images, Eye, EyeOff, Square, TextCursorInput } from 'lucide-react';
 import BrandLoader from './BrandLoader';
 import DemoCodeGate from './DemoCodeGate';
+import PluginUnlock, { type PluginPlayback } from './PluginUnlock';
 
-export default function VoiceExperience({ waveformId, name, accentColor = WAVEFORM_DEFAULT_COLOR, profilePhoto = null, paidPayer, onSettled, textPanel = null, analyticsSurface, nextConversation, draftPreview = false, publishedPreview = false, publicDemo = false }: {
-  waveformId?: string; name?: string; accentColor?: string; profilePhoto?: string | null; paidPayer?: 'creator' | 'self'; onSettled?: () => void; textPanel?: TextPanelConfiguration | null; analyticsSurface?: 'private' | 'public'; nextConversation?: () => void; draftPreview?: boolean; publishedPreview?: boolean; publicDemo?: boolean;
+export default function VoiceExperience({ waveformId, name, accentColor = WAVEFORM_DEFAULT_COLOR, profilePhoto = null, paidPayer, onSettled, textPanel: initialText = null, visualDisplay: initialVisual = null, pluginAccess, analyticsSurface, nextConversation, draftPreview = false, publishedPreview = false, publicDemo = false }: {
+  waveformId?: string; name?: string; accentColor?: string; profilePhoto?: string | null; paidPayer?: 'creator' | 'self'; onSettled?: () => void; textPanel?: TextPanelConfiguration | null; visualDisplay?: VisualDisplayConfiguration | null; analyticsSurface?: 'private' | 'public'; nextConversation?: () => void; draftPreview?: boolean; publishedPreview?: boolean; publicDemo?: boolean; pluginAccess?: Pick<PluginPlayback, 'locked' | 'expiresAt'>;
 }) {
+  const [pluginView, setPluginView] = useState<PluginPlayback | undefined>(() => pluginAccess && {
+    ...pluginAccess, textPanel: initialText, visualDisplay: initialVisual,
+  });
+  const textPanel = pluginView ? pluginView.textPanel : initialText;
+  const visualDisplay = pluginView ? pluginView.visualDisplay : initialVisual;
   const textBoxEnabled = liveTextPanelEnabled(textPanel);
-  const voice = useVoiceSession(waveformId, paidPayer, textBoxEnabled, draftPreview, publishedPreview);
+  const voice = useVoiceSession(waveformId, paidPayer, textBoxEnabled, draftPreview, publishedPreview, visualDisplay, Boolean(pluginAccess));
   const handledSettlement = useRef(0);
   useEffect(() => { if (voice.settledVersion > handledSettlement.current) { handledSettlement.current = voice.settledVersion; onSettled?.(); } }, [voice.settledVersion, onSettled]);
   const diagnosticsMode = useDiagnosticsMode();
+  const startupTimingMode = useStartupTimingMode();
   const [recordNext, setRecordNext] = useState(false);
   const [demoCodeAccepted, setDemoCodeAccepted] = useState(false);
   const [demoCodeRequired, setDemoCodeRequired] = useState(false);
-  const { active, stop } = voice;
+  const { active, stop, clearPluginContent } = voice;
+  useEffect(() => {
+    if (!pluginView?.expiresAt || !waveformId) return;
+    const timer = setTimeout(() => {
+      stop('Plugin access expired.');
+      clearPluginContent();
+      setPluginView(current => current && { ...current, textPanel: null, visualDisplay: null, expiresAt: undefined });
+      void fetch(`/api/plugin-access?waveformId=${encodeURIComponent(waveformId)}&playback=1${publicDemo ? '&audience=curated' : ''}`, { cache: 'no-store' })
+        .then(async response => { if (response.ok) setPluginView(await response.json()); }).catch(() => {});
+    }, Math.max(0, pluginView.expiresAt - Date.now()));
+    return () => clearTimeout(timer);
+  }, [pluginView?.expiresAt, waveformId, stop, clearPluginContent, publicDemo]);
   const connected = voice.phase === 'listening' || voice.phase === 'speaking';
   const textVisible = textBoxEnabled && voice.textState.visible;
-  const docked = Boolean(waveformId && (voice.hasConnected || textVisible));
+  const visualVisible = !!visualDisplay && voice.textState.visual?.visible === true;
+  const displayVisible = textVisible || visualVisible;
+  const display = visualVisible ? 'visual' : voice.textState.display ?? 'text';
+  const [requestedDisplay, setRequestedDisplay] = useState<typeof display | null>(null);
+  if (displayVisible && requestedDisplay !== display) setRequestedDisplay(display);
+  const showVisual = () => voice.visualAction({ action: 'show', imageId: '', text: '' });
+  const showDisplay = () => requestedDisplay === 'visual' ? showVisual() : requestedDisplay === 'knowledge' ? voice.showKnowledge() : voice.showNotes();
+  const docked = Boolean(waveformId && (voice.hasConnected || displayVisible));
   const waveControl = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const codeLocked = demoCodeRequired && !demoCodeAccepted;
-  const beginConversation = () => {
-    if (!waveControl.current) return;
+  const pluginRequest = useRef(false);
+  const [checkingPlugins, setCheckingPlugins] = useState(false);
+  const [pluginStartError, setPluginStartError] = useState('');
+  const beginConversation = async () => {
+    if (!waveControl.current || pluginRequest.current) return;
+    // This callback runs only after a waveform click or successful code submission.
+    // eslint-disable-next-line react-hooks/purity
+    const clickedAt = performance.now();
+    let fresh: PluginPlayback | undefined;
+    if (pluginAccess && waveformId) {
+      pluginRequest.current = true;
+      setCheckingPlugins(true);
+      setPluginStartError('');
+      try {
+        const response = await fetch(`/api/plugin-access?waveformId=${encodeURIComponent(waveformId)}&playback=1${publicDemo ? '&audience=curated' : ''}`, { cache: 'no-store' });
+        if (!response.ok) throw new Error();
+        fresh = await response.json();
+        if (!fresh || !waveControl.current) return;
+        setPluginView(fresh);
+      } catch {
+        setPluginStartError('Plugin access could not be checked. Try again.');
+        return;
+      } finally { pluginRequest.current = false; setCheckingPlugins(false); }
+    }
     clientAnalytics.record({ eventName: 'voice_start_requested', properties: { surface } });
-    void voice.start(diagnosticsMode && recordNext); setRecordNext(false);
+    void voice.start(diagnosticsMode && recordNext, startupTimingMode, fresh && { text: liveTextPanelEnabled(fresh.textPanel), visual: fresh.visualDisplay }, clickedAt); setRecordNext(false);
   };
   const hideText = () => {
-    const restoreFocus = panel.current?.contains(document.activeElement);
+    const restoreFocus = panel.current?.contains(document.activeElement) || document.activeElement?.classList.contains('display-toggle');
     voice.hideText();
     if (restoreFocus) waveControl.current?.focus({ preventScroll: true });
   };
@@ -76,18 +126,20 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
   }, [active, stop]);
 
   return <div className="voice-experience" data-active={voice.active} data-connected={connected}
-    data-demo-code={codeLocked} data-personal={Boolean(waveformId)} data-profile-photo={hasPortrait} data-docked={docked} data-text-visible={textVisible}
+    data-demo-code={codeLocked} data-personal={Boolean(waveformId)} data-profile-photo={hasPortrait} data-docked={docked} data-text-visible={displayVisible}
     style={waveformId ? appearanceTheme(accentColor) : undefined}>
     <nav className="voice-navigation" aria-label="FlowPath navigation" hidden={Boolean(waveformId) && voice.active}>
       {!waveformId && <div className="home-news-links"><Link href="/w/c538ac44-883b-4d96-8785-4ddf8a151efb">Benjamin Franklin</Link><a className="news-example-link" href="https://flowpathapp.com" onClick={() => clientAnalytics.record({ eventName: 'navigation_selected', properties: { destination: 'news' } })}>News</a></div>}
-      {waveformId && !voice.active && !textVisible && (voice.textState.text || voice.textState.hasKnowledge) && <button className="secondary-button text-reopen" type="button" onClick={voice.showText}>Show text</button>}
       <div className="voice-account-links">
         {name && !docked && <span>{name}</span>}
-        <Link href="/account" onClick={() => clientAnalytics.record({ eventName: 'navigation_selected', properties: { destination: 'account' } })}>{waveformId && !publicDemo ? 'My waveform' : 'Create your waveform'}</Link>
+        <Link href={waveformId && !publicDemo ? `/account?id=${waveformId}` : "/account"} onClick={() => clientAnalytics.record({ eventName: 'navigation_selected', properties: { destination: 'account' } })}>{waveformId && !publicDemo ? 'My waveform' : 'Create your waveform'}</Link>
       </div>
     </nav>
     <main className="voice-page" data-voice-phase={voice.phase}>
-      <header className="wordmark" aria-hidden={connected && !hasPortrait}>
+    {waveformId && requestedDisplay && <button type="button" className="secondary-button display-toggle" aria-expanded={displayVisible} onClick={displayVisible ? hideText : showDisplay}>
+      {displayVisible ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}{displayVisible ? 'Hide display' : 'Show display'}
+    </button>}
+      <header className="wordmark" aria-hidden={(connected || docked) && !hasPortrait}>
         {waveformId && profilePhoto
           // Raster-only, bounded owner photo; bypass the remote image optimizer.
           // eslint-disable-next-line @next/next/no-img-element
@@ -112,24 +164,29 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
       </button>
       {!voice.active && !docked && <DemoCodeGate formId="voice-demo-code-form" waveformTrigger onState={setDemoCodeRequired} onAccess={setDemoCodeAccepted} onUnlocked={beginConversation} />}
       <p className="voice-hint" id="voice-hint" aria-hidden={voice.active || docked}>{nextConversation ? 'Copy your text, then tap the wave to choose your next conversation' : codeLocked ? 'Enter the code and tap the waveform to begin.' : 'Tap the waveform to begin.'}</p>
-      <p className="voice-status" id="voice-status" role="status" aria-live="polite" aria-atomic="true">{voice.phase === 'connecting' && <BrandLoader variant="connection" />}{showStatus ? status : ''}{voice.reviewRequired && waveformId && <><br /><Link href="/account" className="voice-review-link">Open waveform settings</Link></>}
+      <p className="voice-status" id="voice-status" tabIndex={docked && showStatus && status ? 0 : undefined} role="status" aria-live="polite" aria-atomic="true">{voice.phase === 'connecting' && <BrandLoader variant="connection" />}{showStatus ? status : ''}{voice.reviewRequired && waveformId && <><br /><Link href={waveformId && !publicDemo ? `/account?id=${waveformId}` : "/account"} className="voice-review-link">Open waveform settings</Link></>}
       </p>
       {paidPayer && <p className="paid-session-meter" aria-live="polite">{paidPayer === 'creator' ? 'Creator pays' : 'You pay from your prepaid balance'}{voice.remainingSeconds !== null ? ` · ${voice.remainingSeconds} seconds remaining${voice.remainingSeconds <= 30 ? ' — ending soon' : ''}` : ''}</p>}
       <span className="sr-only">{connected ? 'Conversation connected. Tap the waveform or press Escape to end.' : ''}</span>
-      {textVisible ? <div ref={panel} className="voice-text-panel voice-text-panel--live">
+      {displayVisible ? <div ref={panel} className="voice-text-panel voice-text-panel--live">
         <nav className="plugin-display-controls" aria-label="Plugin displays">
-          <button type="button" className="secondary-button" aria-pressed={voice.textState.display !== 'knowledge'} onClick={voice.showNotes}><TextCursorInput aria-hidden="true" />Text Box</button>
-          {voice.textState.hasKnowledge && <button type="button" className="secondary-button" aria-pressed={voice.textState.display === 'knowledge'} onClick={voice.showKnowledge}><BookOpen aria-hidden="true" />Knowledge</button>}
-          <button type="button" className="secondary-button plugin-display-hide" onClick={hideText}><EyeOff aria-hidden="true" />Hide</button>
+          {textBoxEnabled && <button type="button" className="secondary-button" aria-pressed={display === 'text'} onClick={voice.showNotes}><TextCursorInput aria-hidden="true" />Text Box</button>}
+          {voice.textState.hasKnowledge && <button type="button" className="secondary-button" aria-pressed={display === 'knowledge'} onClick={voice.showKnowledge}><BookOpen aria-hidden="true" />Knowledge</button>}
+          {!!visualDisplay?.images.length && <button type="button" className="secondary-button" aria-pressed={display === 'visual'} onClick={showVisual}><Images aria-hidden="true" />Visual Display</button>}
         </nav>
-        <PluginCarousel display={voice.textState.display ?? 'text'}><LiveTextPanel key={voice.textState.display ?? 'text'} {...voice.textState} externalHide
-          onStop={voice.stopWriting} onClear={voice.clearText} onUndo={voice.undoText} onHide={hideText} /></PluginCarousel>
-        {voice.textState.message && <p role="status">{voice.textState.message}</p>}
+        <PluginCarousel display={display}>{visualVisible && visualDisplay && voice.textState.visual ? <VisualDisplay configuration={visualDisplay} state={voice.textState.visual} onAction={voice.visualAction} /> : <LiveTextPanel key={voice.textState.display ?? 'text'} {...voice.textState} externalHide
+          onStop={voice.stopWriting} onClear={voice.clearText} onUndo={voice.undoText} onHide={hideText} />}</PluginCarousel>
+        {displayVisible && voice.textState.message && <p role="status">{voice.textState.message}</p>}
       </div> : !textBoxEnabled && textPanel && <div className="voice-text-panel"><TextPanel configuration={textPanel} scopeKey={waveformId ?? 'home'} /></div>}
+    {waveformId && pluginView && <PluginUnlock id={waveformId} locked={pluginView.locked} session={voice.pluginSessionId}
+      publicDemo={publicDemo} disabled={checkingPlugins || voice.phase === 'connecting' || publicDemo && !connected} onBusy={busy => { pluginRequest.current = busy; }}
+      onUnlock={view => { voice.updatePluginContent(liveTextPanelEnabled(view.textPanel), view.visualDisplay); setPluginView(view); }} />}
+    {pluginStartError && <p role="status">{pluginStartError}</p>}
     </main>
+    {startupTimingMode && <VoiceStartupTiming key={voice.diagnosticVersion} getReport={voice.getStartupTiming} />}
     {diagnosticsMode && <VoiceDiagnostics key={voice.diagnosticVersion} active={voice.active} recordNext={recordNext} onRecordNext={setRecordNext}
       recording={voice.diagnosticRecording} hasReport={voice.hasDiagnostic} version={voice.diagnosticVersion}
       getReport={voice.getDiagnostic} mark={voice.markDiagnostic} stopRecording={voice.stopDiagnostic} clear={voice.clearDiagnostic} />}
-    <div className="footer-position" hidden={voice.active || textVisible}><PersonalFooter /></div>
+    <div className="footer-position" hidden={voice.active || displayVisible}><PersonalFooter /></div>
   </div>;
 }

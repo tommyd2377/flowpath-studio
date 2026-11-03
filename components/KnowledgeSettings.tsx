@@ -13,7 +13,8 @@ async function read<T>(response: Response): Promise<T> {
   return body as T;
 }
 
-export default function KnowledgeSettings() {
+export default function KnowledgeSettings({ waveformId }: { waveformId?: string }) {
+  const endpoint = useCallback((path: string) => waveformId ? `${path}?id=${waveformId}` : path, [waveformId]);
   const [view, setView] = useState<KnowledgeView | null>(null);
   const [loading, setLoading] = useState(true), [busyAction, setBusyAction] = useState<string | null>(null);
   const busy = busyAction !== null;
@@ -30,7 +31,7 @@ export default function KnowledgeSettings() {
     const load = () => {
       const expected = ++generation.current;
       revision.current = -1; setView(null); setResult(null); setQuery(''); setError(''); setMessage(''); setBusyAction(null); setAdult(false); setLoading(true);
-      void fetch('/api/knowledge', { cache: 'no-store' }).then(read<KnowledgeView>).then(next => accept(next, expected))
+      void fetch(endpoint('/api/knowledge'), { cache: 'no-store' }).then(read<KnowledgeView>).then(next => accept(next, expected))
         .catch(e => { if (generation.current === expected) setError(e.message); })
         .finally(() => { if (generation.current === expected) setLoading(false); });
     };
@@ -38,18 +39,18 @@ export default function KnowledgeSettings() {
     channel?.addEventListener('message', load); window.addEventListener('flowpath-account-change', load); load();
     const invalidate = () => { generation.current++; };
     return () => { invalidate(); channel?.close(); window.removeEventListener('flowpath-account-change', load); };
-  }, [accept]);
+  }, [accept, endpoint]);
   const preparing = !!view?.documents.some(d => d.status === 'preparing' || d.status === 'uploading' || d.status === 'reviewing');
   useEffect(() => {
     if (!preparing || busy) return;
     const controller = new AbortController(), expected = generation.current;
     const timer = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
-      void fetch('/api/knowledge/refresh', { method: 'POST', signal: controller.signal }).then(read<KnowledgeView>)
+      void fetch(endpoint('/api/knowledge/refresh'), { method: 'POST', signal: controller.signal }).then(read<KnowledgeView>)
         .then(next => accept(next, expected)).catch(() => { /* Keep the stored status; the user can refresh explicitly. */ });
     }, 4_000);
     return () => { clearInterval(timer); controller.abort(); };
-  }, [preparing, busy, accept]);
+  }, [preparing, busy, accept, endpoint]);
 
   async function mutation(work: () => Promise<KnowledgeView>, success: string, action = 'upload') {
     const expected = generation.current;
@@ -57,7 +58,7 @@ export default function KnowledgeSettings() {
     try { const next = await work(); accept(next, expected); if (generation.current === expected) setMessage(success); }
     catch (e) {
       if (generation.current === expected) setError(e instanceof Error ? e.message : 'The request could not be completed.');
-      await fetch('/api/knowledge', { cache: 'no-store' }).then(read<KnowledgeView>).then(next => accept(next, expected)).catch(() => undefined);
+      await fetch(endpoint('/api/knowledge'), { cache: 'no-store' }).then(read<KnowledgeView>).then(next => accept(next, expected)).catch(() => undefined);
     }
     finally { if (generation.current === expected) setBusyAction(null); }
   }
@@ -65,7 +66,7 @@ export default function KnowledgeSettings() {
     event.preventDefault();
     const file = fileInput.current?.files?.[0]; if (!file) return;
     const form = new FormData(); form.set('file', file);
-    await mutation(() => fetch('/api/knowledge', { method: 'POST', headers: { ...(adult ? { 'X-FlowPath-Adult': '1' } : {}), 'X-FlowPath-Upload': crypto.randomUUID() }, body: form })
+    await mutation(() => fetch(endpoint('/api/knowledge'), { method: 'POST', headers: { ...(adult ? { 'X-FlowPath-Adult': '1' } : {}), 'X-FlowPath-Upload': crypto.randomUUID() }, body: form })
       .then(read<KnowledgeView>), 'Uploaded. We’re preparing it for questions. You can keep editing your waveform.');
     if (fileInput.current) fileInput.current.value = '';
   }
@@ -73,7 +74,7 @@ export default function KnowledgeSettings() {
     event.preventDefault(); if (!view) return;
     const expected = generation.current; setBusyAction('preview'); setError(''); setMessage('');
     try {
-      const next = await fetch('/api/knowledge/search', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      const next = await fetch(`/api/knowledge/search?id=${encodeURIComponent(view.waveformId)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ waveformId: view.waveformId, query }) }).then(read<KnowledgeResult>);
       if (!validKnowledgeResult(next)) throw new Error('The search returned an invalid response.');
       if (generation.current === expected) setResult(next);
@@ -81,7 +82,7 @@ export default function KnowledgeSettings() {
     finally { if (generation.current === expected) setBusyAction(null); }
   }
   return <main className="account-page knowledge-page">
-    <Link className="account-back" href="/account">← Waveform settings</Link>
+    <Link className="account-back" href={waveformId ? `/account?id=${waveformId}` : "/account"}>← Waveform settings</Link>
     <div className="knowledge-title"><BookOpen aria-hidden="true" /><h1>Knowledge</h1></div>
     <p className="knowledge-intro">Give your waveform something to draw from.</p>
     <p className="field-help">Upload documents, then ask about them by voice. Ask “Show the relevant passages and sources” to open them in Text Box.</p>
@@ -108,12 +109,12 @@ export default function KnowledgeSettings() {
             {doc.status === 'ready' && <label><input type="checkbox" checked={doc.selected} disabled={busy} onChange={event => {
               const selected = event.target.checked;
               setView(current => current ? { ...current, documents: current.documents.map(item => item.id === doc.id ? { ...item, selected } : item) } : current);
-              void mutation(() => fetch('/api/knowledge', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: doc.id, selected }) }).then(read<KnowledgeView>), selected ? 'Document enabled for your waveform.' : 'Document disabled.', `select:${doc.id}`);
+              void mutation(() => fetch(endpoint('/api/knowledge'), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: doc.id, selected }) }).then(read<KnowledgeView>), selected ? 'Document enabled for your waveform.' : 'Document disabled.', `select:${doc.id}`);
             }} /> Use in my waveform</label>}
-          </div><button type="button" className="secondary-button" disabled={busy || doc.status === 'uploading'} aria-label={`Remove ${doc.filename}`} aria-busy={busyAction === `remove:${doc.id}`} onClick={() => void mutation(() => fetch('/api/knowledge', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: doc.id }) }).then(read<KnowledgeView>), 'Document removed.', `remove:${doc.id}`)}>{busyAction === `remove:${doc.id}` ? <BrandLoader variant="inline" /> : <Trash2 aria-hidden="true" />}<span>Remove</span></button>
+          </div><button type="button" className="secondary-button" disabled={busy || doc.status === 'uploading'} aria-label={`Remove ${doc.filename}`} aria-busy={busyAction === `remove:${doc.id}`} onClick={() => void mutation(() => fetch(endpoint('/api/knowledge'), { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: doc.id }) }).then(read<KnowledgeView>), 'Document removed.', `remove:${doc.id}`)}>{busyAction === `remove:${doc.id}` ? <BrandLoader variant="inline" /> : <Trash2 aria-hidden="true" />}<span>Remove</span></button>
         </article>)}
       </div>
-      {(preparing || view.documents.some(d => d.status === 'review-required' || d.status === 'manual-review')) && <button type="button" className="secondary-button" disabled={busy} aria-busy={busyAction === 'refresh'} onClick={() => void mutation(() => fetch('/api/knowledge/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reviewExisting: true }) }).then(read<KnowledgeView>), 'Document status refreshed.', 'refresh')}>{busyAction === 'refresh' && <BrandLoader variant="inline" />}{view.documents.some(d => d.status === 'review-required') ? 'Review document safety' : 'Refresh preparation status'}</button>}
+      {(preparing || view.documents.some(d => d.status === 'review-required' || d.status === 'manual-review')) && <button type="button" className="secondary-button" disabled={busy} aria-busy={busyAction === 'refresh'} onClick={() => void mutation(() => fetch(endpoint('/api/knowledge/refresh'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reviewExisting: true }) }).then(read<KnowledgeView>), 'Document status refreshed.', 'refresh')}>{busyAction === 'refresh' && <BrandLoader variant="inline" />}{view.documents.some(d => d.status === 'review-required') ? 'Review document safety' : 'Refresh preparation status'}</button>}
       <p className="field-help">Documents must pass safety review before use. DOCX files require founder review because embedded images are not covered by the automatic check; a PDF can include those pages in automatic review.</p>
       {view.documents.some(d => d.status === 'ready' && d.selected) && <form className="knowledge-preview" onSubmit={event => void preview(event)}>
         <h2>Try a question</h2><label htmlFor="knowledge-question">What would you like to find?</label>

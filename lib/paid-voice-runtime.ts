@@ -1,3 +1,4 @@
+import { pluginAudienceProjection } from './plugin-access-runtime';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
@@ -55,9 +56,10 @@ export function getPaidVoiceServer() {
       if (header !== 'creator' && header !== 'self') throw new VoiceAdmissionError('Choose who pays before starting.', 402);
       if (preview && header !== 'self') throw new VoiceAdmissionError('Draft preview requires your own balance.', 403);
       const waveform = preview ? publication.draft ?? publication.waveform : publication.waveform;
+      const projected = request.method === 'DELETE' ? { waveform, revision: undefined } : await pluginAudienceProjection(publication.ownerUid, id, waveform);
       const identity = actor.uid ? await accountServer.resolveIdentity(request) : null;
       return { ownerUid: actor.uid ? `account:${actor.uid}` : actor.visitorId, accountSessionId: actor.accountSessionId ?? actor.visitorId,
-        waveform, paid: { actor, choice: header, ...(preview ? { preview: true } : {}), expectedContentDigest: creationContentDigest(waveform) }, isCurrent: () => identity?.isCurrent() ?? !actor.uid };
+        waveform: projected.waveform, pluginRevision: projected.revision, paid: { actor, choice: header, ...(preview ? { preview: true } : {}), expectedContentDigest: creationContentDigest(waveform) }, isCurrent: () => identity?.isCurrent() ?? !actor.uid };
     },
     production: { store: createPaidVoiceStore(store), policy: () => paidFixtures ? { globalConcurrency: 3, globalDailySeconds: 9_000,
       ownerDailySeconds: 3_600, access: 'signed-in', allowedUids: [] } : productionVoicePolicy(process.env),

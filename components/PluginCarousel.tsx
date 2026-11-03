@@ -3,14 +3,15 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import type { LiveTextDisplay } from '@/lib/live-text-session';
 
-const slot = { text: 0, knowledge: 120 };
+type DisplayKind = LiveTextDisplay | 'visual';
+const slot = { text: 0, knowledge: 120, visual: 240 };
 const shortest = (angle: number) => ((angle + 180) % 360 + 360) % 360 - 180;
 
 /** Presentation only: the voice host and session controller outlive each turn. */
-export default function PluginCarousel({ display, children }: { display: LiveTextDisplay; children: ReactNode }) {
+export default function PluginCarousel({ display, children }: { display: DisplayKind; children: ReactNode }) {
   const deck = useRef<HTMLDivElement>(null);
   const face = useRef<HTMLDivElement>(null);
-  const previous = useRef<{ display: LiveTextDisplay; snapshot: HTMLDivElement } | null>(null);
+  const previous = useRef<{ display: DisplayKind; snapshot: HTMLDivElement } | null>(null);
   const rotation = useRef({ ring: -slot[display], face: 0, frame: 0 });
 
   useLayoutEffect(() => {

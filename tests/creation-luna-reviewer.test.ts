@@ -78,7 +78,7 @@ test('clear Nazi names are blocked without a model call; ambiguous findings stay
 });
 
 test('historical simulation policy routes identity/provenance concerns to the founder without weakening hard bans', () => {
-  assert.equal(CONSERVATIVE_CREATION_POLICY.version, 'historical-roleplay-2026-10-29-v5');
+  assert.equal(CONSERVATIVE_CREATION_POLICY.version, 'historical-provenance-evidence-v6');
   for (const category of ['controversial-identity', 'portrait-provenance'] as const) {
     assert.equal(evaluateCreationReview({ findings: { ...findings, [category]: 'violation' } }, CONSERVATIVE_CREATION_POLICY).status, 'allowed');
   }
@@ -142,4 +142,16 @@ test('provider uncertainty has no retries/fallback or reservation refund; incomp
   const bad = setup({ response: { model: 'gpt-6-luna', status: 'incomplete', usage: { input_tokens: 1200, output_tokens: 2048 }, output: [] } });
   await assert.rejects(bad.reviewer.review(candidate, CONSERVATIVE_CREATION_POLICY, context()), CreationReviewUnavailable);
   assert.equal(bad.calls.length, 2);
+});
+
+test('one existing Luna review inspects every Visual Display raster with its exact caption/text', async () => {
+  const { visualFixture } = await import('./visual-display-fixture');
+  const visualDisplay = await visualFixture(), s = setup();
+  await s.reviewer.review(canonicalCreationCandidate({ ...candidate, visualDisplay }), CONSERVATIVE_CREATION_POLICY, context());
+  assert.equal(s.calls.length, 2, 'same bounded preflight and review; no model per image');
+  const parts = (s.calls[1].body.input as { content: { type: string; image_url?: string; text?: string }[] }[])[0].content;
+  assert.deepEqual(parts.filter(p => p.type === 'input_image').map(p => p.image_url), visualDisplay.images.map(i => i.src));
+  for (const image of visualDisplay.images) {
+    assert.ok(parts.some(p => p.text?.includes(image.title) && p.text.includes(image.description) && p.text.includes(image.text)));
+  }
 });

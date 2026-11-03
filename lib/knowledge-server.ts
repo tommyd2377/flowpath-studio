@@ -1,9 +1,10 @@
+import { PluginAccessError } from './plugin-access';
 import { isAllowedRequest } from './request-origin';
 import { readBody } from './account-server';
 import type { KnowledgeScope, KnowledgeStore } from './knowledge-store';
 import { KnowledgeError, type KnowledgeView, KNOWLEDGE_FILE_BYTES, knowledgeFilename, knowledgeId } from './knowledge-model';
 
-type Options = { store: KnowledgeStore; scope(request: Request): Promise<KnowledgeScope | null>; available(): boolean;
+type Options = { authorizeSearch?: (request: Request, id: string, search: () => Promise<unknown>) => Promise<unknown>; store: KnowledgeStore; scope(request: Request): Promise<KnowledgeScope | null>; available(): boolean;
   requireAdultConsent?: boolean; publicOrigin?: string; trustedProxyHost?: string };
 const json = (body: object, status = 200) => Response.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
 
@@ -80,7 +81,10 @@ export function createKnowledgeServer(options: Options) {
       const body = await readBody(request, 6_000);
       if (Object.keys(body).length !== 2 || body.waveformId !== scope.waveformId || typeof body.query !== 'string'
         || !body.query.trim() || body.query.length > 1_000) throw new KnowledgeError('Use a question up to 1,000 characters for your own waveform.');
-      return json(await options.store.search(scope, body.query.trim(), request.signal));
+      const query = body.query.trim();
+      const work = () => options.store.search(scope, query, request.signal);
+      try { return json(await (options.authorizeSearch ? options.authorizeSearch(request, scope.waveformId, work) : work()) as object); }
+      catch (error) { if (error instanceof PluginAccessError) throw new KnowledgeError(error.message, error.status); throw error; }
     }),
   };
 }

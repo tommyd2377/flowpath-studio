@@ -7,19 +7,22 @@ import type { KnowledgeResult } from './plugin-contract';
 import type { CreationIdentity } from './creation-runtime';
 import type { CreationCandidate, CreationSafetyStatus, ReviewDocument } from './creation-safety';
 
-export type StoredKnowledgeDocument = KnowledgeDocument & { digest: string; fileId: string | null; fileUncertain?: boolean; checkedAt: number; useWhenApproved?: boolean };
+export type StoredKnowledgeDocument = KnowledgeDocument & { waveformId?: string; digest: string; fileId: string | null; fileUncertain?: boolean; checkedAt: number; useWhenApproved?: boolean };
 type StoredDocument = StoredKnowledgeDocument;
 type Index = { waveformId: string; revision: number; storeId: string | null; storeUncertain?: boolean; removing?: string; documents: StoredDocument[] };
 export type KnowledgeScope = { uid: string; waveformId: string; isCurrent(): boolean | Promise<boolean>; reviewIdentity?: CreationIdentity };
 const path = (uid: string) => `waveformKnowledge/${createHash('sha256').update(uid).digest('hex')}`;
+const scopedPath = (scope: Pick<KnowledgeScope, 'uid' | 'waveformId'>) => `waveformKnowledge/${createHash('sha256').update(JSON.stringify([scope.uid, scope.waveformId])).digest('hex')}`;
 const safeQuote = (text: string) => text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').slice(0, 850).trim();
-export const knowledgeReviewCandidate = (doc: Pick<StoredDocument, 'id' | 'digest' | 'filename'>): CreationCandidate => ({
+export const knowledgeReviewCandidate = (doc: Pick<StoredDocument, 'id' | 'digest' | 'filename' | 'waveformId'>): CreationCandidate => ({
   name: 'Knowledge document', initialPrompt: 'Review this entire reference document under the creation policy.',
-  document: { id: doc.id, digest: doc.digest, filename: doc.filename },
+  document: { id: doc.id, digest: doc.digest, filename: doc.filename, ...(doc.waveformId ? { waveformId: doc.waveformId } : {}) },
 });
 export async function knowledgeDocumentForReview(tx: VoiceTransaction, uid: string, binding: ReviewDocument) {
-  const row = await tx.get(path(uid)) as Index | null;
-  const doc = row?.documents.find(d => d.id === binding.id && d.digest === binding.digest && d.filename === binding.filename);
+  const row = await tx.get(binding.waveformId ? scopedPath({ uid, waveformId: binding.waveformId }) : path(uid)) as Index | null;
+  const legacy = !row && binding.waveformId ? await tx.get(path(uid)) as Index | null : null;
+  const index = row ?? (legacy?.waveformId === binding.waveformId ? legacy : null);
+  const doc = index?.documents.find(d => d.id === binding.id && d.digest === binding.digest && d.filename === binding.filename);
   return doc && doc.fileId && doc.status !== 'removing' ? doc : null;
 }
 type Safety = {
@@ -29,23 +32,45 @@ type Safety = {
 
 /** Provider IDs never leave this server boundary. Uploads are private, immutable versions. */
 export function createKnowledgeStore(database: VoiceDatabase, provider: KnowledgeProvider, now = Date.now, safety?: Safety, storage?: KnowledgeStorageBudget) {
+  async function locate(tx: VoiceTransaction, scope: KnowledgeScope) {
+    const key = scopedPath(scope);
+    const scoped = await tx.get(key) as Index | null;
+    const legacy = scoped ? null : await tx.get(path(scope.uid)) as Index | null;
+    const index = scoped ?? (legacy?.waveformId === scope.waveformId ? legacy : null);
+    if (index && index.waveformId !== scope.waveformId) throw new KnowledgeError('Knowledge belongs to a different waveform.', 409);
+    return { key: index === legacy && legacy ? path(scope.uid) : key,
+      index: index ?? { waveformId: scope.waveformId, revision: 0, storeId: null, documents: [] } as Index };
+  }
   async function read(scope: KnowledgeScope): Promise<Index> {
-    // The existing waveform safety check may itself transact. Never nest it in this transaction.
     if (!await scope.isCurrent()) throw new KnowledgeError('Sign in again to continue.', 401);
     return database.transaction(async tx => {
-      const row = await tx.get(path(scope.uid)) as Index | null;
-      if (row && row.waveformId !== scope.waveformId) throw new KnowledgeError('Knowledge belongs to a different waveform.', 409);
-      return row ?? { waveformId: scope.waveformId, revision: 0, storeId: null, documents: [] };
+      const { index, key } = await locate(tx, scope);
+      let approved = false;
+      // Founder decisions are stored separately. Reconcile already-indexed files
+      // using their exact approval, without invoking the reviewer or provider.
+      if (safety) for (const doc of index.documents) {
+        if (doc.status !== 'manual-review' || !doc.fileId) continue;
+        try {
+          await safety.assertAllowed(tx, scope, doc);
+          if (storage) await storage.assertKnown(tx, scope.uid, doc.id);
+        } catch { continue; }
+        doc.status = 'ready';
+        doc.selected = doc.useWhenApproved !== false;
+        doc.checkedAt = now();
+        doc.message = 'This document passed its exact-version safety review.';
+        approved = true;
+      }
+      if (approved) { index.revision++; tx.set(key, index); }
+      return index;
     });
   }
   async function change<T>(scope: KnowledgeScope, work: (index: Index, tx: VoiceTransaction) => T | Promise<T>, completion = false) {
     // Persist an authorized provider operation's outcome even after sign-out.
     if (!completion && !await scope.isCurrent()) throw new KnowledgeError('Sign in again to continue.', 401);
     return database.transaction(async tx => {
-      const index = await tx.get(path(scope.uid)) as Index | null ?? { waveformId: scope.waveformId, revision: 0, storeId: null, documents: [] };
-      if (index.waveformId !== scope.waveformId) throw new KnowledgeError('Knowledge belongs to a different waveform.', 409);
+      const { index, key } = await locate(tx, scope);
       const result = await work(index, tx);
-      tx.set(path(scope.uid), index);
+      tx.set(key, index);
       return result;
     });
   }
@@ -87,7 +112,7 @@ export function createKnowledgeStore(database: VoiceDatabase, provider: Knowledg
         if (index.documents.length >= KNOWLEDGE_DOCUMENTS) throw new KnowledgeError(`Knowledge supports ${KNOWLEDGE_DOCUMENTS} documents per waveform in this version.`, 409);
         if (index.documents.some(d => d.status === 'uploading')) throw new KnowledgeError('Another document upload is still being confirmed. Refresh its status first.', 409);
         if (storage) await storage.reserve(tx, scope.uid, id);
-        index.documents.push({ id, filename: file.name, bytes: file.size, digest, fileId: null, checkedAt: now(),
+        index.documents.push({ id, waveformId: scope.waveformId, filename: file.name, bytes: file.size, digest, fileId: null, checkedAt: now(),
           status: 'uploading', selected: false, createdAt: now(), message: 'Uploading…' });
         index.revision++;
         return true;

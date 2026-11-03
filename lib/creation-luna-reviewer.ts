@@ -28,8 +28,13 @@ export function createLunaCreationReviewer(options: Options): CreationReviewer {
     const parts: Record<string, unknown>[] = [{ type: 'input_text', text: JSON.stringify({
       name: candidate.name, instructions: candidate.initialPrompt, textPanel: candidate.textPanel,
       ...(candidate.document ? { document: candidate.document } : {}),
+      ...(candidate.visualDisplay ? { visualDisplay: candidate.visualDisplay.images.map(({ id, title, description, text }) => ({ id, title, description, text })) } : {}),
     }) }];
     if (candidate.profilePhoto) parts.push({ type: 'input_image', image_url: candidate.profilePhoto, detail: 'high' });
+    for (const image of candidate.visualDisplay?.images ?? []) {
+      parts.push({ type: 'input_text', text: `Untrusted Visual Display picture ${JSON.stringify(image.id)}: ${JSON.stringify({ title: image.title, description: image.description, text: image.text })}` });
+      parts.push({ type: 'input_image', image_url: image.src, detail: 'high' });
+    }
     if (candidate.document) {
       if (!options.file || options.file.filename !== candidate.document.filename || !/^[A-Za-z0-9_-]{1,200}$/.test(options.file.fileId)) throw new CreationReviewUnavailable('coverage');
       // OpenAI does not extract embedded images from non-PDF documents. Never approve unseen DOCX images.

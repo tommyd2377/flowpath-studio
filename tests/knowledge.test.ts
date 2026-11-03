@@ -29,7 +29,7 @@ for (const status of ['pending', 'manual-review', 'allowed'] as const) {
     await knowledge.refresh(h.scope);
     const docs = (await knowledge.view(h.scope)).documents;
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('Synthetic opening hours: Monday at nine.'));
-    const input = knowledgeReviewCandidate({ ...docs[0], digest: Buffer.from(digest).toString('hex') });
+    const input = knowledgeReviewCandidate({ ...docs[0], waveformId: h.scope.waveformId, digest: Buffer.from(digest).toString('hex') });
     const requested = await reviews.request(actor, input);
     const record = status === 'pending' ? requested.record : await reviews.runReview(requested.record);
     assert.equal(record.status, status);
@@ -40,11 +40,46 @@ for (const status of ['pending', 'manual-review', 'allowed'] as const) {
     await assert.rejects(reviews.getForAdmin(actor, record.reviewId), /Removed/);
     assert.deepEqual((await reviews.listManual(actor)).map(row => row.reviewId), [other.record.reviewId]);
     assert.deepEqual((await reviews.listManual(actor)).map(row => row.reviewId), [other.record.reviewId]);
-    assert.equal((await reviews.get(actor, id))?.reviewId, record.reviewId, 'historical review remains stored');
+    assert.equal((await reviews.get({ ...actor, waveformId: h.scope.waveformId }, id))?.reviewId, record.reviewId, 'historical review remains stored');
     await assert.rejects(reviews.decide(actor, { ...record, decision: status === 'allowed' ? 'revoked' : 'allowed' }), CreationSafetyError);
     assert.equal((await knowledge.view(h.scope)).documents[0].filename, 'keep.txt');
   });
 }
+
+test('founder approval makes indexed Knowledge usable without another review or refresh', async () => {
+  const db = database(), h = setup();
+  const actor = { uid: h.scope.uid, accountSessionId: 'synthetic', waveformId: h.scope.waveformId };
+  let reviewCalls = 0;
+  const reviews = createCreationReviewStore(db, { mode: 'fixture', policy: () => CONSERVATIVE_CREATION_POLICY,
+    verifyOwner: async () => {}, verifyAdmin: async () => {},
+    reviewer: { mode: 'fixture', review: async () => ({ findings: {
+      ...Object.fromEntries(CREATION_SAFETY_CATEGORIES.map(key => [key, 'clear'])),
+      'credible-harm': 'uncertain',
+    } as CreationReviewerResult['findings'] }) },
+  });
+  const store = createKnowledgeStore(db, h.provider, () => 100000, {
+    review: async (_scope, doc) => {
+      reviewCalls++;
+      const requested = await reviews.request(actor, knowledgeReviewCandidate(doc));
+      return (requested.needsReview ? await reviews.runReview(requested.record) : requested.record).status;
+    },
+    assertAllowed: async (tx, scope, doc) => { await reviews.requireAllowed(tx, scope.uid, knowledgeReviewCandidate(doc)); },
+  });
+  await store.upload(h.scope, id, new File(['Synthetic museum opening hours.'], 'museum.docx'));
+  assert.equal((await store.refresh(h.scope)).documents[0].status, 'manual-review');
+  assert.equal(await store.enabled(h.scope), false);
+  const [review] = await reviews.listManual(actor);
+  await reviews.decide(actor, { ...review, decision: 'allowed' });
+  assert.equal(await store.enabled(h.scope), true);
+  const [doc] = (await store.view(h.scope)).documents;
+  assert.equal(doc.status, 'ready');
+  assert.equal(doc.selected, true);
+  assert.equal((await store.search(h.scope, 'hours')).passages[0].filename, 'museum.docx');
+  assert.equal(reviewCalls, 1);
+  await reviews.decide(actor, { ...review, decision: 'revoked' });
+  assert.equal(await store.enabled(h.scope), false);
+  await assert.rejects(store.search(h.scope, 'hours'));
+});
 
 test('legacy documents require explicit review; exact approvals guard selection/search and policy changes', async () => {
   const db = database(), h = setup(); let calls = 0, policy = structuredClone(CONSERVATIVE_CREATION_POLICY);
@@ -120,7 +155,7 @@ test('uploads are immutable, private, sanitized and idempotent across concurrent
   const other: KnowledgeScope = { ...h.scope, uid: 'owner-b' };
   assert.equal((await h.store.view(other)).documents.length, 0);
   assert.deepEqual((await h.store.search(other, 'hours')).passages, []);
-  await assert.rejects(h.store.view({ ...h.scope, waveformId: second }), /different waveform/);
+  assert.equal((await h.store.view({ ...h.scope, waveformId: second })).documents.length, 0);
 });
 
 test('search filters provider IDs against selected documents and rechecks revocation after retrieval', async () => {
@@ -208,4 +243,41 @@ test('managed provider uses documented filters, no retries, no raw provider erro
   const failed = openAIKnowledgeProvider(() => 'synthetic-token', (async () => { attempts++; return Response.json({ error: 'secret upstream details' }, { status: 500 }); }) as typeof fetch);
   await assert.rejects(failed.createStore(), error => error instanceof Error && /No automatic retry/.test(error.message) && !/secret/.test(error.message));
   assert.equal(attempts, 1);
+});
+
+test('two waveforms have separate document selection, retrieval, removal and exact review bindings', async () => {
+  const h = setup(), db = database(), store = createKnowledgeStore(db, h.provider, () => 100000);
+  const other = { ...h.scope, waveformId: second };
+  await store.upload(h.scope, id, h.file()); await store.refresh(h.scope);
+  await store.upload(other, second, new File(['Second waveform reference.'], 'second.txt', { type: 'text/plain' }));
+  await store.refresh(other);
+  assert.equal((await store.view(h.scope)).documents[0].filename, 'hours.txt');
+  assert.equal((await store.view(other)).documents[0].filename, 'second.txt');
+  const a = await store.search(h.scope, 'reference'), b = await store.search(other, 'reference');
+  assert.deepEqual(a.passages.map(p => p.filename), ['hours.txt']);
+  assert.deepEqual(b.passages.map(p => p.filename), ['second.txt']);
+  await store.select(other, second, false);
+  assert.equal((await store.search(other, 'reference')).passages.length, 0);
+  assert.equal((await store.search(h.scope, 'reference')).passages.length, 1);
+  await store.remove(other, second);
+  assert.equal((await store.view(h.scope)).documents.length, 1);
+});
+
+test('legacy owner-keyed Knowledge stays at its original path while another waveform gets an isolated library', async () => {
+  const h = setup(), db = database();
+  const { createHash } = await import('node:crypto');
+  const path = `waveformKnowledge/${createHash('sha256').update(h.scope.uid).digest('hex')}`;
+  const doc = { id, filename: 'legacy.txt', bytes: 20, status: 'ready', selected: true, createdAt: 1,
+    digest: 'a'.repeat(64), fileId: 'legacy-file', checkedAt: 1 };
+  const legacy = { waveformId: h.scope.waveformId, revision: 2, storeId: 'legacy-store', documents: [doc] };
+  await db.transaction(async tx => { tx.set(path, legacy); });
+  const store = createKnowledgeStore(db, h.provider, () => 100000);
+  assert.equal((await store.view(h.scope)).documents[0].filename, 'legacy.txt');
+  const other = { ...h.scope, waveformId: second };
+  assert.equal((await store.view(other)).documents.length, 0);
+  await store.upload(other, second, new File(['Another library.'], 'other.txt', { type: 'text/plain' }));
+  await db.transaction(async tx => {
+    assert.deepEqual(await tx.get(path), legacy);
+    assert.deepEqual(await knowledgeDocumentForReview(tx, h.scope.uid, { id, digest: doc.digest, filename: doc.filename }), doc);
+  });
 });

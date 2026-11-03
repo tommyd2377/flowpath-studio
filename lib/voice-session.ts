@@ -2,7 +2,7 @@
 export function monitorAudio(
   input: AnalyserNode,
   output: () => AnalyserNode | undefined,
-  observe: (inputActive: boolean, outputActive: boolean) => void,
+  observe: (inputActive: boolean, outputActive: boolean, outputSignal: boolean) => void,
 ) {
   const inputBytes = new Uint8Array(input.fftSize);
   let outputBytes = new Uint8Array(0);
@@ -16,11 +16,13 @@ export function monitorAudio(
     const now = performance.now();
     if (level(input, inputBytes) > 0.02) inputAt = now;
     const analyser = output();
+    let outputSignal = false;
     if (analyser) {
       if (outputBytes.length !== analyser.fftSize) outputBytes = new Uint8Array(analyser.fftSize);
-      if (level(analyser, outputBytes) > 0.008) outputAt = now;
+      outputSignal = level(analyser, outputBytes) > 0.008;
+      if (outputSignal) outputAt = now;
     }
-    observe(now - inputAt < 400, now - outputAt < 700);
+    observe(now - inputAt < 400, now - outputAt < 700, outputSignal);
   }, 50);
   return () => clearInterval(timer);
 }

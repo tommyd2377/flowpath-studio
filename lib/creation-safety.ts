@@ -1,3 +1,4 @@
+import { validateVisualDisplay, type VisualDisplayConfiguration } from './visual-display';
 import { createHash } from 'node:crypto';
 import { WAVEFORM_NAME_LIMIT, WAVEFORM_PROMPT_LIMIT } from './account-model';
 import { validateTextPanelConfiguration, type TextPanelConfiguration } from './text-panel';
@@ -5,9 +6,9 @@ import { validProfilePhoto } from './profile-photo';
 
 export type CreationSafetyStatus = 'pending' | 'allowed' | 'blocked' | 'manual-review' | 'revoked';
 export type CreationTextPanel = TextPanelConfiguration;
-export type ReviewDocument = { id: string; digest: string; filename: string };
-export type CreationCandidate = { name: string; initialPrompt: string; textPanel?: CreationTextPanel | null; profilePhoto?: string | null; document?: ReviewDocument };
-export type CanonicalCreationCandidate = { name: string; initialPrompt: string; textPanel: CreationTextPanel | null; profilePhoto?: string; document?: ReviewDocument };
+export type ReviewDocument = { waveformId?: string; id: string; digest: string; filename: string };
+export type CreationCandidate = { name: string; initialPrompt: string; textPanel?: CreationTextPanel | null; visualDisplay?: VisualDisplayConfiguration | null; profilePhoto?: string | null; document?: ReviewDocument };
+export type CanonicalCreationCandidate = { name: string; initialPrompt: string; textPanel: CreationTextPanel | null; visualDisplay?: VisualDisplayConfiguration; profilePhoto?: string; document?: ReviewDocument };
 export const CREATION_SAFETY_CATEGORIES = [
   'extremist-impersonation', 'violent-extremism', 'sexual-content-minors',
   'hateful-abuse', 'credible-harm', 'fraud-impersonation', 'privacy-abuse',
@@ -55,13 +56,16 @@ export function canonicalCreationCandidate(value: unknown): CanonicalCreationCan
     textPanel = text.value;
   }
   if (row.profilePhoto !== undefined && row.profilePhoto !== null && !validProfilePhoto(row.profilePhoto)) throw new CreationSafetyError('Use a valid bounded raster portrait.', 400);
+  const visual = validateVisualDisplay(row.visualDisplay);
+  if (!visual.ok) throw new CreationSafetyError('Use a bounded Visual Display collection.', 400);
   const doc = object(row.document);
-  if (row.document !== undefined && (!doc || Object.keys(doc).length !== 3 || typeof doc.id !== 'string' || !/^[a-f0-9-]{36}$/.test(doc.id)
+  if (row.document !== undefined && (!doc || Object.keys(doc).some(key => !['id', 'digest', 'filename', 'waveformId'].includes(key))
+    || doc.waveformId !== undefined && (typeof doc.waveformId !== 'string' || !/^[a-f0-9-]{36}$/.test(doc.waveformId)) || typeof doc.id !== 'string' || !/^[a-f0-9-]{36}$/.test(doc.id)
     || typeof doc.digest !== 'string' || !/^[a-f0-9]{64}$/.test(doc.digest) || typeof doc.filename !== 'string'
     || !doc.filename || doc.filename.length > 160 || /[\\/\u0000-\u001f\u007f]/.test(doc.filename))) throw new CreationSafetyError('Invalid document review binding.', 400);
   // Omit absent additions so old text-only records keep their exact digest; new assets cannot reuse it.
-  return { name, initialPrompt, textPanel, ...(typeof row.profilePhoto === 'string' ? { profilePhoto: row.profilePhoto } : {}),
-    ...(doc ? { document: { id: doc.id as string, digest: doc.digest as string, filename: doc.filename as string } } : {}) };
+  return { name, initialPrompt, textPanel, ...(visual.value ? { visualDisplay: visual.value } : {}), ...(typeof row.profilePhoto === 'string' ? { profilePhoto: row.profilePhoto } : {}),
+    ...(doc ? { document: { id: doc.id as string, digest: doc.digest as string, filename: doc.filename as string, ...(typeof doc.waveformId === 'string' ? { waveformId: doc.waveformId } : {}) } } : {}) };
 }
 
 export function creationContentDigest(candidate: CreationCandidate): string {

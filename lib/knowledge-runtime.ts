@@ -1,3 +1,7 @@
+import { localPluginAccess, ownerPluginPlayback, pluginAudienceProjection, curatedPluginPlayback, withKnowledgeAccess } from './plugin-access-runtime';
+import { creationContentDigest } from './creation-safety';
+import { curatedVisitorVoice } from './curated-demo';
+import { requestWaveformId } from './account-server';
 import { accountServer } from './account-runtime';
 import { applicationDatabase } from './application-database';
 import { createKnowledgeStore, knowledgeReviewCandidate } from './knowledge-store';
@@ -37,12 +41,14 @@ export const knowledgeStore = createKnowledgeStore(applicationDatabase(), fixtur
   },
   assertAllowed: (tx, scope, doc) => creationReviewStore().requireAllowed(tx, scope.uid, knowledgeReviewCandidate(doc)).then(() => undefined),
 } : undefined, hosted ? createKnowledgeStorageBudget() : undefined);
-export const knowledgeServer = createKnowledgeServer({ store: knowledgeStore, available, requireAdultConsent: hosted,
+export const knowledgeServer = createKnowledgeServer({ store: knowledgeStore, available, requireAdultConsent: hosted, authorizeSearch: withKnowledgeAccess,
   publicOrigin: localAppOrigin() ? undefined : process.env.FLOWPATH_PUBLIC_ORIGIN,
   trustedProxyHost: process.env.FLOWPATH_TRUSTED_PROXY_HOST,
   scope: async request => {
     // File management must remain available while the waveform itself awaits review.
-    const resolved = await accountServer.resolveVoiceWaveform(request, undefined, 'cleanup');
+    const header = request.headers.get('X-FlowPath-Waveform');
+    const id = requestWaveformId(request) ?? (header && /^[0-9a-f-]{36}$/.test(header) ? header : undefined);
+    const resolved = await accountServer.resolveVoiceWaveform(request, id, 'cleanup');
     const identity = await accountServer.resolveIdentity(request);
     return resolved && identity && resolved.ownerUid === identity.owner.uid ? { uid: resolved.ownerUid,
       waveformId: resolved.waveform.id, isCurrent: identity.isCurrent, reviewIdentity: identity } : null;
@@ -58,8 +64,11 @@ export async function resolveDemoVisitor(request: Request) {
 export async function withWaveformKnowledge(request: Request, id: string) {
   if (new URL(request.url).searchParams.get('preview') === 'published') {
     const { getPaidStore, paidEnabled } = await import('./paid-runtime');
-    return paidEnabled ? resolvePublishedPreview(request, id, { resolveAdmin: accountServer.resolveAdmin,
+    const preview = paidEnabled ? await resolvePublishedPreview(request, id, { resolveAdmin: accountServer.resolveAdmin,
       approvedPublication: getPaidStore().approvedPublication }) : null;
+    if (!preview || request.method === 'DELETE') return preview;
+    const projected = await pluginAudienceProjection(preview.ownerUid, id, preview.waveform);
+    return { ...preview, waveform: projected.waveform, contentDigest: creationContentDigest(preview.waveform), pluginRevision: projected.revision };
   }
   const resolved = await accountServer.resolveVoiceWaveform(request, id, 'voice');
   if (!resolved) {
@@ -68,12 +77,18 @@ export async function withWaveformKnowledge(request: Request, id: string) {
     if (!visitor) return null;
     const row = request.method === 'DELETE' ? await curatedDemo.cleanupSnapshot() : await curatedDemo.published();
     if (!row) return null;
-    return { ownerUid: row.ownerUid, waveform: { ...row.waveform, knowledge: false },
-      publicVisitor: { ...await resolveDemoVisitor(request), ...visitor, contentDigest: row.contentDigest, demoSource: { ownerUid: row.ownerUid } },
+    const projected = request.method === 'DELETE' ? { waveform: curatedVisitorVoice(row.waveform), revision: undefined, locked: [], expiresAt: undefined }
+      : await curatedPluginPlayback(request, row.ownerUid, id, curatedVisitorVoice(row.waveform));
+    return { ownerUid: row.ownerUid, waveform: projected.waveform, pluginEvents: projected.locked.length > 0,
+      publicVisitor: { ...await resolveDemoVisitor(request), ...visitor, contentDigest: row.contentDigest, ...(projected.revision === undefined ? {} : { pluginRevision: projected.revision }), ...(projected.expiresAt === undefined ? {} : { pluginExpiresAt: projected.expiresAt }), demoSource: { ownerUid: row.ownerUid } },
       isCurrent: async () => request.method === 'DELETE' || !!await curatedDemo.published() };
   }
   const knowledge = request.method !== 'DELETE' && available() && await knowledgeStore.enabled({
     uid: resolved.ownerUid, waveformId: id, isCurrent: resolved.isCurrent,
   });
-  return { ...resolved, waveform: { ...resolved.waveform, knowledge } };
+  const waveform = { ...resolved.waveform, knowledge };
+  if (!localPluginAccess() || request.method === 'DELETE') return { ...resolved, waveform };
+  const view = await ownerPluginPlayback(request, id, waveform);
+  return { ...resolved, waveform: view.waveform, pluginRevision: view.revision, pluginExpiresAt: view.expiresAt,
+    pluginEvents: view.locked.length > 0, contentDigest: creationContentDigest(waveform) };
 }

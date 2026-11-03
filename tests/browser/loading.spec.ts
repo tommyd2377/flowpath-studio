@@ -58,7 +58,7 @@ test('only the saving button pulses and a failed save preserves the edited form'
   await page.route('**/api/billing', route => route.fulfill({ json: { enabled: false } }));
   let resume!: () => void;
   const save = new Promise<void>(resolve => { resume = resolve; });
-  await page.route('**/api/waveform', async route => {
+  await page.route('**/api/waveform{,?*}', async route => {
     if (route.request().method() === 'PUT') {
       await save;
       await route.fulfill({ status: 503, json: { error: 'Save unavailable. Try again.' } });
@@ -73,6 +73,7 @@ test('only the saving button pulses and a failed save preserves the edited form'
     const saving = page.getByRole('button', { name: 'Saving…', exact: true });
     await expect(saving).toHaveAttribute('aria-busy', 'true');
     await expect(saving).toBeDisabled();
+    await expect(saving).toHaveCSS('cursor', 'default');
     await expect(saving.locator('.brand-loader--inline img')).toHaveAttribute('src', /flowpath-icon-square/);
     await expect(saving.locator('img')).toHaveCSS('animation-duration', '1s');
     await expect(page.getByRole('button', { name: 'Sign out', exact: true }).locator('.brand-loader')).toHaveCount(0);
@@ -85,4 +86,37 @@ test('only the saving button pulses and a failed save preserves the edited form'
   await expect(prompt).toHaveValue('Keep these unsaved instructions.');
   await expect(page.getByRole('button', { name: 'Save draft', exact: true })).toBeEnabled();
   await expect(page.locator('.brand-loader')).toHaveCount(0);
+});
+
+
+test('Google sign-in uses the branded loader without a system wait cursor', async ({ page }) => {
+  let signingIn = false;
+  let resume!: () => void;
+  const configuration = new Promise<void>(resolve => { resume = resolve; });
+  await page.route('**/api/account', async route => {
+    if (signingIn) {
+      await configuration;
+      await route.fulfill({ status: 503, json: { error: 'Synthetic sign-in unavailable.' } });
+    } else await route.fulfill({ json: { mode: 'firebase', user: null } });
+  });
+  await page.goto('/account');
+  const google = page.getByRole('button', { name: 'Continue with Google', exact: true });
+  await expect(google.locator('img')).toHaveAttribute('src', '/brand/google-g.png');
+  signingIn = true;
+  await google.click();
+  try {
+    await expect(google).toBeDisabled();
+    await expect(google).toHaveAttribute('aria-busy', 'true');
+    await expect(google).toHaveCSS('cursor', 'default');
+    const logo = google.locator('.brand-loader--inline img');
+    await expect(logo).toHaveAttribute('src', /flowpath-icon-square/);
+    await expect(logo).toHaveCSS('animation-name', 'brand-heartbeat');
+    await expect.poll(() => logo.evaluate(image => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+    await page.screenshot({ path: 'test-results/loader-google.png' });
+  } finally { resume(); }
+  await expect(google).toBeEnabled();
+  await expect(google).toHaveAttribute('aria-busy', 'false');
+  await expect(google.locator('.brand-loader')).toHaveCount(0);
+  await expect(google.locator('img')).toHaveAttribute('src', '/brand/google-g.png');
+  await expect(page.locator('.account-error')).toBeVisible();
 });

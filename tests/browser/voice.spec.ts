@@ -151,8 +151,9 @@ test('Knowledge shows sourced passages on request and hiding it leaves voice con
   await fakeMedia(page); await mockSession(page);
   await page.route('**/api/waveform*', route => route.fulfill({ json: { waveform: { id: waveformId, name: 'Knowledge guide', textPanel: { type: 'text', version: 2 } } } }));
   let searches = 0;
-  await page.route('**/api/knowledge/search', route => {
-    searches++; expect(route.request().postDataJSON().waveformId).toBe(waveformId);
+  await page.route('**/api/knowledge/search?*', route => {
+    searches++; expect(new URL(route.request().url()).searchParams.get('id')).toBe(waveformId);
+    expect(route.request().postDataJSON().waveformId).toBe(waveformId);
     return route.fulfill({ json: { revision: 1, passages: [{ id: 'source_1', documentId: waveformId,
       filename: 'museum.txt', quote: 'The museum opens at nine.' }] } });
   });
@@ -173,7 +174,7 @@ test('Knowledge shows sourced passages on request and hiding it leaves voice con
   await page.getByText('1. museum.txt', { exact: true }).click();
   await expect(page.locator('.knowledge-sources blockquote')).toBeVisible();
   expect(searches).toBe(1);
-  await page.getByRole('button', { name: 'Hide', exact: true }).click();
+  await page.getByRole('button', { name: 'Hide display', exact: true }).click();
   await expect(panel).toHaveCount(0); await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
   expect((await tracker(page)).stoppedTracks).toBe(0);
   const events = (await tracker(page)).sentEvents.map(e => JSON.parse(e).type);
@@ -189,7 +190,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 
     await page.route('**/api/waveform*', route => route.fulfill({ json: { waveform: { id, name: 'Benjamin Franklin',
       textPanel: { type: 'text', version: 2 } } } }));
     let searches = 0;
-    await page.route('**/api/knowledge/search', route => {
+    await page.route('**/api/knowledge/search?*', route => {
       searches++;
       return route.fulfill({ json: { revision: 1, passages: [{ id: 'source_1', documentId: id,
         filename: 'Franklin-inventions.txt', quote: 'Bifocals combine reading and distance lenses.' }] } });
@@ -238,21 +239,24 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 
     expect(await end.boundingBox()).toEqual(header);
     expect((await tracker(page)).stoppedTracks).toBe(0); expect(searches).toBe(1);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    for (const name of ['Undo', 'Clear', 'Copy text', 'Hide']) {
+    for (const name of ['Undo', 'Clear', 'Copy text', 'Hide display']) {
       const box = (await page.getByRole('button', { name, exact: true }).boundingBox())!;
       expect(box.y + box.height).toBeLessThanOrEqual(viewport.height - 12);
     }
     await page.emulateMedia({ reducedMotion: 'no-preference' }); await notes.click();
-    await controls.getByRole('button', { name: 'Hide', exact: true }).click();
+    await page.getByRole('button', { name: 'Hide display', exact: true }).click();
     await expect(deck).toHaveCount(0); await page.clock.fastForward(1_000); await expect(region).toHaveCount(0);
     await expect(end).toBeVisible(); expect((await tracker(page)).stoppedTracks).toBe(0);
     await end.click();
-    await page.getByRole('button', { name: 'Show text', exact: true }).click();
+    await page.getByRole('button', { name: 'Show display', exact: true }).click();
     await expect(region).toContainText('My original notes.');
     await page.emulateMedia({ reducedMotion: 'reduce' }); await knowledge.click();
     await page.getByRole('button', { name: 'Clear', exact: true }).click();
-    await controls.getByRole('button', { name: 'Hide', exact: true }).click();
-    await page.getByRole('button', { name: 'Show text', exact: true }).click();
+    await page.getByRole('button', { name: 'Hide display', exact: true }).click();
+    await page.getByRole('button', { name: 'Show display', exact: true }).click();
+    // Reopen the selected Knowledge display, then switch back to independent notes.
+    await expect(region).not.toContainText('My original notes.');
+    await page.getByRole('button', { name: 'Text Box', exact: true }).click();
     await expect(region).toContainText('My original notes.');
     expect((await tracker(page)).microphoneCalls).toBe(1);
   });
@@ -266,7 +270,7 @@ test('source loaders stay inside Knowledge, preserve content, and cannot reopen 
   const releases: Array<() => void> = [];
   const responses = [0, 1].map(() => new Promise<void>(resolve => releases.push(resolve)));
   let searches = 0;
-  await page.route('**/api/knowledge/search', async route => {
+  await page.route('**/api/knowledge/search?*', async route => {
     const index = searches++;
     await responses[index];
     await route.fulfill({ json: { revision: index + 1, passages: [{ id: `source_${index + 1}`, documentId: waveformId,
@@ -304,7 +308,7 @@ test('source loaders stay inside Knowledge, preserve content, and cannot reopen 
     await expect(panel.locator('.brand-loader--component')).toHaveCount(0);
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await expect(page.locator('.live-text-panel__state img')).toHaveCSS('animation-name', 'none');
-    await page.getByRole('button', { name: 'Hide', exact: true }).click();
+    await page.getByRole('button', { name: 'Hide display', exact: true }).click();
     releases[1]();
     await expect.poll(async () => JSON.stringify((await tracker(page)).sentEvents)).toContain('loader_call_1');
     expect(searches).toBe(2);
@@ -879,6 +883,8 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     await expect(page.locator('.voice-hint')).toHaveCSS('opacity', '0');
     const connected = (await wave.boundingBox())!;
     const connectedPhoto = (await photo.boundingBox())!;
+    const identity = (await page.locator('.conversation-identity').boundingBox())!;
+    expect(connectedPhoto.x + connectedPhoto.width + 8).toBeLessThanOrEqual(identity.x);
     if (viewport.width > 600) {
       expect(Math.abs(connectedPhoto.y + connectedPhoto.height / 2 - (connected.y + connected.height / 2))).toBeLessThan(1);
       expect(connectedPhoto.x + connectedPhoto.width).toBeLessThan(connected.x);
@@ -908,7 +914,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     await expect(page.getByRole('img', { name: 'FlowPath', exact: true })).toHaveAttribute('src', /flowpath-logo-full/);
     await expect(page.locator('.profile-photo')).toHaveCount(0);
     await expect(page.locator('.voice-experience')).toHaveCSS('background-color', 'rgb(16, 17, 16)');
-    await expect(page.locator('.voice-hint')).toHaveCSS('color', 'rgb(175, 187, 230)');
+    await expect(page.locator('.voice-hint')).toHaveCSS('color', 'rgb(197, 187, 166)');
     const defaultAccent = await page.locator('.voice-experience').evaluate(element => getComputedStyle(element).getPropertyValue('--accent-rgb').replace(/\s/g, ''));
     expect(defaultAccent).toBe('58,102,255');
   });
@@ -1112,7 +1118,7 @@ test('normal account plugin flow supports dictation, delegated updates and retai
   expect(sent.find(event => event.type === 'response.item.create')?.item.call_id).toBe('call_text');
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(box).toHaveText('Buy eggs and milk. ');
-  await page.getByRole('button', { name: 'Hide', exact: true }).click();
+  await page.getByRole('button', { name: 'Hide display', exact: true }).click();
   await expect(box).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Voice waveform', exact: true })).toBeFocused();
   await speech('Start writing. Another line.');
@@ -1128,10 +1134,10 @@ test('normal account plugin flow supports dictation, delegated updates and retai
   await page.getByRole('button', { name: 'Clear', exact: true }).click();
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(box).toContainText('Another line.');
-  await page.getByRole('button', { name: 'Hide', exact: true }).click();
+  await page.getByRole('button', { name: 'Hide display', exact: true }).click();
   await expect(box).toHaveCount(0);
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.getByRole('button', { name: 'Show text', exact: true }).click();
+  await page.getByRole('button', { name: 'Show display', exact: true }).click();
   await expect(box).toContainText('Another line.');
   await expect(page.locator('.voice-text-panel--live')).toHaveCSS('animation-name', 'none');
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
@@ -1179,9 +1185,10 @@ for (const viewport of [
   expect(bounds.x).toBeGreaterThanOrEqual(0);
   expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width);
   expect(bounds.y + bounds.height).toBeLessThanOrEqual(viewport.height - 12);
-  for (const name of ['Stop writing', 'Undo', 'Clear', 'Copy text', 'Hide']) {
+  for (const name of ['Stop writing', 'Undo', 'Clear', 'Copy text', 'Hide display']) {
     const control = (await page.getByRole('button', { name, exact: true }).boundingBox())!;
-    expect(control.y).toBeGreaterThanOrEqual(bounds.y);
+    if (name === 'Hide display' && viewport.width > 900 && viewport.height > 650) expect(control.y + control.height).toBeLessThan(bounds.y);
+    else expect(control.y).toBeGreaterThanOrEqual(bounds.y);
     expect(control.y + control.height).toBeLessThanOrEqual(viewport.height - 12);
     expect(control.x).toBeGreaterThanOrEqual(0);
     expect(control.x + control.width).toBeLessThanOrEqual(viewport.width);
@@ -1189,7 +1196,7 @@ for (const viewport of [
   expect(await box.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
   await page.screenshot({ path: `test-results/text-workspace-${viewport.width}-${viewport.height}.png` });
-  await page.getByRole('button', { name: 'Hide', exact: true }).click();
+  await page.getByRole('button', { name: 'Hide display', exact: true }).click();
   await expect(box).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'End conversation', exact: true }).click();
@@ -1285,7 +1292,7 @@ test('a signed-in waveform review blocker shows settings guidance without asking
   });
   await page.goto(`/w/${id}`); await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.locator('#voice-status')).toContainText('approved safety review');
-  await expect(page.getByRole('link', { name: 'Open waveform settings', exact: true })).toHaveAttribute('href', '/account');
+  await expect(page.getByRole('link', { name: 'Open waveform settings', exact: true })).toHaveAttribute('href', `/account?id=${id}`);
   await expect(page.locator('#voice-status')).not.toContainText('Sign in');
   expect((await tracker(page)).microphoneCalls).toBe(0); expect(starts).toBe(0);
 });
@@ -1328,7 +1335,7 @@ for (const viewport of [{ width: 1920, height: 936 }, { width: 1280, height: 720
     await page.route('**/api/waveform*', route => route.fulfill({ json: { waveform: { id: waveformId,
       name: 'Knowledge layout guide', textPanel: { type: 'text', version: 2 } } } }));
     let searches = 0;
-    await page.route('**/api/knowledge/search', route => {
+    await page.route('**/api/knowledge/search?*', route => {
       const result = searches++ === 0 ? 0 : 1;
       return route.fulfill({ json: { revision: searches, passages: Array.from({ length: 4 }, (_, i) => ({
         id: `source_${i + 1}`, documentId: waveformId, filename: `synthetic-source-${i + 1}.txt`,
@@ -1351,7 +1358,7 @@ for (const viewport of [{ width: 1920, height: 936 }, { width: 1280, height: 720
       expect(box.y + box.height).toBeLessThanOrEqual(viewport.height - 12);
       expect(footer.y + footer.height).toBeLessThanOrEqual(box.y + box.height + 1);
       expect(await panel.evaluate(node => node.clientHeight)).toBeGreaterThan(0);
-      for (const name of ['Undo', 'Clear', 'Copy text', 'Hide']) {
+      for (const name of ['Undo', 'Clear', 'Copy text', 'Hide display']) {
         const control = (await page.getByRole('button', { name, exact: true }).boundingBox())!;
         expect(control.y + control.height).toBeLessThanOrEqual(viewport.height - 12);
       }
@@ -1437,7 +1444,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 
     if (route.request().method() === 'POST') { starts++; if (starts === 2) await connecting; }
     return route.fallback();
   });
-  await page.route('**/api/knowledge/search', route => {
+  await page.route('**/api/knowledge/search?*', route => {
     searches++;
     return route.fulfill({ json: { revision: 1, passages: [{ id: 'source_1', documentId: id, filename: 'Franklin.txt', quote: 'Franklin practiced careful observation. '.repeat(20) }] } });
   });
@@ -1496,7 +1503,7 @@ for (const display of ['text', 'knowledge'] as const) test(`Streamdown visibly r
   const id = '00000000-0000-4000-8000-000000000074';
   await page.route('**/api/waveform*', route => route.fulfill({ json: { waveform: { id, name: 'Reveal guide', textPanel: { type: 'text', version: 2 } } } }));
   const passage = 'Franklin shared practical ideas with his neighbors. '.repeat(12);
-  await page.route('**/api/knowledge/search', route => route.fulfill({ json: { revision: 1, passages: [{ id: 'source_1', documentId: id, filename: 'Franklin.txt', quote: passage }] } }));
+  await page.route('**/api/knowledge/search?*', route => route.fulfill({ json: { revision: 1, passages: [{ id: 'source_1', documentId: id, filename: 'Franklin.txt', quote: passage }] } }));
   await page.goto(`/w/${id}`); await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.locator('.voice-experience')).toHaveAttribute('data-connected', 'true');
   const envelope = (event: object) => ({ type: 'response.event', delegation_id: 'reveal_job', event });
@@ -1560,4 +1567,282 @@ test('a queued restart stays blocked when old-call cleanup is unconfirmed', asyn
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click(); closed();
   await expect(page.locator('#voice-status')).toContainText('disconnection could not be confirmed');
   expect(calls.filter(call => call.method === 'POST')).toHaveLength(1);
+});
+
+for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 }, { width: 320, height: 568 }, { width: 640, height: 360 }]) test(`Visual Display shares voice actions and controls without interrupting notes or cleanup at ${viewport.width}×${viewport.height}`, async ({ page }) => {
+  const { visualFixture } = await import('../visual-display-fixture');
+  const visualDisplay = await visualFixture();
+  const id = '00000000-0000-4000-8000-000000000087';
+  await fakeMedia(page); const calls = await mockSession(page);
+  await page.setViewportSize(viewport); await page.emulateMedia({ reducedMotion: viewport.width < 640 ? 'reduce' : 'no-preference' });
+  await page.route('**/api/waveform*', route => route.fulfill({ json: { waveform: { id, name: 'Picture guide', textPanel: { type: 'text', version: 2 }, visualDisplay } } }));
+  await page.route('**/api/knowledge/search?*', route => route.fulfill({ json: { revision: 1, passages: [{ id: 'source_1', documentId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', filename: 'Town.txt', quote: 'The square is west of the river.' }] } }));
+  await page.goto(`/w/${id}`);
+  const display = page.getByRole('region', { name: 'Visual Display content', exact: true });
+  await expect(display).toHaveCount(0);
+  const controls = page.getByRole('navigation', { name: 'Plugin displays', exact: true });
+  await expect(controls).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Show display', exact: true })).toHaveCount(0);
+  await expect(page.locator('.voice-text-panel--live')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Show pictures|Show text/ })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await expect(display).toHaveCount(0);
+  await expect(controls).toHaveCount(0);
+  await expect(page.locator('.wordmark')).toHaveCSS('opacity', '0');
+  await expect(page.locator('.wordmark')).toHaveAttribute('aria-hidden', 'true');
+  const voiceBox = await page.locator('.wave-control').boundingBox();
+  let serial = 0;
+  const tool = async (name: string, args: object, late = false) => {
+    const suffix = ++serial;
+    const event = (e: object) => ({ type: 'response.event', delegation_id: `visual_${suffix}`, event: e });
+    await emit(page, event({ type: 'response.created', response: { id: `visual_response_${suffix}` } }));
+    const finish = async () => {
+      await emit(page, event({ type: 'response.output_item.done', response_id: `visual_response_${suffix}`, item: { type: 'function_call', name, call_id: `visual_call_${suffix}`, arguments: JSON.stringify(args) } }));
+      await emit(page, event({ type: 'response.completed', response: { id: `visual_response_${suffix}`, status: 'completed' } }));
+    };
+    if (!late) await finish();
+    return finish;
+  };
+  await emit(page, { type: 'session.input_transcript.delta', event_id: 'notes_before_visual', delta: 'Start writing. Keep my notes.', start_ms: 0, end_ms: 100 });
+  await tool('update_visual_display', { action: 'select', imageId: 'town-map', text: '' });
+  await expect(display.getByRole('img')).toHaveAttribute('alt', visualDisplay.images[0].description);
+  await expect(display).toContainText('The square is west of the river.');
+  await expect(page.getByRole('region', { name: 'Text Box content', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await tool('update_visual_display', { action: 'append_text', imageId: '', text: ' **Added explanation.**' });
+  await expect(display).toContainText('Added explanation.');
+  await expect(display).not.toContainText(visualDisplay.images[0].description);
+  await page.screenshot({ path: `/private/tmp/flowpath-display-ui-${viewport.width}-${viewport.height}.png` });
+  await tool('update_visual_display', { action: 'append_text', imageId: '', text: '<script>window.visualAttack=true</script>' });
+  await expect(display.locator('script')).toHaveCount(0);
+  expect(await page.evaluate(() => 'visualAttack' in window)).toBe(false);
+  for (const control of ['Choose picture','Next picture','Hide display','End conversation']) {
+    const node = control === 'Choose picture' ? page.getByRole('combobox', { name: control }) : page.getByRole('button', { name: control, exact: true });
+    expect(await node.evaluate(n => { const r = n.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth; })).toBe(true);
+  }
+  await tool('update_visual_display', { action: 'replace_text', imageId: '', text: 'A long accompanying explanation. '.repeat(50) });
+  await display.evaluate(node => { node.scrollTop = node.scrollHeight; });
+  expect(await display.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+  await page.getByRole('button', { name: 'Next picture', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Workshop', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Next picture', exact: true })).toBeFocused();
+  expect(await display.evaluate(node => node.scrollTop)).toBe(0);
+  expect(await display.getByRole('img').evaluate(node => node.getBoundingClientRect().top >= node.parentElement!.parentElement!.parentElement!.getBoundingClientRect().top)).toBe(true);
+  await tool('update_visual_display', { action: 'previous', imageId: '', text: '' });
+  await expect(page.getByRole('heading', { name: 'Town map', exact: true })).toBeVisible();
+  await page.getByRole('combobox', { name: 'Choose picture' }).selectOption('workshop');
+  await expect(page.getByRole('heading', { name: 'Workshop', exact: true })).toBeVisible();
+  const late = await tool('update_visual_display', { action: 'show', imageId: '', text: '' }, true);
+  await page.getByRole('button', { name: 'Hide display', exact: true }).click();
+  await late(); await expect(display).toHaveCount(0);
+  await expect(page.locator('.plugin-carousel, .display-frame')).toHaveCount(0);
+  await expect(controls).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Show display', exact: true })).toHaveAttribute('aria-expanded', 'false');
+  expect((await tracker(page)).stoppedTracks).toBe(0);
+  await expect(page.getByRole('button', { name: 'Voice waveform', exact: true })).toBeFocused();
+  await page.getByRole('button', { name: 'Show display', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Workshop', exact: true })).toBeVisible();
+  await emit(page, { type: 'session.input_transcript.delta', event_id: 'generic_hide_1', delta: 'Hide the dis', start_ms: 101, end_ms: 110 });
+  await expect(display).toBeVisible();
+  await emit(page, { type: 'session.input_transcript.delta', event_id: 'generic_hide_2', delta: 'play.', start_ms: 110, end_ms: 120 });
+  await expect(display).toHaveCount(0);
+  await page.getByRole('button', { name: 'Show display', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Workshop', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Text Box', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Text Box content', exact: true })).toContainText('Keep my notes.');
+  await expect(page.getByRole('button', { name: 'Stop writing', exact: true })).toBeDisabled();
+  await tool('search_waveform_knowledge', { query: 'Where is the square?', display: true });
+  await expect(page.getByRole('region', { name: 'Knowledge content', exact: true })).toContainText('square is west');
+  await emit(page, { type: 'session.input_transcript.delta', event_id: 'gallery_open_1', delta: 'Show picture Town ', start_ms: 121, end_ms: 130 });
+  await expect(page.getByRole('region', { name: 'Knowledge content', exact: true })).toBeVisible();
+  await emit(page, { type: 'session.input_transcript.delta', event_id: 'gallery_open_2', delta: 'map.', start_ms: 130, end_ms: 140 });
+  await expect(display.getByRole('img')).toHaveAttribute('alt', visualDisplay.images[0].description);
+  await emit(page, { type: 'session.input_transcript.delta', event_id: 'gallery_next', delta: 'Next picture.', start_ms: 141, end_ms: 150 });
+  await expect(page.getByRole('heading', { name: 'Workshop', exact: true })).toBeVisible();
+  expect(calls.filter(c => c.method === 'POST')).toHaveLength(1);
+  expect((await tracker(page)).microphoneCalls).toBe(1);
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeVisible();
+  await expect(display).toBeVisible();
+  await page.getByRole('button', { name: 'Hide display', exact: true }).click();
+  await page.getByRole('button', { name: 'Show display', exact: true }).click();
+  await expect(display).toBeVisible();
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await expect(display).toHaveCount(0);
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  await expect.poll(async () => (await tracker(page)).stoppedTracks).toBe(2);
+  expect(await page.locator('.wave-control').boundingBox()).toEqual(voiceBox);
+  await expect(page.locator('.wordmark')).toHaveCSS('opacity', '0');
+  await expect(page.locator('.conversation-state')).toHaveText('Conversation ended');
+  await page.route('**/api/session*', route => route.request().method() === 'GET'
+    ? route.fulfill({ json: { enabled: false, message: 'The daily voice allowance has been reached. Please return tomorrow.' } }) : route.fallback());
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.locator('#voice-status')).toContainText('daily voice allowance');
+  await expect(page.locator('.wordmark')).toHaveCSS('opacity', '0');
+  const identity = (await page.locator('.conversation-identity').boundingBox())!;
+  const feedback = (await page.locator('#voice-status').boundingBox())!;
+  const toggle = (await page.getByRole('button', { name: 'Show display', exact: true }).boundingBox())!;
+  expect(identity.y + identity.height).toBeLessThan(feedback.y);
+  if (viewport.width > 900 && viewport.height > 650) expect(toggle.y + toggle.height).toBeLessThan(identity.y);
+  else expect(toggle.y).toBeGreaterThan(feedback.y + feedback.height);
+  expect(feedback.y + feedback.height).toBeLessThanOrEqual(viewport.height);
+  await page.screenshot({ path: `/private/tmp/flowpath-display-ui-ended-error-${viewport.width}-${viewport.height}.png` });
+  await page.reload();
+  await expect(controls).toHaveCount(0);
+  await expect(display).toHaveCount(0);
+});
+
+for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 }, { width: 320, height: 568 }]) test(`single-image Visual Display omits navigation and uses the shared visibility toggle at ${viewport.width}px`, async ({ page }) => {
+  const { visualFixture } = await import('../visual-display-fixture');
+  const visualDisplay = await visualFixture();
+  visualDisplay.images = visualDisplay.images.slice(0, 1);
+  const id = '00000000-0000-4000-8000-000000000088';
+  await fakeMedia(page); const calls = await mockSession(page);
+  await page.setViewportSize(viewport); await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.route('**/api/waveform*', route => route.fulfill({ json: { waveform: { id, name: 'Visual Test', visualDisplay } } }));
+  await page.goto(`/w/${id}`);
+  const controls = page.getByRole('navigation', { name: 'Plugin displays', exact: true });
+  await expect(controls).toHaveCount(0);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  await expect(controls).toHaveCount(0);
+  const backend = (event: object) => emit(page, { type: 'response.event', delegation_id: 'single_visual', event });
+  await backend({ type: 'response.created', response: { id: 'single_response' } });
+  await backend({ type: 'response.output_item.done', response_id: 'single_response', item: { type: 'function_call', name: 'update_visual_display', call_id: 'single_call', arguments: JSON.stringify({ action: 'show', imageId: '', text: '' }) } });
+  const display = page.getByRole('region', { name: 'Visual Display content', exact: true });
+  await expect(display.getByRole('img')).toBeVisible();
+  await expect(page.getByRole('button', { name: /Previous picture|Next picture/ })).toHaveCount(0);
+  await expect(page.getByRole('combobox', { name: 'Choose picture' })).toHaveCount(0);
+  await expect(page.locator('.display-frame .live-text-panel__footer')).toHaveCount(0);
+  await expect(page.getByText('1 of 1', { exact: true })).toHaveCount(0);
+  const frame = (await page.locator('.display-frame').boundingBox())!;
+  expect(frame.y + frame.height).toBeLessThanOrEqual(viewport.height - 12);
+  await expect(display.getByRole('img')).toHaveCSS('object-fit', 'contain');
+  expect(await display.getByRole('img').evaluate(node => (node as HTMLImageElement).naturalWidth)).toBe(640);
+  await page.screenshot({ path: `/private/tmp/flowpath-display-ui-single-${viewport.width}.png` });
+  await page.getByRole('button', { name: 'Hide display', exact: true }).click();
+  await expect(page.locator('.display-frame, .plugin-carousel')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Voice waveform', exact: true })).toBeFocused();
+  await page.getByRole('button', { name: 'Show display', exact: true }).focus(); await page.keyboard.press('Enter');
+  await expect(display).toBeVisible();
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  await page.getByRole('button', { name: 'Hide display', exact: true }).click();
+  await page.getByRole('button', { name: 'Show display', exact: true }).click();
+  await expect(display).toBeVisible();
+  expect(calls.filter(call => call.method === 'POST')).toHaveLength(1);
+  expect((await tracker(page)).microphoneCalls).toBe(1);
+  expect((await tracker(page)).stoppedTracks).toBe(1);
+});
+
+test('Visual Display creator upload stays in its selected draft and resets when switching waveforms', async ({ page }) => {
+  const { visualFixture } = await import('../visual-display-fixture');
+  const fixtures = await visualFixture();
+  const firstId = 'a0000000-0000-4000-8000-000000000087', secondId = 'b0000000-0000-4000-8000-000000000087';
+  const waveforms = [firstId, secondId].map((id, i) => ({ id, name: `Guide ${i + 1}`, initialPrompt: 'Be a friendly guide.', voice: 'marin', accentColor: '#3a66ff', profilePhoto: null, visualDisplay: null as typeof fixtures | null }));
+  await page.route('**/api/account', route => route.fulfill({ json: { mode: 'firebase', user: { uid: 'synthetic-owner', displayName: 'Synthetic owner' }, creationSafetyEnabled: false } }));
+  await page.route('**/api/waveform*', async route => {
+    const id = new URL(route.request().url()).searchParams.get('id') ?? firstId;
+    const index = waveforms.findIndex(w => w.id === id);
+    if (route.request().method() === 'PUT') waveforms[index] = { ...waveforms[index], ...route.request().postDataJSON() };
+    await route.fulfill({ json: { waveform: waveforms[index], waveforms: waveforms.map(({ id, name }) => ({ id, name })) } });
+  });
+  await page.goto('/account'); await settingsSection(page, 'plugins');
+  await page.getByRole('button', { name: 'Apply Visual Display', exact: true }).click();
+  const upload = Buffer.from(fixtures.images[0].src.split(',')[1], 'base64');
+  const chooserPromise = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Choose picture', exact: true }).click();
+  const chooser = await chooserPromise;
+  await chooser.setFiles({ name: 'town-map.png', mimeType: 'image/png', buffer: upload });
+  await page.getByLabel('Picture title', { exact: true }).fill('Town map');
+  await page.getByLabel('Description for the voice', { exact: true }).fill(fixtures.images[0].description);
+  await page.getByLabel('Text shown beside the picture (optional)', { exact: true }).fill(fixtures.images[0].text);
+  await page.screenshot({ path: '/private/tmp/flowpath-visual-settings.png' });
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
+  await expect(page.locator('.account-status')).toContainText('Saved.');
+  expect(waveforms[0].visualDisplay?.images).toHaveLength(1);
+  expect(waveforms[1].visualDisplay).toBeNull();
+  await page.getByLabel('Waveform ·', { exact: false }).selectOption(secondId);
+  await settingsSection(page, 'plugins'); await expect(page.getByRole('button', { name: 'Apply Visual Display', exact: true })).toBeVisible();
+  await page.getByLabel('Waveform ·', { exact: false }).selectOption(firstId);
+  await settingsSection(page, 'plugins'); await expect(page.getByLabel('Picture title', { exact: true })).toHaveValue('Town map');
+  await page.getByLabel('Text shown beside the picture (optional)', { exact: true }).fill('Unpublished draft edit');
+  await page.getByRole('button', { name: 'Discard changes', exact: true }).click();
+  await expect(page.getByLabel('Text shown beside the picture (optional)', { exact: true })).toHaveValue(fixtures.images[0].text);
+});
+
+
+test('plugin access settings protect the playback route and unlock Text Box on the same mocked call', async ({ page }) => {
+  await fakeMedia(page);
+  const calls = await mockSession(page);
+  await page.goto('/account');
+  await page.getByRole('button', { name: 'Use test owner A', exact: true }).click();
+  await settingsSection(page, 'appearance');
+  await page.getByLabel('Waveform name', { exact: true }).fill('Plugin access fixture');
+  await settingsSection(page, 'instructions');
+  await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('Be a helpful museum guide.');
+  await settingsSection(page, 'plugins');
+  const apply = page.getByRole('button', { name: 'Apply plugin', exact: true });
+  if (await apply.isVisible()) await apply.click();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
+  await expect(page.locator('.account-status')).toContainText('Saved.');
+  const { waveform } = await (await page.request.get('/api/waveform')).json();
+  const settings = page.getByRole('group', { name: 'Plugin access' });
+  await settings.getByLabel('Require access code for Text Box', { exact: true }).check();
+  await settings.getByLabel('Require access code for Knowledge', { exact: true }).check();
+  await settings.getByLabel('Shared access code', { exact: true }).fill('synthetic-access-code');
+  await settings.getByRole('button', { name: 'Save plugin access', exact: true }).click();
+  await expect(settings.getByRole('status')).toHaveText('Plugin protection saved.');
+  const endpoint = `/api/plugin-access?waveformId=${waveform.id}`;
+  const origin = new URL(page.url()).origin;
+  const view = await (await page.request.get(`/api/waveform?id=${waveform.id}`, { headers: { 'X-FlowPath-View': 'playback' } })).json();
+  expect(view.waveform.textPanel).toBeNull();
+  expect(view.lockedPlugins).toEqual(['text', 'knowledge']);
+  expect((await page.request.post('/api/knowledge/search', { headers: { Origin: origin, 'X-FlowPath-Waveform': waveform.id },
+    data: { waveformId: waveform.id, query: 'Private passage' } })).status()).toBe(403);
+
+  // The browser uses the real code verifier and cookie. Only the live provider update is simulated.
+  let updatedSession: string | undefined;
+  await page.route('**/api/plugin-access?*', async route => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    const { sessionId, ...body } = route.request().postDataJSON();
+    updatedSession = sessionId;
+    await route.fulfill({ response: await route.fetch({ postData: body }) });
+  });
+  await page.goto(`/w/${waveform.id}`);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.locator('.voice-experience')).toHaveAttribute('data-connected', 'true');
+  await page.getByText('Unlock plugins', { exact: true }).click();
+  const unlock = page.getByRole('form', { name: 'Unlock a plugin' });
+  await unlock.getByLabel('Access code', { exact: true }).press('Escape');
+  await expect(unlock).toBeHidden();
+  await expect(page.locator('.voice-experience')).toHaveAttribute('data-connected', 'true');
+  await page.getByText('Unlock plugins', { exact: true }).click();
+  await unlock.getByRole('combobox', { name: 'Plugin', exact: true }).selectOption('text');
+  await unlock.getByLabel('Access code', { exact: true }).fill('synthetic-incorrect-code');
+  await unlock.getByRole('button', { name: 'Unlock plugin', exact: true }).click();
+  await expect(unlock.getByRole('status')).toContainText('incorrect');
+  await unlock.getByLabel('Access code', { exact: true }).fill('synthetic-access-code');
+  await unlock.getByRole('button', { name: 'Unlock plugin', exact: true }).click();
+  await expect(unlock.getByRole('option', { name: 'Text Box', exact: true })).toHaveCount(0);
+  await expect(unlock.getByRole('option', { name: 'Knowledge', exact: true })).toHaveCount(1);
+  const starts = calls.filter(call => call.method === 'POST');
+  expect(starts).toHaveLength(1);
+  expect(updatedSession).toBe(starts[0].sessionId);
+  await emit(page, { type: 'session.input_transcript.delta', delta: 'Start writing. ', start_ms: 1, end_ms: 12 });
+  await emit(page, { type: 'session.input_transcript.delta', delta: 'Synthetic note. ', start_ms: 13, end_ms: 30 });
+  await expect(page.getByText('Synthetic note.', { exact: true })).toBeVisible();
+  expect((await tracker(page)).microphoneCalls).toBe(1);
+  expect((await tracker(page)).stoppedTracks).toBe(0);
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  const current = await (await page.request.get(`${endpoint}&playback=1`)).json();
+  expect(current.locked).toEqual(['knowledge']);
+  expect(current.textPanel.version).toBe(2);
+  const revision = await (await page.request.get(endpoint)).json();
+  expect((await page.request.put(endpoint, { headers: { Origin: origin }, data: { revision: revision.revision, protectedPlugins: [] } })).ok()).toBe(true);
+  const signedOut = await page.request.delete('/api/account', { headers: { Origin: origin } });
+  expect(signedOut.ok()).toBe(true);
+  expect(signedOut.headersArray().some(header => header.name.toLowerCase() === 'set-cookie'
+    && /^flowpath_local_plugin_[a-f0-9]{24}=;.*Max-Age=0/.test(header.value))).toBe(true);
 });

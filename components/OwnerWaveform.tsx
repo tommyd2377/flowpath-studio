@@ -3,16 +3,18 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import VoiceExperience from './VoiceExperience';
+import type { ProtectedPlugin } from '@/lib/plugin-access';
 import PaidExperience from './PaidExperience';
 import BrandLoader from './BrandLoader';
 import type { Waveform } from '@/lib/account-model';
 import { loadBilling, type BillingView } from '@/lib/paid-client';
 
 export default function OwnerWaveform({ id }: { id: string }) {
+  const [pluginAccess, setPluginAccess] = useState<{ locked: ProtectedPlugin[]; expiresAt?: number }>();
   const [publicDemo, setPublicDemo] = useState(false);
   const [billing, setBilling] = useState<BillingView | null>(null);
   const [billingFailed, setBillingFailed] = useState(false);
-  const [waveform, setWaveform] = useState<Pick<Waveform, 'id' | 'name' | 'accentColor' | 'profilePhoto' | 'textPanel'> | null>(null);
+  const [waveform, setWaveform] = useState<Pick<Waveform, 'id' | 'name' | 'accentColor' | 'profilePhoto' | 'textPanel' | 'visualDisplay'> | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'signed-out' | 'private' | 'error'>('loading');
 
   useEffect(() => {
@@ -28,7 +30,7 @@ export default function OwnerWaveform({ id }: { id: string }) {
       // Resolve routing before mounting voice; an unknown billing mode is not disabled billing.
       void loadBilling(pending.signal).then(result => { if (current()) setBilling(result); })
         .catch(() => { if (current()) setBillingFailed(true); });
-      void fetch(`/api/waveform?id=${encodeURIComponent(id)}`, { cache: 'no-store', signal: pending.signal }).then(async response => {
+      void fetch(`/api/waveform?id=${encodeURIComponent(id)}`, { cache: 'no-store', signal: pending.signal, headers: { 'X-FlowPath-View': 'playback' } }).then(async response => {
         if (!current()) return;
         if (response.status === 401) { setState('signed-out'); return; }
         if (response.status === 404 || response.status === 403) { setState('private'); return; }
@@ -37,23 +39,26 @@ export default function OwnerWaveform({ id }: { id: string }) {
         if (!current()) return;
         if (result.waveform?.id !== id || typeof result.waveform.name !== 'string') { setState('private'); return; }
         setPublicDemo(result.publicDemo === true);
+        setPluginAccess(Array.isArray(result.lockedPlugins) ? { locked: result.lockedPlugins, expiresAt: result.pluginExpiresAt } : undefined);
         setWaveform({ id: result.waveform.id, name: result.waveform.name,
-          accentColor: result.waveform.accentColor, profilePhoto: result.waveform.profilePhoto, textPanel: result.waveform.textPanel });
+          accentColor: result.waveform.accentColor, profilePhoto: result.waveform.profilePhoto, textPanel: result.waveform.textPanel, visualDisplay: result.waveform.visualDisplay });
         setState('ready');
       }).catch(() => { if (current()) setState('error'); });
     };
     const changed = () => load(true);
     const channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('flowpath-account') : null;
     channel?.addEventListener('message', changed);
+    const policies = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('flowpath-plugin-policy') : null;
+    policies?.addEventListener('message', event => { if (event.data === id) load(true); });
     window.addEventListener('flowpath-account-change', changed);
     load();
-    return () => { cancelled = true; controller?.abort(); channel?.close(); window.removeEventListener('flowpath-account-change', changed); };
+    return () => { cancelled = true; controller?.abort(); channel?.close(); policies?.close(); window.removeEventListener('flowpath-account-change', changed); };
   }, [id]);
 
   if (state === 'loading' || state === 'ready' && !billing && !billingFailed) return <BrandLoader variant="screen" label="Loading your waveform…" />;
   if (state === 'ready' && waveform && billing?.enabled) return <PaidExperience key={id} id={id} personal initialBilling={billing} />;
   if (state === 'ready' && waveform && billing && !billing.enabled) return <VoiceExperience key={waveform.id} waveformId={waveform.id} name={waveform.name}
-    accentColor={waveform.accentColor} profilePhoto={waveform.profilePhoto} textPanel={waveform.textPanel} analyticsSurface={publicDemo ? 'public' : 'private'} publicDemo={publicDemo} />;
+    accentColor={waveform.accentColor} profilePhoto={waveform.profilePhoto} textPanel={waveform.textPanel} visualDisplay={waveform.visualDisplay} analyticsSurface={publicDemo ? 'public' : 'private'} publicDemo={publicDemo} pluginAccess={pluginAccess} />;
   return <main className="account-page">
     <Link className="account-back" href="/">← Back to FlowPath</Link>
     <h1>Your waveform</h1>

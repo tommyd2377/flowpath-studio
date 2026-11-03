@@ -13,12 +13,15 @@ export type WaveformInput = {
   voice: VoiceName;
   accentColor: string;
   profilePhoto: string | null;
+  /** Legacy-compatible transport for the founder's account-wide testing preference. */
   adminTesting?: boolean;
   textPanel?: TextPanelConfiguration | null;
+  visualDisplay?: import('./visual-display').VisualDisplayConfiguration | null;
 };
 
 export type Waveform = WaveformInput & { id: string; updatedAt: string };
 
+export const WAVEFORMS_PER_OWNER = 10;
 export const WAVEFORM_NAME_LIMIT = 80;
 export const WAVEFORM_PROMPT_LIMIT = 15_000;
 export const WAVEFORM_DEFAULT_COLOR = '#3a66ff';

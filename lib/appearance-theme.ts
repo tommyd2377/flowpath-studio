@@ -17,17 +17,16 @@ export function accentRGB(color: string): RGB {
   return [1, 3, 5].map(index => parseInt(valid.slice(index, index + 2), 16)) as RGB;
 }
 
-/** Keep the chosen hue while lifting very dark colors enough to remain visible. */
+/** Only accents follow the color wheel; surfaces and reading text stay neutral. */
 export function appearancePalette(color: string) {
   const chosen = accentRGB(color);
-  const surface: RGB = [WAVEFORM_DEFAULT_COLOR, '#ddbf92'].includes(color.toLowerCase()) ? [16, 17, 16]
-    : mix([16, 17, 16], chosen, 0.06);
+  const surface: RGB = [16, 17, 16];
   let accent = chosen;
   for (let step = 1; contrast(accent, surface) < 4.5 && step <= 20; step++) {
     accent = mix(chosen, [255, 255, 255], step / 20);
   }
-  const text = mix(chosen, [255, 255, 255], 0.86);
-  const muted = mix(chosen, [220, 220, 220], 0.72);
+  const text: RGB = [231, 223, 205];
+  const muted: RGB = [197, 187, 166];
   const buttonText: RGB = contrast(accent, [16, 17, 16]) >= 4.5 ? [16, 17, 16] : [255, 255, 255];
   return { chosen, accent, surface, text, muted, buttonText };
 }

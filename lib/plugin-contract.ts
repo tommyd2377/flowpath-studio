@@ -2,6 +2,7 @@
 export const PLUGINS = [
   { id: 'text', version: 2, name: 'Text Box', tools: ['update_text_box'], executor: 'browser', display: 'text' },
   { id: 'knowledge', version: 1, name: 'Knowledge', tools: ['search_waveform_knowledge'], executor: 'server', display: null },
+  { id: 'visual', version: 1, name: 'Visual Display', tools: ['update_visual_display'], executor: 'browser', display: 'visual' },
 ] as const;
 
 export type KnowledgePassage = { id: string; documentId: string; filename: string; quote: string };

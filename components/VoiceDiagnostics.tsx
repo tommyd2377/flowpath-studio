@@ -8,10 +8,15 @@ const subscribe = (notify: () => void) => {
   return () => window.removeEventListener('popstate', notify);
 };
 const browserMode = () => new URLSearchParams(window.location.search).get('diagnostics') === '1';
+const startupMode = () => new URLSearchParams(window.location.search).get('startup') === '1';
 const serverMode = () => false;
 
 export function useDiagnosticsMode() {
   return useSyncExternalStore(subscribe, browserMode, serverMode);
+}
+
+export function useStartupTimingMode() {
+  return useSyncExternalStore(subscribe, startupMode, serverMode);
 }
 
 function describe(event: VoiceDiagnosticEvent): string {

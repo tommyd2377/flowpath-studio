@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { appearancePalette } from '../lib/appearance-theme';
+import { appearancePalette, appearanceTheme } from '../lib/appearance-theme';
 import { WAVEFORM_DEFAULT_COLOR } from '../lib/account-model';
 
 test('extreme custom colors keep waveform controls and text readable on their background', () => {
@@ -22,4 +22,16 @@ test('extreme custom colors keep waveform controls and text readable on their ba
   assert.deepEqual(appearancePalette(WAVEFORM_DEFAULT_COLOR).chosen, [58, 102, 255]);
   assert.deepEqual(appearancePalette(WAVEFORM_DEFAULT_COLOR).surface, [16, 17, 16], 'brand blue keeps the original background');
   assert.deepEqual(appearancePalette('#ddbf92').surface, [16, 17, 16], 'saved amber keeps its original background');
+});
+
+test('changing accents never recolors the page surface or reading text', () => {
+  const baseline = appearanceTheme(WAVEFORM_DEFAULT_COLOR);
+  for (const color of ['#00ff00', '#ff0000', '#000000', '#ffffff', '#36a489']) {
+    const theme = appearanceTheme(color) as Record<string, string>;
+    for (const property of ['--surface', '--text', '--muted']) {
+      assert.equal(theme[property], (baseline as Record<string, string>)[property]);
+    }
+  }
+  assert.notEqual((appearanceTheme('#00ff00') as Record<string, string>)['--accent'],
+    (appearanceTheme('#ff0000') as Record<string, string>)['--accent']);
 });

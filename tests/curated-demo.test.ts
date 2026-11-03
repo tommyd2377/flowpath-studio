@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCuratedDemo } from '../lib/curated-demo';
+import { createCuratedDemo, curatedVisitorDisplay, curatedVisitorVoice } from '../lib/curated-demo';
 import { FRANKLIN_DEMO_ID, PUBLIC_VOICE_COOKIE, publicVoiceOwner } from '../lib/public-voice-identity';
 import { creationContentDigest, CreationSafetyError } from '../lib/creation-safety';
 import { PaidMemoryDatabase } from './paid-fixture';
 import type { Waveform } from '../lib/account-model';
 
-function fixture() {
+function fixture(visualDisplay?: Waveform['visualDisplay']) {
   const db = new PaidMemoryDatabase(); let revoked = false;
-  const waveform: Waveform = { id: FRANKLIN_DEMO_ID, name: 'Benjamin Franklin', initialPrompt: 'Private approved instructions', voice: 'marin', accentColor: '#3a66ff', profilePhoto: null, updatedAt: new Date(0).toISOString() };
+  const waveform: Waveform = { id: FRANKLIN_DEMO_ID, name: 'Benjamin Franklin', initialPrompt: 'Private approved instructions', voice: 'marin', accentColor: '#3a66ff', profilePhoto: null, updatedAt: new Date(0).toISOString(), ...(visualDisplay ? { visualDisplay } : {}) };
   db.rows.set('ownerWaveforms/founder', waveform); db.rows.set('waveformMembers/founder', { state: 'active' });
   const demo = createCuratedDemo(db, { now: () => 1000, findOwner: async () => 'founder', requireAllowed: async (_tx, uid, candidate) => {
     assert.equal(uid, 'founder'); if (revoked || creationContentDigest(candidate) !== creationContentDigest(waveform)) throw new CreationSafetyError('Approval missing or revoked');
@@ -34,4 +34,23 @@ test('revocation and membership removal fail closed for admission; existing clea
   const g = fixture(); g.db.rows.set('waveformMembers/founder', { state: 'revoked' });
   await assert.rejects(g.demo.published(), /unavailable/);
   assert.equal(g.db.rows.has(`publicDemoWaveforms/${FRANKLIN_DEMO_ID}`), false);
+});
+
+
+test('curated snapshot containing Visual never exposes its images/catalogue/tool to visitors; private owner remains enabled', async () => {
+  const { visualFixture } = await import('./visual-display-fixture');
+  const { voiceSessionConfig } = await import('../lib/voice-config');
+  const visualDisplay = await visualFixture(), f = fixture(visualDisplay);
+  const row = (await f.demo.published())!;
+  const dto = curatedVisitorDisplay(row.waveform), voice = curatedVisitorVoice(row.waveform);
+  assert.equal('visualDisplay' in dto, false); assert.equal(JSON.stringify(dto).includes(visualDisplay.images[0].src), false);
+  assert.equal(voice.visualDisplay, null);
+  const visitor = voiceSessionConfig(voice);
+  assert.equal(visitor.delegation.responses.tools.some(t => t.name === 'update_visual_display'), false);
+  assert.equal(JSON.stringify(visitor).includes(visualDisplay.images[0].title), false);
+  assert.equal(voiceSessionConfig(f.waveform).delegation.responses.tools.some(t => t.name === 'update_visual_display'), true);
+  assert.deepEqual(row.waveform.visualDisplay, visualDisplay);
+  assert.equal(row.contentDigest, creationContentDigest(f.waveform));
+  await f.db.transaction(tx => f.demo.requireVoice(tx, f.owner));
+  f.revoke(); await assert.rejects(f.demo.published(), /revoked/);
 });

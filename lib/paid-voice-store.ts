@@ -25,7 +25,7 @@ export function createPaidVoiceStore(store: PaidStore, now = Date.now): Producti
   return {
     available: async owner => { const a = access(owner); await store.quote(a.actor, owner.waveformId, a.choice, a.preview); },
     reserve: async (owner, id, policy) => { const a = access(owner); const call = stored(await store.reserve(a.actor, owner.waveformId, id, a.choice,
-      { concurrency: policy.globalConcurrency, dailySeconds: policy.globalDailySeconds }, a.expectedContentDigest, a.preview));
+      { concurrency: policy.globalConcurrency, dailySeconds: policy.globalDailySeconds }, a.expectedContentDigest, a.preview, owner.pluginRevision));
       return { ...call, ...(owner.admin ? { admin: { ...owner.admin, deadline: call.createdAt + 900_000 } } : {}) }; },
     created: async (id, providerId) => (await store.updateSegment(id, 'created', providerId))?.canceled ?? true,
     mayStart: store.mayStart,

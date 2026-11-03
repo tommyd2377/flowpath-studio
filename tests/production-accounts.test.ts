@@ -27,9 +27,19 @@ function fakeDatabase() {
   type Reference = { path: string };
   const snapshot = (ref: Reference) => ({ exists: rows.has(ref.path), data: () => rows.has(ref.path) ? structuredClone(rows.get(ref.path)) : undefined });
   let pending = Promise.resolve();
-  const db = {
+  type Collection = { doc(id: string): Reference & {
+    collection(name: string): Collection;
+    create(value: Record<string, unknown>): Promise<void>;
+    get(): Promise<ReturnType<typeof snapshot>>;
+  } };
+  const db: { collection(name: string): Collection; runTransaction<T>(run: (transaction: {
+    get(ref: Reference): Promise<ReturnType<typeof snapshot>>;
+    update(ref: Reference, value: Record<string, unknown>): void;
+    set(ref: Reference, value: Record<string, unknown>): void;
+  }) => Promise<T>): Promise<T> } = {
     collection: (collection: string) => ({ doc: (id: string) => ({
       path: `${collection}/${id}`,
+      collection: (name: string) => db.collection(`${collection}/${id}/${name}`),
       async create(value: Record<string, unknown>) {
         const path = `${collection}/${id}`;
         if (rows.has(path)) throw new Error('Already exists');
@@ -411,6 +421,46 @@ test('the exact demo code enrolls through its HttpOnly grant; raw browser claims
   assert.equal((await server.accountPOST(request('account', 'POST', { idToken: 'synthetic.id.token' }, cookie))).status, 200);
 });
 
+test('Firebase founder preference is account-wide, preserves legacy data and survives concurrent creation', async () => {
+  const { firebase, rows, setClaims } = actualAdapterFixture();
+  setClaims({ uid: user.uid, email: 'tomdevito27@gmail.com', email_verified: true,
+    firebase: { sign_in_provider: 'google.com' }, auth_time: Math.floor(Date.now() / 1000) });
+  const options = { mode: 'firebase' as const, firebase, development: () => false, publicOrigin: () => origin };
+  const server = createAccountServer(options);
+  const login = await server.accountPOST(request('account', 'POST', { idToken: 'synthetic.id.token' }));
+  const cookie = login.headers.get('set-cookie')!.split(';')[0];
+  const first = { id: randomUUID(), ...input, adminTesting: true, updatedAt: new Date().toISOString() };
+  const second = { ...first, id: randomUUID(), name: 'Second', adminTesting: false };
+  rows.set(`ownerWaveforms/${user.uid}`, first);
+  rows.set(`ownerWaveforms/${user.uid}/waveforms/${second.id}`, second);
+  rows.set(`ownerWaveformLists/${user.uid}`, { ids: [second.id] });
+  assert.equal((await firebase.readWaveform(user.uid, second.id))?.adminTesting, true, 'legacy first-waveform preference applies account-wide');
+  assert.deepEqual(rows.get(`ownerWaveforms/${user.uid}`), first, 'read does not migrate saved content');
+  assert.equal((await server.waveformPUT(request(`waveform?id=${second.id}`, 'PUT', { ...input, adminTesting: false }, cookie))).status, 200);
+  assert.equal(rows.get(`ownerWaveformLists/${user.uid}`)?.adminTesting, false);
+  assert.deepEqual(rows.get(`ownerWaveforms/${user.uid}`), first, 'changing the preference does not rewrite sibling content');
+  const fresh = createAccountServer(options);
+  for (const id of [first.id, second.id]) assert.equal((await fresh.resolveAdmin(request(`session?waveformId=${id}`, 'GET', undefined, cookie)))?.testing, false);
+  const creates = await Promise.all([1, 2].map(i => fresh.waveformPUT(request(`waveform?id=${randomUUID()}`, 'POST', { ...input, name: `New ${i}` }, cookie), true)));
+  assert.ok(creates.every(r => r.status === 200));
+  assert.equal(rows.get(`ownerWaveformLists/${user.uid}`)?.adminTesting, false, 'creation preserves the account preference');
+  assert.equal((await fresh.waveformPUT(request(`waveform?id=${second.id}`, 'PUT', { ...input, adminTesting: true }, cookie))).status, 200);
+  const all = await firebase.listWaveforms!(user.uid);
+  assert.equal(all.length, 4); assert.ok(all.every(w => w.adminTesting === true));
+  assert.equal((await fresh.waveformPUT(request(`waveform?id=${second.id}`, 'PUT', input, cookie))).status, 200);
+  assert.ok((await firebase.listWaveforms!(user.uid)).every(w => w.adminTesting === true), 'an ordinary save cannot reset testing');
+  const indexPath = `ownerWaveformLists/${user.uid}`, validIndex = structuredClone(rows.get(indexPath)!);
+  for (const invalid of ['true', null, 1]) {
+    rows.set(indexPath, { ...validIndex, adminTesting: invalid });
+    await assert.rejects(firebase.readWaveform(user.uid, second.id), /Invalid account testing preference/);
+  }
+  rows.set(indexPath, validIndex);
+  setClaims({ uid: user.uid, email: 'another@gmail.com', email_verified: true,
+    firebase: { sign_in_provider: 'google.com' }, auth_time: Math.floor(Date.now() / 1000) });
+  assert.equal(await fresh.resolveAdmin(request(`session?waveformId=${first.id}`, 'GET', undefined, cookie)), null);
+  assert.equal((await fresh.waveformPUT(request(`waveform?id=${second.id}`, 'PUT', { ...input, adminTesting: true }, cookie))).status, 403);
+});
+
 test('only the verified founder Google claims grant admin, regardless of browser display name', async () => {
   const { accountRole } = await import('../lib/firebase-accounts');
   const claims = { email: 'TomDevito27@gmail.com', email_verified: true, firebase: { sign_in_provider: 'google.com' } };
@@ -420,4 +470,34 @@ test('only the verified founder Google claims grant admin, regardless of browser
     { ...claims, email_verified: false }, { ...claims, email_verified: 'true' },
     { ...claims, firebase: { sign_in_provider: 'password' } }, { ...claims, firebase: undefined },
   ]) assert.equal(accountRole(value), undefined);
+});
+
+test('ordinary Firebase member keeps a legacy waveform and atomically caps concurrent creations at ten', async () => {
+  const { firebase, rows } = actualAdapterFixture();
+  const server = createAccountServer({ mode: 'firebase', firebase, development: () => false, publicOrigin: () => origin });
+  const login = await server.accountPOST(request('account', 'POST', { idToken: 'synthetic.id.token' }));
+  assert.equal((await login.clone().json()).user.role, undefined);
+  const cookie = login.headers.get('set-cookie')!.split(';')[0];
+  // This legacy record has no voice/appearance, index, or migration marker.
+  const legacy = { id: randomUUID(), name: 'Legacy', initialPrompt: 'Existing private instructions.', updatedAt: new Date().toISOString() };
+  rows.set(`ownerWaveforms/${user.uid}`, legacy);
+  const before = structuredClone(legacy);
+  assert.equal((await firebase.listWaveforms!(user.uid)).length, 1);
+  assert.deepEqual(rows.get(`ownerWaveforms/${user.uid}`), before, 'listing never rewrites legacy data');
+  const ids = Array.from({ length: 12 }, () => randomUUID());
+  const replies = await Promise.all(ids.map((id, i) => server.waveformPUT(request(`waveform?id=${id}`, 'POST', { ...input, name: `Wave ${i}` }, cookie), true)));
+  assert.equal(replies.filter(r => r.status === 200).length, 9);
+  assert.equal(replies.filter(r => r.status === 409).length, 3);
+  const saved = (await (await server.waveformGET(request('waveform', 'GET', undefined, cookie))).json()).waveforms;
+  assert.equal(saved.length, 10); assert.equal(new Set(saved.map((w: Waveform) => w.id)).size, 10);
+  const second = saved[1];
+  assert.equal((await server.waveformPUT(request(`waveform?id=${second.id}`, 'PUT', { ...input, voice: 'meridian', accentColor: '#e25555', textPanel: { type: 'text', version: 2 } }, cookie))).status, 200);
+  assert.equal((await firebase.readWaveform(user.uid, second.id))?.voice, 'meridian');
+  assert.deepEqual(rows.get(`ownerWaveforms/${user.uid}`), before);
+  assert.equal(await firebase.readWaveform('another-owner', second.id), null);
+  assert.equal((await server.waveformPUT(request(`waveform?id=${randomUUID()}`, 'PUT', input, cookie))).status, 404);
+  assert.equal((await server.waveformPUT(request(`waveform?id=${second.id}`, 'POST', input, cookie), true)).status, 409);
+  assert.equal((await server.waveformPUT(request(`waveform?id=${second.id}`, 'PUT', { ...input, adminTesting: true }, cookie))).status, 403);
+  await server.accountDELETE(request('account', 'DELETE', undefined, cookie));
+  await assert.rejects(firebase.saveWaveform(user.uid, { ...input, voice: 'marin', accentColor: '#3a66ff', profilePhoto: null }, accountSessionId(decodeURIComponent(cookie.split('=')[1])), second.id), /no longer active/);
 });

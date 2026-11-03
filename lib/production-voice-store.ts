@@ -24,6 +24,7 @@ export type VoiceOwner = { ownerUid: string; waveformId: string; accountSessionI
   tester?: { uid: string; accountSessionId: string; founder: boolean };
   demoSource?: { ownerUid: string };
   demoVisitorId?: string; contentDigest?: string; publishedRevision?: number;
+  pluginRevision?: string; pluginExpiresAt?: number;
   paid?: { actor: { visitorId: string; uid?: string; accountSessionId?: string }; choice: 'creator' | 'self'; preview?: boolean; expectedContentDigest?: string } };
 export type StoredVoice = VoiceOwner & {
   id: string; state: 'creating' | 'active' | 'uncertain' | 'closed' | 'rejected';
@@ -200,7 +201,7 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
     }
     validateGuards(global, own);
     check({ ...owner, ...(admin ? { admin } : {}) }, policy, auth, global ?? {}, own ?? {});
-    if (!isPublicVoiceOwner(owner)) await assertContentAllowed?.(tx, owner);
+    if (owner.kind !== 'visitor' || owner.demoSource && owner.pluginRevision !== undefined) await assertContentAllowed?.(tx, owner);
     const demo = !owner.admin?.override && isPublicVoiceOwner(owner) && owner.demoVisitorId ? {
       budgetPath: 'voiceDemoBudgets/studio', visitorPath: `voiceDemoVisitors/${hash(owner.demoVisitorId)}`,
       budget: policy.demoBudgets?.studio ?? { dailySeconds: policy.globalDailySeconds, concurrency: policy.globalConcurrency, visitorDailySeconds: 180 },
@@ -284,7 +285,7 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
         const call = stored(await tx.get(callPath(id)));
         if (!call?.admin?.unmeteredLocal || call.state !== 'active' || !call.cleanup || call.cleanup.epoch !== epoch || call.cleanup.until <= now()) return false;
         tx.set(callPath(id), { ...call, cleanup: { epoch, until: now() + VOICE_CLEANUP_LEASE_MS } });
-        return !call.canceled;
+        return !call.canceled && (call.pluginExpiresAt ?? Infinity) > now();
       });
     },
     async claimCleanup(id: string) {
@@ -309,7 +310,7 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
         const { global, own, seconds, admin, demo, demoGlobal, demoVisitor } = await admission(tx, owner, policy);
         const call: StoredVoice = {
           ...owner, ...(admin ? { admin } : {}), id, state: 'creating', createdAt: now(),
-          expiresAt: admin?.unmeteredLocal ? UNMETERED_LOCAL_DEADLINE : Math.min(now() + seconds * 1000, admin?.deadline ?? Infinity), canceled: false,
+          expiresAt: admin?.unmeteredLocal ? UNMETERED_LOCAL_DEADLINE : Math.min(now() + seconds * 1000, admin?.deadline ?? Infinity, owner.pluginExpiresAt ?? Infinity), canceled: false,
         };
         tx.set(callPath(id), call);
         if (admin) tx.set(adminPath(admin.uid), { active: id });
@@ -341,11 +342,11 @@ export function createProductionVoiceStore(database: VoiceDatabase, now: () => n
     async mayStart(id: string) {
       return database.transaction(async tx => {
         const call = stored(await tx.get(callPath(id)));
-        if (!call || call.state !== 'creating' || call.canceled || call.expiresAt <= now()) return false;
+        if (!call || call.state !== 'creating' || call.canceled || Math.min(call.expiresAt, call.pluginExpiresAt ?? Infinity) <= now()) return false;
         if (call.admin && !activeAccountSession(await tx.get(`${ACCOUNT_SESSION_COLLECTION}/${call.admin.accountSessionId}`), call.admin.uid, now())) return false;
-        if (isPublicVoiceOwner(call)) return true;
+        if (isPublicVoiceOwner(call) && call.pluginRevision === undefined) return true;
         await assertContentAllowed?.(tx, call);
-        return activeAccountSession(await tx.get(`${ACCOUNT_SESSION_COLLECTION}/${call.accountSessionId}`), call.ownerUid, now());
+        return isPublicVoiceOwner(call) || activeAccountSession(await tx.get(`${ACCOUNT_SESSION_COLLECTION}/${call.accountSessionId}`), call.ownerUid, now());
       });
     },
     async expire(id: string) {

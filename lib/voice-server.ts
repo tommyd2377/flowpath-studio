@@ -48,6 +48,7 @@ type Options = {
   };
   resolveWaveform?: (request: Request, id: string) => Promise<{
     ownerUid: string; waveform: WaveformPrompt; accountSessionId?: string; isCurrent: () => boolean | Promise<boolean>;
+    pluginEvents?: boolean; pluginRevision?: string; pluginExpiresAt?: number; contentDigest?: string;
     paid?: VoiceOwner['paid']; publishedRevision?: number; publicVisitor?: VoiceOwner;
   } | null>;
   resolvePublicVisitor?: (request: Request) => VoiceOwner | null | Promise<VoiceOwner | null>;
@@ -76,6 +77,21 @@ const record = (value: unknown): Record<string, unknown> => value && typeof valu
 const json = (body: object, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store' },
 });
+
+type StartupTimingName = 'fp_scope' | 'fp_admission' | 'fp_deadline' | 'fp_provider' | 'fp_persist' | 'fp_supervision';
+async function withStartupTiming(request: Request, run: (measure: <T>(name: StartupTimingName, work: () => Promise<T>) => Promise<T>) => Promise<Response>) {
+  const enabled = request.headers.get('X-FlowPath-Startup-Timing') === '1';
+  const durations = new Map<StartupTimingName, number>();
+  const measure = async <T>(name: StartupTimingName, work: () => Promise<T>) => {
+    if (!enabled) return work();
+    const started = performance.now();
+    try { return await work(); }
+    finally { durations.set(name, (durations.get(name) ?? 0) + Math.max(0, performance.now() - started)); }
+  };
+  const response = await run(measure);
+  if (enabled && durations.size) response.headers.set('Server-Timing', [...durations].map(([name, duration]) => `${name};dur=${duration.toFixed(1)}`).join(', '));
+  return response;
+}
 
 async function readBody(request: Request) {
   if (request.headers.get('content-type')?.split(';')[0] !== 'application/json' || !request.body) throw new Error('Invalid body');
@@ -259,32 +275,42 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
     if (override !== null && override !== 'continue' || previousSessionId !== null && (!validId(previousSessionId) || !override)) {
       return { error: json({ error: 'Invalid admin continuation.' }, 400) };
     }
-    const identity = await options.resolveAdmin?.(request);
+    const preview = params.get('preview');
+    const invalidParams = [...params.keys()].some(name => name !== 'waveformId' && name !== 'preview') || params.getAll('waveformId').length > 1
+      || params.getAll('preview').length > 1 || preview !== null && (!params.has('waveformId') || !['draft', 'published'].includes(preview));
+    const id = params.get('waveformId');
+
+    // These are independent read-only lookups; all identity/content checks and
+    // the later transactional admission still run. Retain each result's error
+    // handling order and handle rejected promises even on an early return.
+    const adminLookup = Promise.resolve().then(() => options.resolveAdmin?.(request));
+    const visitorLookup = Promise.resolve().then(() => !invalidParams && (id !== null || options.production) ? options.resolvePublicVisitor?.(request) : null);
+    const waveformLookup = Promise.resolve().then(() => !invalidParams && validId(id) ? options.resolveWaveform?.(request, id) : null);
+    const [adminResult, visitorResult, waveformResult] = await Promise.allSettled([adminLookup, visitorLookup, waveformLookup]);
+    if (adminResult.status === 'rejected') throw adminResult.reason;
+    const identity = adminResult.value;
     if (override && (!identity?.testing || !await identity.isCurrent())) return { error: json({ error: 'Enable admin testing in your waveform settings first.' }, 403) };
     if (!options.production && previousSessionId) {
       const previous = adminWindows.get(previousSessionId);
-      if (!previous || previous.uid !== identity?.uid || previous.waveformId !== (params.get('waveformId') ?? undefined) || !previous.closed) {
+      if (!previous || previous.uid !== identity?.uid || previous.waveformId !== (id ?? undefined) || !previous.closed) {
         return { error: json({ error: 'The previous conversation must close before continuing as admin.' }, 409) };
       }
       if (previous.deadline <= now()) return { error: json({ error: 'The overall 15-minute conversation limit has been reached.' }, 429) };
     }
     const admin = identity && await identity.isCurrent() ? { uid: identity.uid, accountSessionId: identity.accountSessionId ?? '',
       override: identity.testing === true, ...(previousSessionId ? { previousSessionId } : {}) } : undefined;
-    const preview = params.get('preview');
-    if ([...params.keys()].some(name => name !== 'waveformId' && name !== 'preview') || params.getAll('waveformId').length > 1
-      || params.getAll('preview').length > 1 || preview !== null && (!params.has('waveformId') || !['draft', 'published'].includes(preview))) {
-      return { error: json({ error: 'Invalid waveform identifier.' }, 400) };
-    }
-    if (!params.has('waveformId')) {
+    if (invalidParams) return { error: json({ error: 'Invalid waveform identifier.' }, 400) };
+    if (visitorResult.status === 'rejected') throw visitorResult.reason;
+    const visitor = visitorResult.value;
+    if (id === null) {
       // A known visitor can still close an existing conversation after new starts are paused.
-      const visitor = options.production ? await options.resolvePublicVisitor?.(request) : null;
       return { demoGrant, waveformId: undefined, personal: undefined, visitor: visitor?.kind === 'visitor' ? visitor : undefined, admin, isAdminCurrent: identity?.isCurrent };
     }
-    const browserVisitorId = (await options.resolvePublicVisitor?.(request))?.demoVisitorId;
-    const id = params.get('waveformId');
+    const browserVisitorId = visitor?.demoVisitorId;
     if (!validId(id)) return { error: json({ error: 'Invalid waveform identifier.' }, 400) };
     try {
-      const personal = await options.resolveWaveform?.(request, id);
+      if (waveformResult.status === 'rejected') throw waveformResult.reason;
+      const personal = waveformResult.value;
       if (preview === 'draft' && personal?.paid?.preview !== true || preview === 'published' && personal?.publishedRevision === undefined) {
         return { error: json({ error: 'This preview is unavailable.' }, 403) };
       }
@@ -431,7 +457,9 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
     if (access.visitor) return { ...access.visitor, ...(access.demoGrant ? { demoGrant: access.demoGrant } : {}), ...(!options.requestScopedDemo && access.admin ? { admin: access.admin } : {}) };
     return access.personal?.accountSessionId && access.waveformId ? {
       ownerUid: access.personal.ownerUid, waveformId: access.waveformId, accountSessionId: access.personal.accountSessionId,
-      contentDigest: creationContentDigest(access.personal.waveform),
+      contentDigest: access.personal.contentDigest ?? creationContentDigest(access.personal.waveform),
+      ...(access.personal.pluginRevision === undefined ? {} : { pluginRevision: access.personal.pluginRevision }),
+      ...(access.personal.pluginExpiresAt === undefined ? {} : { pluginExpiresAt: access.personal.pluginExpiresAt }),
       ...(access.browserVisitorId ? { demoVisitorId: access.browserVisitorId } : {}),
       ...(access.demoGrant ? { demoGrant: access.demoGrant } : {}),
       ...(options.requestScopedDemo ? { tester: { uid: access.personal.ownerUid, accountSessionId: access.personal.accountSessionId, founder: access.admin?.uid === access.personal.ownerUid } } : {}),
@@ -519,9 +547,10 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
       catch { return false; }
     },
     async GET(request: Request) {
+      return withStartupTiming(request, async measure => {
       if (!isAllowedRequest(request, false, options.publicOrigin, options.trustedProxyHost)) return json({ error: 'This host is not enabled for voice.' }, 403);
       if (options.authorizeStart && !await options.authorizeStart(request)) return json({ enabled: false, message: 'Enter the demo code to talk.' });
-      const access = await scope(request);
+      const access = await measure('fp_scope', () => scope(request));
       if (access.error) return access.error;
       if (options.production && !productionOwner(access)) return json({ enabled: false, message: accessMessage(access) });
       if (!enabled()) return json({ enabled: false, message: pausedMessage });
@@ -529,7 +558,7 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
         const policy = options.production.policy();
         if (!policy) return json({ enabled: false, message: 'Live voice is paused while launch allowances are configured.' });
         if (access.visitor && !policy.publicDemoSeconds) return json({ enabled: false, message: 'Public voice is paused.' });
-        try { await options.production.store.available(productionOwner(access)!, policy); }
+        try { await measure('fp_admission', () => options.production!.store.available(productionOwner(access)!, policy)); }
         catch (error) { if (error instanceof CreationSafetyError) return waveformFailure(error);
           // GET stays read-only. The deliberate, authenticated POST closes an orphan before reserving once.
           if (canRecover(error, productionOwner(access), policy)) {
@@ -554,14 +583,19 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
       if (active.size) return json({ enabled: false, message: 'A conversation is already open.' });
       if (attemptedStarts >= maxStarts) return json({ enabled: false, message: budgetMessage });
       return key() ? json({ enabled: true, ...(access.admin ? { adminEligible: true } : {}), remainingStarts: maxStarts - attemptedStarts }) : json({ enabled: false, message: 'The voice connection is not configured.' });
+      });
     },
     async POST(request: Request) {
+      return withStartupTiming(request, async measure => {
       if (!isAllowedRequest(request, true, options.publicOrigin, options.trustedProxyHost)) return json({ error: 'Only same-origin requests are allowed.' }, 403);
       if (options.authorizeStart && !await options.authorizeStart(request)) return json({ error: 'Enter the demo code first.' }, 403);
       if (options.requestScopedDemo && !request.headers.get('accept')?.includes('application/x-ndjson')) return json({ error: 'Refresh this page before starting the updated voice demo.' }, 409);
-      const access = await scope(request);
+      const access = await measure('fp_scope', () => scope(request));
       if (access.error) return access.error;
       const owner = productionOwner(access);
+      if (!options.production && access.personal?.pluginRevision !== undefined) {
+        return json({ error: 'Use the full local runtime for waveform voice.' }, 503);
+      }
       if (options.production && !owner) return json({ error: accessMessage(access) }, 403);
       if (!enabled()) return json({ error: pausedMessage }, 503);
       if (blocked) return json({ error: cleanupMessage }, 503);
@@ -579,7 +613,7 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
         || !validId(body.sessionId) || !audioSdp(body.sdp)) return json({ error: 'Invalid audio connection request.' }, 400);
       // The explicit browser opt-in only widens its event subscription. Nothing is retained here.
       // Snapshot saved instructions once. Edits only affect subsequent conversations.
-      const config = voiceSessionConfig(access.personal?.waveform, body.diagnostics === true, options.requestScopedDemo);
+      const config = voiceSessionConfig(access.personal?.waveform, body.diagnostics === true, options.requestScopedDemo, access.personal?.pluginEvents);
       if (request.signal.aborted || recent.has(reservationKey(body.sessionId, owner?.ownerUid ?? access.personal?.ownerUid, access.waveformId))) return json({ error: 'The conversation was canceled or already used.' }, 409);
       // Auth/store reads and the streamed body can outlive sign-out in another tab.
       // Public admission also rechecks the durable lease inside its reservation transaction.
@@ -600,14 +634,18 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
       };
       if (options.production) {
         try {
-          try { session.durable = await options.production.store.reserve(owner!, session.id, policy!); }
-          catch (error) {
-            if (!canRecover(error, owner, policy)) throw error;
-            if (!await recoverBeforeStart(owner!, request.signal)) throw new VoiceAdmissionError('The previous voice connection could not be confirmed closed. No new conversation was started.', 503);
-            if (request.signal.aborted) return json({ error: 'The conversation was canceled.' }, 409);
-            session.durable = await options.production.store.reserve(owner!, session.id, policy!);
-          }
-          try { if (!session.durable.admin?.unmeteredLocal) await options.production.scheduleDeadline(session.id, session.durable.controlExpiresAt ?? session.durable.expiresAt); }
+          const reservation = await measure('fp_admission', async () => {
+            try { return await options.production!.store.reserve(owner!, session.id, policy!); }
+            catch (error) {
+              if (!canRecover(error, owner, policy)) throw error;
+              if (!await recoverBeforeStart(owner!, request.signal)) throw new VoiceAdmissionError('The previous voice connection could not be confirmed closed. No new conversation was started.', 503);
+              if (request.signal.aborted) return null;
+              return options.production!.store.reserve(owner!, session.id, policy!);
+            }
+          });
+          if (!reservation) return json({ error: 'The conversation was canceled.' }, 409);
+          session.durable = reservation;
+          try { if (!session.durable.admin?.unmeteredLocal) await measure('fp_deadline', () => options.production!.scheduleDeadline(session.id, session.durable!.controlExpiresAt ?? session.durable!.expiresAt)); }
           catch {
             await options.production.store.finish(session.id, { finalized: true, rejected: true });
             return json({ error: 'The voice deadline could not be scheduled. No conversation was started.' }, 503);
@@ -620,7 +658,7 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
       try {
         let mayStart = !request.signal.aborted;
         if (session.durable && mayStart) {
-          try { mayStart = await options.production!.store.mayStart(session.id); }
+          try { mayStart = await measure('fp_admission', () => options.production!.store.mayStart(session.id)); }
           catch { mayStart = false; /* No provider request has been attempted, so this is not remote uncertainty. */ }
         }
         if (session.durable && !mayStart) {
@@ -630,13 +668,17 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
         }
         attemptedStarts++;
         // Do not cancel this fetch when the browser cancels: its late ID is needed for teardown.
-        const response = await requestProvider('https://api.openai.com/v1/live/sessions', {
-          method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session: config, transport: { type: 'webrtc', sdp: body.sdp } }),
-          redirect: 'error', signal: AbortSignal.timeout(15_000),
+        const { response, payload } = await measure('fp_provider', async () => {
+          const response = await requestProvider('https://api.openai.com/v1/live/sessions', {
+            method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session: config, transport: { type: 'webrtc', sdp: body.sdp } }),
+            redirect: 'error', signal: AbortSignal.timeout(15_000),
+          });
+          const payload: Record<string, unknown> = response.ok ? await readJsonStream(response.body) : await readJsonStream(response.body).catch(() => ({}));
+          return { response, payload };
         });
         if (!response.ok) {
-          const failure = record(record(await readJsonStream(response.body).catch(() => ({}))).error);
+          const failure = record(record(payload).error);
           const fields = Object.fromEntries(['code', 'type', 'param'].flatMap(name => {
             const value = failure[name];
             return typeof value === 'string' && /^[a-z][a-z0-9_.\[\]]{0,79}$/i.test(value) ? [[name, value]] : [];
@@ -648,7 +690,6 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
           release(session);
           return json({ error: 'The voice service could not start. No automatic retry was attempted.' }, response.status === 429 ? 429 : 502);
         }
-        const payload = await readJsonStream(response.body);
         const providerId = record(payload.session).id;
         if (typeof providerId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(providerId)) throw new Error('Missing provider ID');
         session.providerId = providerId;
@@ -659,7 +700,7 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
           adminWindows.set(session.id, { uid: access.admin.uid, waveformId: access.waveformId, deadline: expiresAt, closed: false });
         }
         if (session.durable) {
-          const canceled = await options.production!.store.created(session.id, providerId, expiresAt);
+          const canceled = await measure('fp_persist', () => options.production!.store.created(session.id, providerId, expiresAt));
           session.canceled ||= canceled;
         }
         if (options.requestScopedDemo) {
@@ -685,11 +726,13 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
         }
         session.startTimer = setTimeout(() => { void close(session); }, 30_000);
         session.startTimer.unref?.();
-        session.control = session.durable?.admin?.unmeteredLocal && options.production?.supervise
-          ? options.production.supervise(session.id, () => { clearTimeout(session.startTimer); })
-          : attachControl(session, options, () => { void close(session); });
-        await session.control.ready;
-        void session.control.closed.then(async result => {
+        await measure('fp_supervision', async () => {
+          session.control = session.durable?.admin?.unmeteredLocal && options.production?.supervise
+            ? options.production.supervise(session.id, () => { clearTimeout(session.startTimer); })
+            : attachControl(session, options, () => { void close(session); });
+          await session.control.ready;
+        });
+        void session.control!.closed.then(async result => {
           await session.connected?.catch(() => undefined);
           const window = adminWindows.get(session.id);
           if (result.finalized && window) window.closed = true;
@@ -719,6 +762,7 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
       } finally {
         request.signal.removeEventListener('abort', abort);
       }
+      });
     },
     async PATCH(request: Request) {
       if (!isAllowedRequest(request, true, options.publicOrigin, options.trustedProxyHost)) return json({ error: 'Only same-origin requests are allowed.' }, 403);

@@ -1,4 +1,6 @@
+import { requirePluginRevision } from './plugin-access';
 import { createHash } from 'node:crypto';
+import { validateVisualDisplay } from './visual-display';
 import type { Waveform } from './account-model';
 import { DEFAULT_PAYMENT_SETTINGS, paymentSettings, type MinutePack, type PaymentSettings } from './paid-model';
 import { ACCOUNT_SESSION_COLLECTION, activeAccountSession } from './production-account-session';
@@ -35,7 +37,8 @@ export function sameWaveformVersion(a: Waveform | undefined, b: Waveform) {
   return !!a && a.id === b.id && a.name === b.name && a.initialPrompt === b.initialPrompt
     && a.voice === b.voice && a.accentColor === b.accentColor && a.profilePhoto === b.profilePhoto
     && a.adminTesting === b.adminTesting && a.updatedAt === b.updatedAt
-    && JSON.stringify(a.textPanel ?? null) === JSON.stringify(b.textPanel ?? null);
+    && JSON.stringify(a.textPanel ?? null) === JSON.stringify(b.textPanel ?? null)
+    && JSON.stringify(validateVisualDisplay(a.visualDisplay)) === JSON.stringify(validateVisualDisplay(b.visualDisplay));
 }
 
 /** All monetary/allowance mutations share one database transaction. No browser duration is accepted. */
@@ -195,7 +198,7 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now, options
     async quote(actor: PaidActor, id: string, choice: 'creator' | 'self', preview = false) {
       return database.transaction(async tx => { const a = await allocation(tx, actor, id, choice, preview); return { seconds: a.seconds, payer: choice }; });
     },
-    async reserve(actor: PaidActor, waveformId: string, id: string, choice: 'creator' | 'self', policy: { concurrency: number; dailySeconds: number }, expectedContentDigest?: string, preview = false) {
+    async reserve(actor: PaidActor, waveformId: string, id: string, choice: 'creator' | 'self', policy: { concurrency: number; dailySeconds: number }, expectedContentDigest?: string, preview = false, pluginRevision?: string) {
       validatePaidLimits(policy);
       return database.transaction(async tx => {
         if (await tx.get(segmentPath(id))) fail('This conversation identifier has already been used.');
@@ -204,6 +207,7 @@ export function createPaidStore(database: VoiceDatabase, now = Date.now, options
         if (Object.values(slots).includes('uncertain')) fail('A previous connection needs confirmed cleanup.', 503);
         if (Object.keys(slots).length >= policy.concurrency) fail('All available voice connections are in use.');
         const a = await allocation(tx, actor, waveformId, choice, preview);
+        await requirePluginRevision(tx, a.publication.ownerUid, waveformId, pluginRevision);
         if (expectedContentDigest !== undefined && expectedContentDigest !== creationContentDigest(a.waveform)) fail('The waveform changed. Reload before starting a conversation.');
         const day = new Date(now()).toISOString().slice(0, 10);
         const daily = global?.day === day ? Number(global.reservedSeconds) : 0;

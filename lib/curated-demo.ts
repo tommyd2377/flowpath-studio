@@ -53,3 +53,14 @@ export function createCuratedDemo(database: VoiceDatabase, options: {
     async cleanupSnapshot() { return database.transaction(async tx => snapshot(await tx.get(path))); },
   };
 }
+
+
+/** Existing public allowlist. Installing Visual privately is not consent to extend this demo. */
+export function curatedVisitorDisplay(waveform: Waveform) {
+  const { id, name, accentColor, profilePhoto, textPanel } = waveform;
+  return { id, name, accentColor, profilePhoto, ...(textPanel ? { textPanel } : {}) };
+}
+/** Server-only prompt projection; stored snapshot/digest and review authority remain intact. */
+export function curatedVisitorVoice(waveform: Waveform) {
+  return { ...waveform, visualDisplay: null, knowledge: false };
+}

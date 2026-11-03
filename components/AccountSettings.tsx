@@ -4,7 +4,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { authenticateWithEmail, signInAccount, signOutAccount, type EmailAccountAction } from '@/lib/account-client';
-import { WAVEFORM_DEFAULT_COLOR, WAVEFORM_NAME_LIMIT, WAVEFORM_PROMPT_LIMIT, type AccountMode, type AccountUser, type Waveform } from '@/lib/account-model';
+import { WAVEFORMS_PER_OWNER, WAVEFORM_DEFAULT_COLOR, WAVEFORM_NAME_LIMIT, WAVEFORM_PROMPT_LIMIT, type AccountMode, type AccountUser, type Waveform } from '@/lib/account-model';
 import { appearanceTheme } from '@/lib/appearance-theme';
 import { prepareProfilePhoto } from '@/lib/prepare-profile-photo';
 import { DEFAULT_VOICE, VOICE_OPTIONS, isVoiceName, type VoiceName } from '@/lib/voice-options';
@@ -15,11 +15,14 @@ import CreationSafetyStatus from './CreationSafetyStatus';
 import CreationReviewQueue from './CreationReviewQueue';
 import { clientAnalytics, observeVisit } from '@/lib/analytics-runtime';
 import type { TextPanelConfiguration } from '@/lib/text-panel';
+import { validateVisualDisplay, type VisualDisplayConfiguration } from '@/lib/visual-display';
+import VisualDisplaySettings from './VisualDisplaySettings';
+import PluginAccessSettings from './PluginAccessSettings';
 import { PLUGINS } from '@/lib/plugin-contract';
 import BrandLoader from './BrandLoader';
 import DemoCodeGate from './DemoCodeGate';
 import WaveformSettingsPreview from './WaveformSettingsPreview';
-import { AudioLines, BookOpen, LockKeyhole, MessageSquareText, Puzzle, Settings2, SlidersHorizontal, TextCursorInput, ArrowUpRight, Mail } from 'lucide-react';
+import { AudioLines, BookOpen, Check, ChevronDown, LockKeyhole, MessageSquareText, Plus, Puzzle, Settings2, SlidersHorizontal, TextCursorInput, ArrowUpRight, Mail } from 'lucide-react';
 
 type Account = { mode: AccountMode; user: AccountUser | null; creationSafetyEnabled?: boolean; safetyAdminFixture?: boolean; localUnmeteredTesting?: boolean; hostedTesterDemo?: boolean };
 
@@ -43,12 +46,18 @@ export default function AccountSettings() {
   const [account, setAccount] = useState<Account | null>(null);
   const [demoAllowed, setDemoAllowed] = useState(false);
   const [waveform, setWaveform] = useState<Waveform | null>(null);
+  const [waveforms, setWaveforms] = useState<Pick<Waveform, 'id' | 'name'>[]>([]);
+  const [draftId, setDraftId] = useState('');
   const [name, setName] = useState('');
   const [voice, setVoice] = useState<VoiceName>(DEFAULT_VOICE);
   const [initialPrompt, setInitialPrompt] = useState('');
   const [textPanel, setTextPanel] = useState<TextPanelConfiguration | null>(null);
+  const [visualDisplay, setVisualDisplay] = useState<VisualDisplayConfiguration | null>(null);
+  const [preparingVisual, setPreparingVisual] = useState(false);
   const [section, setSection] = useState<'appearance' | 'instructions' | 'plugins' | 'sharing' | 'account'>('appearance');
   const [adminTesting, setAdminTesting] = useState(false);
+  const [accountAdminTesting, setAccountAdminTesting] = useState(false);
+  const visualInvalid = !validateVisualDisplay(visualDisplay).ok;
   const promptTooLong = initialPrompt.length > WAVEFORM_PROMPT_LIMIT;
   const [accentColor, setAccentColor] = useState(WAVEFORM_DEFAULT_COLOR);
   const [previewColor, setPreviewColor] = useState(WAVEFORM_DEFAULT_COLOR);
@@ -68,9 +77,9 @@ export default function AccountSettings() {
   const accountRevision = useRef(0);
   const photoRevision = useRef<symbol | null>(null);
   const safety = useCreationReview({ enabled: !!account?.creationSafetyEnabled && !!account.user && (!account.hostedTesterDemo || demoAllowed),
-    candidate: { name, initialPrompt, textPanel, profilePhoto }, ownerKey: account?.user?.uid ?? '',
+    candidate: { name, initialPrompt, textPanel, profilePhoto, visualDisplay }, ownerKey: `${account?.user?.uid ?? ''}:${draftId}`, waveformId: draftId || undefined, creating: !waveform,
     automatic: !waveform || name !== waveform.name || initialPrompt !== waveform.initialPrompt
-      || JSON.stringify(textPanel) !== JSON.stringify(waveform.textPanel ?? null) || profilePhoto !== waveform.profilePhoto });
+      || JSON.stringify(visualDisplay) !== JSON.stringify(waveform.visualDisplay ?? null) || JSON.stringify(textPanel) !== JSON.stringify(waveform.textPanel ?? null) || profilePhoto !== waveform.profilePhoto });
   useEffect(() => { observeVisit('account'); clientAnalytics.record({ eventName: 'creation_step', properties: { step: 'opened', outcome: 'success' } }); }, []);
   useEffect(() => {
     if (safety.status) clientAnalytics.record({ eventName: 'creation_step', properties: {
@@ -86,27 +95,32 @@ export default function AccountSettings() {
       const requestedRevision = ++revision;
       const current = () => !cancelled && requestedRevision === revision;
       if (changed) {
-        setTextPanel(null);
+        setTextPanel(null); setVisualDisplay(null); setPreparingVisual(false);
         setSection('appearance');
-        setAdminTesting(false);
+        setAdminTesting(false); setAccountAdminTesting(false);
         accountRevision.current++;
         photoRevision.current = null;
         setAccentColor(WAVEFORM_DEFAULT_COLOR); setPreviewColor(WAVEFORM_DEFAULT_COLOR); setProfilePhoto(null); setPreparingPhoto(false);
         setEmail(''); setPassword(''); setEmailAction('sign-in'); setVerificationAvailable(false);
-        setBusyAction(null); setLoading(true); setAccount(null); setWaveform(null); setName(''); setVoice(DEFAULT_VOICE); setInitialPrompt(''); setMessage(''); setError('');
+        setBusyAction(null); setLoading(true); setAccount(null); setWaveforms([]); setDraftId(''); setWaveform(null); setName(''); setVoice(DEFAULT_VOICE); setInitialPrompt(''); setMessage(''); setError('');
       }
       void (async () => {
         const result = await readResponse<Account>(await fetch('/api/account', { cache: 'no-store' }));
-        const saved = result.user ? await readResponse<{ waveform: Waveform | null }>(await fetch('/api/waveform', { cache: 'no-store' })) : null;
+        const selectedId = changed ? null : new URL(location.href).searchParams.get('id');
+        if (changed) { const url = new URL(location.href); url.searchParams.delete('id'); history.replaceState(null, '', url); }
+        const saved = result.user ? await readResponse<{ waveform: Waveform | null; waveforms?: Pick<Waveform, 'id' | 'name'>[] }>(await fetch(selectedId ? `/api/waveform?id=${encodeURIComponent(selectedId)}` : '/api/waveform', { cache: 'no-store' })) : null;
         if (!current()) return;
         setReturnTo(returnDestination(new URL(location.href).searchParams.get('returnTo')));
         setAccount(result);
+        setWaveforms(saved?.waveforms ?? (saved?.waveform ? [saved.waveform] : []));
+        setDraftId(saved?.waveform?.id ?? crypto.randomUUID());
         setWaveform(saved?.waveform ?? null);
         setName(saved?.waveform?.name ?? '');
         setVoice(saved?.waveform?.voice ?? DEFAULT_VOICE);
         setInitialPrompt(saved?.waveform?.initialPrompt ?? '');
-        setTextPanel(saved?.waveform?.textPanel ?? null);
+        setTextPanel(saved?.waveform?.textPanel ?? null); setVisualDisplay(saved?.waveform?.visualDisplay ?? null);
         setAdminTesting(result.user?.role === 'admin' && saved?.waveform?.adminTesting === true);
+        setAccountAdminTesting(result.user?.role === 'admin' && saved?.waveform?.adminTesting === true);
         setAccentColor(saved?.waveform?.accentColor ?? WAVEFORM_DEFAULT_COLOR);
         setPreviewColor(saved?.waveform?.accentColor ?? WAVEFORM_DEFAULT_COLOR);
         setProfilePhoto(saved?.waveform?.profilePhoto ?? null);
@@ -170,36 +184,67 @@ export default function AccountSettings() {
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy || preparingPhoto) return;
+    if (busy || preparingPhoto || preparingVisual) return;
     const invalid = event.currentTarget.querySelector<HTMLInputElement | HTMLTextAreaElement>(':invalid');
     if (invalid) {
       setSection(invalid.id === 'initial-prompt' ? 'instructions' : 'appearance');
       requestAnimationFrame(() => invalid.reportValidity());
       return;
     }
+    if (visualInvalid) { setError('Add unique picture titles and descriptions before saving.'); return; }
     if (!safety.canSave) { setError('This version must pass its safety review before saving.'); return; }
     if (promptTooLong) { setError(`Your full prompt is still in the editor. Shorten it to ${WAVEFORM_PROMPT_LIMIT.toLocaleString('en-US')} characters before saving.`); return; }
     const color = normalizedColor(accentColor);
     if (!color) { setError(`Enter a six-digit hex color, such as ${WAVEFORM_DEFAULT_COLOR}.`); return; }
     const requestedRevision = accountRevision.current;
+    const restoreSaveFocus = !!document.activeElement?.closest('.settings-savebar');
     setBusyAction('save'); setError(''); setMessage('');
     try {
-      const saved = await readResponse<{ waveform: Waveform }>(await fetch('/api/waveform', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, voice, initialPrompt, accentColor: color, profilePhoto, textPanel,
-          ...(account?.user?.role === 'admin' ? { adminTesting } : {}) }),
+      const saved = await readResponse<{ waveform: Waveform }>(await fetch(draftId ? `/api/waveform?id=${draftId}` : '/api/waveform', {
+        method: waveform ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, voice, initialPrompt, accentColor: color, profilePhoto, textPanel, visualDisplay,
+          ...(account?.user?.role === 'admin' && adminTesting !== accountAdminTesting ? { adminTesting } : {}) }),
       }));
       if (requestedRevision !== accountRevision.current) return;
+      setWaveforms(rows => [...rows.filter(w => w.id !== saved.waveform.id), { id: saved.waveform.id, name: saved.waveform.name }]);
+      setDraftId(saved.waveform.id);
+      const url = new URL(location.href); url.searchParams.set('id', saved.waveform.id); history.replaceState(null, '', url);
       setWaveform(saved.waveform); setName(saved.waveform.name); setVoice(saved.waveform.voice); setInitialPrompt(saved.waveform.initialPrompt);
-      setTextPanel(saved.waveform.textPanel ?? null);
+      setTextPanel(saved.waveform.textPanel ?? null); setVisualDisplay(saved.waveform.visualDisplay ?? null);
       setAdminTesting(account?.user?.role === 'admin' && saved.waveform.adminTesting === true);
+      setAccountAdminTesting(account?.user?.role === 'admin' && saved.waveform.adminTesting === true);
       setAccentColor(saved.waveform.accentColor); setPreviewColor(saved.waveform.accentColor); setProfilePhoto(saved.waveform.profilePhoto);
       setMessage('Saved. Your draft is private until you publish it.');
+      if (restoreSaveFocus) requestAnimationFrame(() => document.getElementById('draft-save-state')?.focus({ preventScroll: true }));
       clientAnalytics.record({ eventName: 'creation_step', properties: { step: 'saved', outcome: 'success' } });
     } catch (error) { if (requestedRevision === accountRevision.current) {
       if (error instanceof ReviewRequiredError) safety.invalidateReview(error.reviewStatus);
       setError(error instanceof Error ? error.message : 'Your waveform could not be saved. Please try again.');
     } }
     finally { if (requestedRevision === accountRevision.current) setBusyAction(null); }
+  }
+
+  function applySelection(next: Waveform | null, id: string) {
+    accountRevision.current++; photoRevision.current = null; setPreparingPhoto(false);
+    setWaveform(next); setDraftId(id); setName(next?.name ?? ''); setVoice(next?.voice ?? DEFAULT_VOICE);
+    setInitialPrompt(next?.initialPrompt ?? ''); setTextPanel(next?.textPanel ?? null); setVisualDisplay(next?.visualDisplay ?? null); setPreparingVisual(false);
+    const testing = account?.user?.role === 'admin' && (next ? next.adminTesting === true : accountAdminTesting);
+    setAdminTesting(testing);
+    if (next) setAccountAdminTesting(testing);
+    setAccentColor(next?.accentColor ?? WAVEFORM_DEFAULT_COLOR); setPreviewColor(next?.accentColor ?? WAVEFORM_DEFAULT_COLOR);
+    setProfilePhoto(next?.profilePhoto ?? null); setMessage(''); setError(''); setSection('appearance');
+    const url = new URL(location.href);
+    if (next) url.searchParams.set('id', id); else url.searchParams.delete('id');
+    history.replaceState(null, '', url);
+  }
+  async function selectWaveform(id: string) {
+    if (busy || dirty || id === draftId) return;
+    const revision = accountRevision.current;
+    setBusyAction('select'); setError('');
+    try {
+      const saved = await readResponse<{ waveform: Waveform }>(await fetch(`/api/waveform?id=${id}`, { cache: 'no-store' }));
+      if (revision === accountRevision.current) applySelection(saved.waveform, id);
+    } catch (error) { if (revision === accountRevision.current) setError((error as Error).message); }
+    finally { setBusyAction(null); }
   }
 
   function changeColor(value: string) {
@@ -225,13 +270,16 @@ export default function AccountSettings() {
   const dirty = name !== (waveform?.name ?? '') || voice !== (waveform?.voice ?? DEFAULT_VOICE)
     || initialPrompt !== (waveform?.initialPrompt ?? '') || accentColor !== (waveform?.accentColor ?? WAVEFORM_DEFAULT_COLOR)
     || profilePhoto !== (waveform?.profilePhoto ?? null) || JSON.stringify(textPanel) !== JSON.stringify(waveform?.textPanel ?? null)
-    || adminTesting !== (waveform?.adminTesting === true);
+    || JSON.stringify(visualDisplay) !== JSON.stringify(waveform?.visualDisplay ?? null) || adminTesting !== accountAdminTesting;
+  const savedReviewNeedsAttention = !!waveform && !dirty && !!safety.status && !['pending', 'allowed'].includes(safety.status);
   function discard() {
+    const restoreSaveFocus = !!document.activeElement?.closest('.settings-savebar');
     photoRevision.current = null; setPreparingPhoto(false);
     setName(waveform?.name ?? ''); setVoice(waveform?.voice ?? DEFAULT_VOICE); setInitialPrompt(waveform?.initialPrompt ?? '');
     setAccentColor(waveform?.accentColor ?? WAVEFORM_DEFAULT_COLOR); setPreviewColor(waveform?.accentColor ?? WAVEFORM_DEFAULT_COLOR);
-    setProfilePhoto(waveform?.profilePhoto ?? null); setTextPanel(waveform?.textPanel ?? null); setAdminTesting(waveform?.adminTesting === true);
+    setProfilePhoto(waveform?.profilePhoto ?? null); setTextPanel(waveform?.textPanel ?? null); setVisualDisplay(waveform?.visualDisplay ?? null); setAdminTesting(accountAdminTesting);
     setError(''); setMessage('Unsaved changes discarded. Your saved waveform is unchanged.');
+    if (restoreSaveFocus) requestAnimationFrame(() => document.getElementById('draft-save-state')?.focus({ preventScroll: true }));
   }
   const sections = [
     { id: 'appearance', label: 'Appearance & voice', icon: SlidersHorizontal },
@@ -249,9 +297,29 @@ export default function AccountSettings() {
       <header className="settings-topbar"><Link className="settings-brand" href="/" aria-label="Back to FlowPath"><Image src="/brand/flowpath-icon-square.png" alt="" width={36} height={36} loading="eager" />FlowPath <span>Studio</span></Link>
         <div className="account-identity"><span>Signed in as {account.user.displayName}</span><button type="button" onClick={() => void signOut()} disabled={busy} aria-busy={busyAction === 'sign-out'}>{busyAction === 'sign-out' && <BrandLoader variant="inline" />}Sign out</button></div>
       </header>
-      <div className="settings-page-heading"><span className="settings-eyebrow">Your workspace</span><h1>My waveform</h1><p className="account-intro">Make it yours. Give it a voice. Add what it can do.</p></div>
+      <div className="settings-page-heading"><span className="settings-eyebrow">Your workspace</span><div className="settings-heading-row"><h1>My waveform</h1>{!dirty && <span className="settings-saved-state" id="draft-save-state" tabIndex={-1}>{waveform && <Check aria-hidden="true" />}{waveform ? 'Draft saved' : 'New draft'}</span>}</div><p className="account-intro">Make it yours. Give it a voice. Add what it can do.</p><p className="account-status sr-only" role="status" aria-live="polite">{message}</p></div>
       {account.mode === 'local' && <p className="local-account-note">Local test account. No Google account or Firebase service is connected.</p>}
       {returnTo !== '/account' && <Link className="secondary-button settings-return" href={returnTo}>Continue to waveform</Link>}
+      <div className="settings-waveform-switcher" role="group" aria-label="Your waveforms">
+        <div className="settings-waveform-selector">
+          <label htmlFor="waveform-selection">Waveform <span>· {waveforms.length} / {WAVEFORMS_PER_OWNER}</span></label>
+          <div className="settings-waveform-select">
+            <AudioLines aria-hidden="true" />
+            <select id="waveform-selection" value={waveform?.id ?? ''} disabled={busy || dirty || preparingPhoto || preparingVisual} onChange={event => void selectWaveform(event.target.value)}>
+              {!waveform && <option value="">New waveform</option>}
+              {waveforms.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+            <ChevronDown aria-hidden="true" />
+          </div>
+        </div>
+        <button className="secondary-button settings-new-waveform" type="button" disabled={busy || dirty || preparingPhoto || preparingVisual || waveforms.length >= WAVEFORMS_PER_OWNER || !waveform} onClick={() => applySelection(null, crypto.randomUUID())}><Plus aria-hidden="true" />New waveform</button>
+        {dirty && <p className="field-help">Save or discard your changes before switching waveforms.</p>}
+        {waveforms.length >= WAVEFORMS_PER_OWNER && <p className="field-help">You’ve reached the {WAVEFORMS_PER_OWNER}-waveform limit. You can keep editing each saved waveform.</p>}
+      </div>
+      {!dirty && (savedReviewNeedsAttention || error) && <div className="settings-review-notice">
+        {savedReviewNeedsAttention && <><CreationSafetyStatus compact status={safety.status} categories={safety.categories} /><button type="button" className="secondary-button" disabled={busy || preparingPhoto || preparingVisual} onClick={safety.requestReview}>Review this version</button></>}
+        {error && <p className="account-error" role="alert">{error}</p>}
+      </div>}
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="Waveform settings">{sections.map(({ id, label, icon: Icon }) => <button key={id} type="button" aria-current={section === id ? 'page' : undefined} onClick={() => setSection(id)}><Icon aria-hidden="true" /><span>{label}</span>{id === 'plugins' && <span className="settings-nav-count" aria-hidden="true">{PLUGINS.length}</span>}</button>)}</nav>
         <div className="settings-editor">
@@ -264,8 +332,8 @@ export default function AccountSettings() {
           {/* A private, validated data URL is rendered locally, with no image proxy. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           {profilePhoto && <img className="profile-photo-preview" src={profilePhoto} alt="Profile photo preview" width={64} height={64} />}
-          <div className="profile-photo-controls"><input id="profile-photo" type="file" accept="image/jpeg,image/png,image/webp" disabled={busy || preparingPhoto} aria-describedby="photo-help" onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void choosePhoto(file); }} />
-            {profilePhoto && <button className="photo-remove" type="button" disabled={busy || preparingPhoto} onClick={() => { photoRevision.current = null; setProfilePhoto(null); setMessage(''); }}>Remove photo</button>}</div>
+          <div className="profile-photo-controls"><input id="profile-photo" type="file" accept="image/jpeg,image/png,image/webp" disabled={busy || preparingPhoto || preparingVisual} aria-describedby="photo-help" onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void choosePhoto(file); }} />
+            {profilePhoto && <button className="photo-remove" type="button" disabled={busy || preparingPhoto || preparingVisual} onClick={() => { photoRevision.current = null; setProfilePhoto(null); setMessage(''); }}>Remove photo</button>}</div>
         </div>
         <p id="photo-help" className="field-help">JPEG, PNG or WebP, up to 5 MB. We crop the center into a small round portrait. {preparingPhoto ? <BrandLoader variant="inline" label="Preparing your photo…" /> : 'Save to keep it with your waveform.'}</p>
         <label htmlFor="waveform-name">Waveform name</label>
@@ -274,7 +342,7 @@ export default function AccountSettings() {
           <div><label htmlFor="waveform-color">Waveform color</label><input id="waveform-color" type="color" value={previewColor} onChange={event => changeColor(event.target.value)} disabled={busy} aria-describedby="color-help" /></div>
           <div><label htmlFor="waveform-color-hex">Color hex code</label><input id="waveform-color-hex" value={accentColor} onChange={event => changeColor(event.target.value)} pattern="#?[0-9a-fA-F]{6}" maxLength={7} required disabled={busy} autoComplete="off" spellCheck={false} title={`Enter a six-digit hex color, such as ${WAVEFORM_DEFAULT_COLOR}.`} aria-describedby="color-help" /></div>
         </div>
-        <p id="color-help" className="field-help">Choose any color or enter its hex code. It colors your waveform and its page.</p>
+        <p id="color-help" className="field-help">Choose any color or enter its hex code. It colors the waveform and interface accents; the background stays slate grey.</p>
         <label htmlFor="waveform-voice">Voice</label>
         <select id="waveform-voice" value={voice} onChange={event => { if (isVoiceName(event.target.value)) setVoice(event.target.value); }} disabled={busy} aria-describedby="voice-help">
           {VOICE_OPTIONS.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
@@ -297,19 +365,21 @@ export default function AccountSettings() {
               <div className="settings-section-heading"><h2 id="plugins-heading">Plugins <span className="settings-badge">{PLUGINS.length} available</span></h2><p>Choose what your waveform can do.</p></div>
               <div className="settings-plugin-list">{PLUGINS.map(plugin => <article key={plugin.id} className="settings-plugin" aria-labelledby={'plugin-' + plugin.id + '-heading'}>
                 <span className="settings-plugin-icon">{plugin.id === 'knowledge' ? <BookOpen aria-hidden="true" /> : <TextCursorInput aria-hidden="true" />}</span>
-                <div className="settings-plugin-body"><div className="settings-plugin-heading"><h3 id={'plugin-' + plugin.id + '-heading'}>{plugin.name}</h3><span className="settings-plugin-state">{plugin.id === 'knowledge' ? 'Private library' : textPanel?.version === 2 ? 'Applied' : textPanel ? 'Legacy text saved' : 'Not applied'}</span></div>
-                  {plugin.id === 'knowledge' ? <><p>Answers grounded in your documents. Show relevant passages and sources with Text Box.</p>{waveform ? <Link className="secondary-button settings-manage-knowledge" href="/account/knowledge">Manage documents <ArrowUpRight aria-hidden="true" /></Link> : <p className="field-help">Save your draft to add Knowledge.</p>}<p className="field-help">Your uploaded documents stay private to you.</p></>
+                <div className="settings-plugin-body"><div className="settings-plugin-heading"><h3 id={'plugin-' + plugin.id + '-heading'}>{plugin.name}</h3><span className="settings-plugin-state">{plugin.id === 'visual' ? visualDisplay ? 'Applied' : 'Not applied' : plugin.id === 'knowledge' ? 'Private library' : textPanel?.version === 2 ? 'Applied' : textPanel ? 'Legacy text saved' : 'Not applied'}</span></div>
+                  {plugin.id === 'visual' ? visualDisplay ? <VisualDisplaySettings key={`${account.user?.uid}:${draftId}`} value={visualDisplay} disabled={busy} onChange={setVisualDisplay} onPreparing={setPreparingVisual} /> : <><p>Show your pictures and accompanying text, primarily by voice.</p><button className="secondary-button" type="button" disabled={busy} onClick={() => setVisualDisplay({ type: 'visual', version: 1, images: [] })}>Apply Visual Display</button></> : plugin.id === 'knowledge' ? <><p>Answers grounded in your documents. Show relevant passages and sources with Text Box.</p>{waveform ? <Link className="secondary-button settings-manage-knowledge" href={`/account/knowledge?id=${waveform.id}`}>Manage documents <ArrowUpRight aria-hidden="true" /></Link> : <p className="field-help">Save your draft to add Knowledge.</p>}<p className="field-help">Your uploaded documents stay private to you.</p></>
                     : <><p>Dictate notes or ask your waveform to display an answer.</p><div className="settings-plugin-actions"><button type="button" className="secondary-button" disabled={busy || textPanel?.version === 2} onClick={() => { setTextPanel({ type: 'text', version: 2 }); setMessage('Text Box applied. Save your draft to use it in your next conversation.'); setError(''); }}>{textPanel?.version === 2 ? 'Plugin applied' : 'Apply plugin'}</button>{textPanel && <button type="button" className="settings-inline-link" disabled={busy} onClick={() => { setTextPanel(null); setMessage('Text Box removed. Save your draft to keep this change.'); setError(''); }}>Remove Text Box</button>}</div><details className="settings-plugin-help"><summary>How it works</summary><p className="field-help">Say “Start writing,” “Stop writing,” or ask the waveform to put an answer in the box. The panel appears only when requested. Hiding it keeps voice connected. Each conversation starts with its own text.</p>{textPanel?.version === 1 && <p className="field-help">Your existing saved text is preserved. Apply Text Box to replace it with an empty, voice-controlled panel.</p>}</details></>}
                 </div>
               </article>)}</div>
+              {waveform && section === 'plugins' && <PluginAccessSettings key={waveform.id} id={waveform.id}
+                applied={['knowledge', ...(waveform.textPanel ? ['text' as const] : []), ...(waveform.visualDisplay?.images.length ? ['visual' as const] : [])]} />}
             </section>
           </form>
-          <section className="settings-panel" hidden={section !== 'sharing'} aria-labelledby="sharing-heading"><div className="settings-section-heading"><h2 id="sharing-heading">Sharing & usage</h2><p>Control access and manage the existing publishing options.</p></div><div className="settings-private-note"><LockKeyhole aria-hidden="true" /><div><strong>Your personal waveform is private.</strong><p className="field-help">Your settings and personal address stay private. Publishing is a separate, explicit choice when available.</p></div></div>{waveform ? <PaidSettings key={waveform.id} waveformId={waveform.id} unsavedDraft={dirty} /> : <p className="field-help">Save your draft to see its available usage controls.</p>}</section>
+          <section className="settings-panel" hidden={section !== 'sharing'} aria-labelledby="sharing-heading"><div className="settings-section-heading"><h2 id="sharing-heading">Sharing & usage</h2><p>Control access and manage the existing publishing options.</p></div><div className="settings-private-note"><LockKeyhole aria-hidden="true" /><div><strong>Your personal waveform is private.</strong><p className="field-help">Save to preview your private draft. Publish to update what visitors see, when publishing is available.</p></div></div>{!dirty && safety.status === 'allowed' && <details className="settings-saved-review"><summary>Creation review</summary><CreationSafetyStatus status={safety.status} categories={safety.categories} /></details>}{waveform ? <PaidSettings key={waveform.id} waveformId={waveform.id} unsavedDraft={dirty} /> : <p className="field-help">Save your draft to see its available usage controls.</p>}</section>
           <section className="settings-panel" hidden={section !== 'account'} aria-labelledby="account-heading"><div className="settings-section-heading"><h2 id="account-heading">Account & tools</h2><p>{account.user.role === 'admin' ? 'Your account and founder controls.' : 'Manage your account.'}</p></div><p>Signed in as {account.user.displayName}.</p>
         {account.hostedTesterDemo && <p className="field-help">{account.user.role === 'admin' ? 'Founder access: no personal time limit on your own waveform. The Studio introduction still has a three-minute daily limit.' : 'Your private waveform includes three minutes of voice per day during this free beta. Payments are disabled.'}</p>}
         {account.user.role === 'admin' && !account.hostedTesterDemo && <div>
           <label className="admin-testing-toggle" htmlFor="admin-testing"><input id="admin-testing" type="checkbox" role="switch" checked={adminTesting} disabled={busy} onChange={event => setAdminTesting(event.target.checked)} aria-describedby="admin-testing-help" /> Admin testing</label>
-          <p id="admin-testing-help" className="field-help">{account.localUnmeteredTesting
+          <p id="admin-testing-help" className="field-help">This account setting applies to all your waveforms. {account.localUnmeteredTesting
             ? 'Local founder testing has no daily, start-count, elapsed-time or silence quota. End conversations when finished. Turn off to experience regular-user limits. Save to apply on your next conversation.'
             : 'Skip your prepaid, personal time and silence limits. Conversations end at 15 minutes. Each start uses a 15-minute block from the shared daily testing budget, even if you end early. Shared capacity limits still apply. Turn off to experience regular-user limits. Save to apply on your next conversation.'}</p>
         </div>}
@@ -320,13 +390,13 @@ export default function AccountSettings() {
         </div>
         <WaveformSettingsPreview name={name} voice={VOICE_OPTIONS.find(option => option.id === voice)?.label ?? voice} photo={profilePhoto} waveformId={waveform?.id} textEnabled={!!textPanel} />
       </div>
-      <footer className="settings-savebar"><div className="settings-save-status"><span className="settings-draft-state">{dirty ? 'Unsaved changes' : waveform ? 'All changes saved' : 'Create your waveform'}</span>
-        <CreationSafetyStatus status={safety.status} categories={safety.categories} />
-        {account.creationSafetyEnabled && !safety.canSave && <button type="button" className="secondary-button" disabled={busy || preparingPhoto || safety.status === 'pending'} onClick={safety.requestReview}>Review this version</button>}
+      {(dirty || busyAction === 'save') && <footer className="settings-savebar"><div className="settings-save-status"><span className="settings-draft-state">Unsaved changes</span>
+        <CreationSafetyStatus compact status={safety.status} categories={safety.categories} />
+        {account.creationSafetyEnabled && !safety.canSave && safety.status !== 'pending' && <button type="button" className="secondary-button" disabled={busy || preparingPhoto || preparingVisual} onClick={safety.requestReview}>Review this version</button>}
         {account.safetyAdminFixture && <p className="local-account-note">Safety decisions in this local preview are synthetic.</p>}
 
-        <p className="field-help">Save to preview your draft. Publish to update what visitors see.</p><p className="account-status" role="status" aria-live="polite">{message}</p>{error && <p className="account-error" role="alert">{error}</p>}
-      </div><div className="settings-save-actions">{dirty && <button type="button" className="settings-inline-link" disabled={busy || preparingPhoto} onClick={discard}>Discard changes</button>}<button className="primary-button" form="waveform-settings-form" type="submit" disabled={busy || preparingPhoto || promptTooLong || !safety.canSave} aria-busy={busyAction === 'save'}>{busyAction === 'save' && <BrandLoader variant="inline" />}{busyAction === 'save' ? 'Saving…' : 'Save draft'}</button></div></footer>
+        {error && <p className="account-error" role="alert">{error}</p>}
+      </div><div className="settings-save-actions">{dirty && <button type="button" className="settings-inline-link" aria-label="Discard changes" disabled={busy || preparingPhoto || preparingVisual} onClick={discard}>Discard</button>}<button className="primary-button" form="waveform-settings-form" type="submit" disabled={busy || preparingPhoto || preparingVisual || promptTooLong || !safety.canSave || visualInvalid} aria-busy={busyAction === 'save'}>{busyAction === 'save' && <BrandLoader variant="inline" />}{busyAction === 'save' ? 'Saving…' : 'Save draft'}</button></div></footer>}
     </> : account?.mode === 'firebase' ? <>
       <header className="auth-header"><Link className="auth-brand" href="/" aria-label="FlowPath Studio home"><Image src="/brand/flowpath-icon-square.png" alt="" width={32} height={32} priority /><span>FlowPath <span className="auth-brand-studio">Studio</span></span></Link><Link className="auth-home" href="/">Home</Link></header>
       <section className="auth-content" aria-label={creating ? 'Create account' : resetting ? 'Reset password' : 'Sign in'}>

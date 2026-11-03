@@ -21,7 +21,7 @@ export default function PaidSettings({ waveformId, unsavedDraft = false }: { wav
     void (async () => {
       const b = await loadBilling(controller.signal); if (!current) return; setBilling(b);
       if (!b.enabled) return;
-      const p = await paidRead<PublishingView>('/api/publishing', { signal: controller.signal });
+      const p = await paidRead<PublishingView>(`/api/publishing?id=${waveformId}`, { signal: controller.signal });
       if (current) { setPublication(p); setSettings(p.settings); }
     })().catch(error => { if (current) setMessage(error.message); });
     return () => { current = false; controller.abort(); };
@@ -30,7 +30,7 @@ export default function PaidSettings({ waveformId, unsavedDraft = false }: { wav
     if (busy) return;
     setBusyAction(published ? 'publish' : 'unpublish'); setMessage(''); setCopyReady(false);
     try {
-      const p = await paidRead<PublishingView>('/api/publishing', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings, published }) });
+      const p = await paidRead<PublishingView>(`/api/publishing?id=${waveformId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings, published }) });
       setPublication(p); setSettings(p.settings); setBilling(await loadBilling());
       setMessage(published ? 'Published. Your link is ready.' : 'Private. New visitor sessions are blocked. Active sessions finish their existing reserved segment.');
     } catch (error) {

@@ -1,21 +1,30 @@
 import { createCreationApi } from './creation-api';
+import { requestWaveformId } from './account-server';
 import { accountServer } from './account-runtime';
 import { creationReviewStore, creationSafetyEnabled } from './creation-runtime';
 import { configuredPublicOrigin } from './request-origin';
 import { normalizeProfilePhoto } from './profile-photo';
+import { normalizeVisualDisplay } from './visual-display-images';
 import { canonicalCreationCandidate, CreationSafetyError } from './creation-safety';
 import { applicationDatabase } from './application-database';
 import { knowledgeDocumentForReview } from './knowledge-store';
 export const creationApi = createCreationApi({ accounts: accountServer, enabled: creationSafetyEnabled, store: creationReviewStore,
   publicOrigin: process.env.NODE_ENV === 'production' ? configuredPublicOrigin(process.env.FLOWPATH_PUBLIC_ORIGIN) : undefined,
   trustedProxyHost: process.env.FLOWPATH_TRUSTED_PROXY_HOST,
+  waveformId: async request => (await accountServer.resolveVoiceWaveform(request, undefined, 'cleanup'))?.waveform.id,
   prepare: async (request, candidate) => {
-    if (!candidate.profilePhoto) return candidate;
-    const existing = await accountServer.resolveVoiceWaveform(request, undefined, 'cleanup');
-    if (candidate.profilePhoto === existing?.waveform.profilePhoto) return candidate;
-    const normalized = await normalizeProfilePhoto(candidate.profilePhoto);
-    if (!normalized) throw new CreationSafetyError('Choose a valid bounded portrait.', 400);
-    return canonicalCreationCandidate({ ...candidate, profilePhoto: normalized });
+    if (!candidate.profilePhoto && !candidate.visualDisplay) return candidate;
+    const existing = await accountServer.resolveVoiceWaveform(request, requestWaveformId(request), 'cleanup');
+    let profilePhoto = candidate.profilePhoto;
+    if (profilePhoto && profilePhoto !== existing?.waveform.profilePhoto) {
+      const normalized = await normalizeProfilePhoto(profilePhoto);
+      if (!normalized) throw new CreationSafetyError('Choose a valid bounded portrait.', 400);
+      profilePhoto = normalized;
+    }
+    try {
+      const visualDisplay = await normalizeVisualDisplay(candidate.visualDisplay, existing?.waveform.visualDisplay);
+      return canonicalCreationCandidate({ ...candidate, profilePhoto, visualDisplay });
+    } catch { throw new CreationSafetyError('Choose valid bounded static pictures for Visual Display.', 400); }
   },
   file: async record => {
     const file = record.candidate.document && await applicationDatabase().transaction(tx => knowledgeDocumentForReview(tx, record.ownerUid, record.candidate.document!));

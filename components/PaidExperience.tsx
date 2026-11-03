@@ -51,9 +51,9 @@ export default function PaidExperience({ id, personal = false, initialBilling }:
   }, [id, revision, personal, initialBilling]);
   const nextConversation = () => { setPayer(undefined); setView(null); setBilling(null); setFinished(false); setRevision(r => r + 1); };
   if ((payer || view?.adminTesting && view.adminVoiceReady) && view) return <VoiceExperience key={id} waveformId={id} name={view.waveform.name} accentColor={view.waveform.accentColor}
-    profilePhoto={view.waveform.profilePhoto} textPanel={view.waveform.textPanel} analyticsSurface={personal ? 'private' : 'public'} paidPayer={payer} draftPreview={personal} publishedPreview={!personal && !payer}
+    profilePhoto={view.waveform.profilePhoto} textPanel={view.waveform.textPanel} visualDisplay={view.waveform.visualDisplay} analyticsSurface={personal ? 'private' : 'public'} paidPayer={payer} draftPreview={personal} publishedPreview={!personal && !payer}
     nextConversation={finished && payer ? nextConversation : undefined}
-    onSettled={() => { if (liveTextPanelEnabled(view.waveform.textPanel)) setFinished(true); else nextConversation(); }} />;
+    onSettled={() => { if (liveTextPanelEnabled(view.waveform.textPanel) || view.waveform.visualDisplay?.images.length) setFinished(true); else nextConversation(); }} />;
   const canSponsor = !!view && !view.own && view.sponsoredSeconds > 0;
   if (!view && !message) return <BrandLoader variant="screen" label="Loading experience…" />;
   return <main className="account-page paid-experience">

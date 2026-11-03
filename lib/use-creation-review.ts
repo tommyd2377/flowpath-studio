@@ -6,8 +6,8 @@ import { canonicalCreationReviewCandidate, creationReviewResponseCategories, cre
 
 export const CREATION_REVIEW_DEBOUNCE_MS = 350;
 
-export function useCreationReview({ enabled, candidate, ownerKey, automatic = true }: {
-  enabled: boolean; candidate: CreationReviewCandidate; ownerKey: string; automatic?: boolean;
+export function useCreationReview({ enabled, candidate, ownerKey, waveformId, creating = false, automatic = true }: {
+  waveformId?: string; creating?: boolean; enabled: boolean; candidate: CreationReviewCandidate; ownerKey: string; automatic?: boolean;
 }) {
   const [requested, setRequested] = useState<{ key: string; revision: number } | null>(null);
   const key = canonicalCreationReviewCandidate(candidate)?.key ?? null;
@@ -41,13 +41,15 @@ export function useCreationReview({ enabled, candidate, ownerKey, automatic = tr
         let categories: string[] = [];
         try {
           const submit = automatic || requested?.key === key;
-          const response = await fetch('/api/creation-review', submit ? { method: 'POST', signal: controller.signal,
+          const response = await fetch(waveformId ? `/api/creation-review?id=${waveformId}${creating ? "&create=1" : ""}` : '/api/creation-review', submit ? { method: 'POST', signal: controller.signal,
             headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ candidate: JSON.parse(key) }) }
             : { cache: 'no-store', signal: controller.signal });
           if (response.ok) {
             const body = await response.json();
             status = !submit && canonicalCreationReviewCandidate(body.review?.candidate ?? {})?.key !== key ? 'stale' : creationReviewResponseStatus(body);
             if (status !== 'stale') categories = creationReviewResponseCategories(body);
+          } else if (response.status === 409 && (await response.json()).code === 'rejected-item') {
+            status = 'revoked';
           }
         } catch { /* Fixed unavailable state; never expose raw errors or automatically retry. */ }
         if (!current || controller.signal.aborted) return;
@@ -57,7 +59,7 @@ export function useCreationReview({ enabled, candidate, ownerKey, automatic = tr
       })();
     }, CREATION_REVIEW_DEBOUNCE_MS);
     return () => { current = false; clearTimeout(timer); controller.abort(); };
-  }, [enabled, ownerKey, key, scope, automatic, requested]);
+  }, [enabled, ownerKey, key, scope, automatic, requested, waveformId, creating]);
 
   return { ...creationReviewView({ enabled, ownerKey, key, result }), invalidateReview: (status: 'stale' | 'unavailable' = 'stale') => {
     if (completed.current?.scope === scope && completed.current.result.ownerKey === ownerKey && completed.current.result.key === key) completed.current = null;

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCreationReviewStore, type CreationActor, type CreationReviewOptions, type CreationReviewProof } from '../lib/creation-review';
@@ -554,4 +555,77 @@ test('v5 retains exact v4 approvals and their revocation, never replaying a bloc
   await next.decide(admin, { ...prior, decision: 'revoked' });
   await assert.rejects(next.request(owner, candidate), denied());
   await assert.rejects(s.db.transaction(tx => next.requireSnapshotAllowed(tx, owner.uid, candidate)), denied());
+});
+
+test('waveform review heads stay independent through concurrent requests, edits, publication and legacy fallback', async () => {
+  const f = setup(), a = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', b = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const ca = { ...candidate, name: 'First' }, cb = { ...candidate, name: 'Second' };
+  await allowed(f, candidate);
+  const [ra, rb] = await Promise.all([f.store.request({ ...owner, waveformId: a }, ca), f.store.request({ ...owner, waveformId: b }, cb)]);
+  await Promise.all([f.store.runReview(ra.record), f.store.runReview(rb.record)]);
+  await f.db.transaction(async tx => { await f.store.requireAllowed(tx, owner.uid, { ...ca, id: a }); await f.store.requireAllowed(tx, owner.uid, { ...cb, id: b });
+    await f.store.requireAllowed(tx, owner.uid, { ...candidate, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' }); });
+  const edit = await f.store.request({ ...owner, waveformId: b }, { ...cb, initialPrompt: 'New second instructions.' });
+  await f.store.runReview(edit.record);
+  await f.db.transaction(async tx => { await f.store.requireAllowed(tx, owner.uid, { ...ca, id: a }); await f.store.requireSnapshotAllowed(tx, owner.uid, { ...cb, id: b }); });
+  await assert.rejects(f.db.transaction(tx => f.store.requireAllowed(tx, owner.uid, { ...cb, id: b })), /exact content/);
+  assert.equal((await f.store.get({ ...owner, waveformId: a }))?.reviewId, ra.record.reviewId);
+  await assert.rejects(f.db.transaction(tx => f.store.requireAllowed(tx, other.uid, { ...ca, id: a })), /exact content/);
+});
+
+test('revoking one scoped waveform blocks its exact version while another waveform remains approved', async () => {
+  const f = setup({ policy: () => CONSERVATIVE_CREATION_POLICY,
+    reviewer: reviewer(async () => evidence({ 'controversial-identity': 'uncertain' })) });
+  const a = { ...owner, waveformId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' };
+  const b = { ...owner, waveformId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' };
+  const ca = { ...candidate, name: 'First' }, cb = { ...candidate, name: 'Second' };
+  const ra = await f.store.runReview((await f.store.request(a, ca)).record);
+  await f.store.runReview((await f.store.request(b, cb)).record);
+  await f.store.decide(admin, { ...ra, decision: 'revoked' });
+  await assert.rejects(f.db.transaction(tx => f.store.requireAllowed(tx, owner.uid, { ...ca, id: a.waveformId })), /exact content/);
+  await f.db.transaction(tx => f.store.requireAllowed(tx, owner.uid, { ...cb, id: b.waveformId }));
+  assert.equal((await f.store.get(a))?.status, 'revoked');
+  assert.equal((await f.store.get(b))?.status, 'allowed');
+});
+
+test('Visual Display exact bytes and explanations bind scoped approval, publication and revocation', async () => {
+  const { visualFixture } = await import('./visual-display-fixture');
+  const visualDisplay = await visualFixture();
+  const s = setup({ policy: () => CONSERVATIVE_CREATION_POLICY, reviewer: reviewer(async () => evidence({ 'controversial-identity': 'uncertain' })) });
+  const a = { ...owner, waveformId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }, b = { ...owner, waveformId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' };
+  const ca = { ...candidate, visualDisplay }, cb = { ...candidate, visualDisplay: { ...visualDisplay, images: [visualDisplay.images[1]] } };
+  const reviewed = await s.store.runReview((await s.store.request(a, ca)).record);
+  await s.store.runReview((await s.store.request(b, cb)).record);
+  await s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, { ...ca, id: a.waveformId }));
+  for (const changed of [cb, { ...ca, visualDisplay: { ...visualDisplay, images: [{ ...visualDisplay.images[0], text: 'Unreviewed explanation.' }] } }]) {
+    await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, { ...changed, id: a.waveformId })), /exact content/);
+  }
+  await assert.rejects(s.db.transaction(tx => s.store.requireAllowed(tx, other.uid, { ...ca, id: a.waveformId })), /exact content/);
+  await s.store.decide(admin, { ...reviewed, decision: 'revoked' });
+  await assert.rejects(s.db.transaction(tx => s.store.requireSnapshotAllowed(tx, owner.uid, { ...ca, id: a.waveformId })), /allowed safety review/);
+  await s.db.transaction(tx => s.store.requireAllowed(tx, owner.uid, { ...cb, id: b.waveformId }));
+});
+
+test('rejecting a portrait blocks saved and published use and requires replacing that item on the affected waveform', async () => {
+  const f = setup({ policy: () => CONSERVATIVE_CREATION_POLICY,
+    reviewer: reviewer(async () => evidence({ 'portrait-provenance': 'uncertain' })) });
+  const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const actor = { ...owner, waveformId: id };
+  const withPortrait = { ...candidate, profilePhoto: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2V8AAAAASUVORK5CYII=' };
+  const approved = await f.store.runReview((await f.store.request(actor, withPortrait)).record);
+  f.db.rows.set(`paidTestWaveforms/${createHash('sha256').update(id).digest('hex')}`,
+    { published: true, ownerUid: owner.uid, waveform: { ...withPortrait, id } });
+  const [queued] = await f.store.listManual(admin);
+  assert.equal(queued.published, true);
+  assert.equal(queued.reviewHead, true);
+  await assert.rejects(f.store.decide(owner, { ...approved, decision: 'revoked', item: 'portrait' }), denied(403));
+  await assert.rejects(f.store.decide(admin, { ...approved, decision: 'revoked', item: 'image:missing' }), denied(400));
+  await f.store.decide(admin, { ...approved, decision: 'revoked', item: 'portrait' });
+  await assert.rejects(f.db.transaction(tx => f.store.requireSnapshotAllowed(tx, owner.uid, { ...withPortrait, id })), /item.*rejected/);
+  await assert.rejects(f.store.request(actor, { ...withPortrait, initialPrompt: 'An unrelated edit.' }), /item.*rejected/);
+  const corrected = await f.store.runReview((await f.store.request(actor, candidate)).record);
+  assert.equal(corrected.status, 'allowed');
+  await f.db.transaction(tx => f.store.requireAllowed(tx, owner.uid, { ...candidate, id }));
+  const separate = await f.store.request({ ...actor, waveformId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }, withPortrait);
+  assert.equal(separate.needsReview, true);
 });

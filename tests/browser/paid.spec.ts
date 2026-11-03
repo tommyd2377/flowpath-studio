@@ -22,7 +22,7 @@ async function createOwner(page: Page, mode: 'creator' | 'intro' | 'visitor' = '
   await page.goto('/account');
   await page.getByRole('button', { name: 'Use test owner A', exact: true }).click();
   await settingsSection(page, 'appearance');
-  await page.getByLabel('Waveform name', { exact: true }).fill(`Paid test ${mode}`);
+  await page.getByLabel('Waveform name', { exact: true }).fill(`Paid test ${mode} ${crypto.randomUUID().slice(0, 8)}`);
   await settingsSection(page, 'instructions');
   await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('Synthetic private instructions.');
   await page.getByRole('button', { name: 'Save draft', exact: true }).click();
@@ -42,6 +42,7 @@ async function createOwner(page: Page, mode: 'creator' | 'intro' | 'visitor' = '
   if (mode !== 'visitor') await page.getByLabel('Finite sponsorship budget', { exact: false }).fill('5');
   if (mode === 'intro') await page.getByLabel('Sponsored minutes per visitor', { exact: true }).fill(String(seconds / 60));
   await page.getByRole('button', { name: /^(Publish|Update published version)$/ }).click();
+  await expect(page.getByRole('region', { name: 'Publishing and prepaid minutes' }).getByRole('status')).toContainText('Published.');
   await expect(page.getByRole('link', { name: 'View published version' })).toBeVisible();
   return (await page.getByRole('link', { name: 'View published version' }).getAttribute('href'))!;
 }
@@ -231,7 +232,7 @@ test('publishing errors remain inline without an admin confirmation or automatic
   await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.getByRole('link', { name: 'Preview draft', exact: true })).toBeVisible();
   let attempts = 0;
-  await page.route('**/api/publishing', route => {
+  await page.route('**/api/publishing{,?*}', route => {
     if (route.request().method() === 'GET') return route.fulfill({ json: { published: false, settings: { mode: 'intro', allowanceSeconds: 300, budgetSeconds: 0 }, spent: 0, held: 0 } });
     attempts++;
     expect(route.request().postDataJSON().continueAsAdmin).toBeUndefined();

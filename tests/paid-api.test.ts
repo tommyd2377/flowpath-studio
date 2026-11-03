@@ -187,3 +187,46 @@ test('draft preview is owner-only and keeps the published projection unchanged u
     assert.equal((await (await f.api.publishedGET(req(`/api/published?id=${f.savedWave.id}`))).json()).waveform.name, 'Private new name');
   } finally { await rm(f.directory, { recursive: true, force: true }); }
 });
+
+test('publishing and editing a second waveform cannot replace the first publication or spend another wallet', async () => {
+  const f = await fixture();
+  try {
+    assert.equal((await f.publishing(true)).status, 200);
+    const original = await f.store.publication(f.savedWave.id);
+    const created = await f.accounts.waveformPUT(req(`/api/waveform?id=${randomUUID()}`, 'POST', { name: 'Second', initialPrompt: 'A different private draft.' }, f.cookie), true);
+    assert.equal(created.status, 200);
+    const id = (await created.json()).waveform.id;
+    const publish = await f.api.publishingPOST(req(`/api/publishing?id=${id}`, 'POST', { published: true,
+      settings: { mode: 'creator', budgetSeconds: 300, allowanceSeconds: 300 } }, f.cookie));
+    assert.equal(publish.status, 200); assert.equal((await publish.json()).id, id);
+    assert.equal((await (await f.api.publishingGET(req(`/api/publishing?id=${id}`, 'GET', undefined, f.cookie))).json()).id, id);
+    assert.equal((await f.store.wallet('local-owner-a')).allocated, 600, 'both allocations share the same wallet');
+    await f.accounts.waveformPUT(req(`/api/waveform?id=${id}`, 'PUT', { name: 'Second edited', initialPrompt: 'Changed second draft.' }, f.cookie));
+    assert.deepEqual(await f.store.publication(f.savedWave.id), original);
+    assert.equal((await f.store.publication(id))?.waveform.name, 'Second', 'save cannot silently publish a draft');
+    const other = await f.accounts.accountPOST(req('/api/account', 'POST', { localAccount: 'owner-b' }));
+    assert.equal((await f.api.publishingGET(req(`/api/publishing?id=${id}`, 'GET', undefined, other.headers.get('set-cookie')!.split(';')[0]))).status, 401);
+  } finally { await rm(f.directory, { recursive: true, force: true }); }
+});
+
+test('private Visual Display edits do not leak through the explicit published snapshot projection', async () => {
+  const { visualFixture } = await import('./visual-display-fixture');
+  const visualDisplay = await visualFixture(), f = await fixture();
+  try {
+    const save = (visual: typeof visualDisplay) => f.accounts.waveformPUT(req(`/api/waveform?id=${f.savedWave.id}`, 'PUT', { name: f.savedWave.name, initialPrompt: f.savedWave.initialPrompt, visualDisplay: visual }, f.cookie));
+    assert.equal((await save(visualDisplay)).status, 200);
+    assert.equal((await f.api.publishedGET(req(`/api/published?id=${f.savedWave.id}`))).status, 404);
+    assert.equal((await f.publishing(true)).status, 200);
+    const first = (await (await f.api.publishedGET(req(`/api/published?id=${f.savedWave.id}`))).json()).waveform.visualDisplay;
+    const edited = { ...visualDisplay, images: [{ ...visualDisplay.images[0], text: 'PRIVATE NEW DRAFT', title: 'PRIVATE NEW TITLE' }] };
+    assert.equal((await save(edited)).status, 200);
+    const privateWave = (await f.accounts.resolveVoiceWaveform(req('/api/waveform', 'GET', undefined, f.cookie), f.savedWave.id, 'cleanup'))!.waveform;
+    await f.store.saveWaveform({ uid: 'local-owner-a', visitorId: 'local-owner-a' }, privateWave);
+    const publicView = (await (await f.api.publishedGET(req(`/api/published?id=${f.savedWave.id}`))).json()).waveform;
+    assert.deepEqual(publicView.visualDisplay, first);
+    assert.equal(JSON.stringify(publicView).includes('PRIVATE NEW'), false);
+    assert.equal((await f.publishing(true)).status, 200);
+    const updated = (await (await f.api.publishedGET(req(`/api/published?id=${f.savedWave.id}`))).json()).waveform.visualDisplay;
+    assert.equal(updated.images[0].text, 'PRIVATE NEW DRAFT');
+  } finally { await rm(f.directory, { recursive: true, force: true }); }
+});

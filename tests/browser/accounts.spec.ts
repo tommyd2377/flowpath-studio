@@ -46,6 +46,52 @@ async function saveWaveform(page: Page, owner: 'A' | 'B', name: string, prompt: 
   return address!;
 }
 
+test('founder testing carries across waveform selection and creation without stale saves changing the account preference', async ({ page }) => {
+  let testing = true;
+  const savedBodies: Record<string, unknown>[] = [];
+  const waveforms = [1, 2].map(n => ({ id: `00000000-0000-4000-8000-00000000000${n}`, name: `Guide ${n}`,
+    initialPrompt: 'Be a helpful guide.', voice: 'marin', accentColor: '#3a66ff', profilePhoto: null }));
+  await page.route('**/api/account', route => route.fulfill({ json: { mode: 'firebase', localUnmeteredTesting: true,
+    user: { uid: 'founder-fixture', displayName: 'Founder', role: 'admin' } } }));
+  await page.route('**/api/waveform*', async route => {
+    const request = route.request(), id = new URL(request.url()).searchParams.get('id') ?? waveforms[0].id;
+    let waveform = waveforms.find(w => w.id === id);
+    if (request.method() !== 'GET') {
+      const body = request.postDataJSON(); savedBodies.push(body);
+      if (Object.hasOwn(body, 'adminTesting')) testing = body.adminTesting;
+      waveform = { ...waveform, ...body, id };
+      if (request.method() === 'POST') waveforms.push(waveform!);
+      else waveforms.splice(waveforms.findIndex(w => w.id === id), 1, waveform!);
+    }
+    await route.fulfill({ json: { waveform: { ...waveform, adminTesting: testing }, waveforms: waveforms.map(({ id, name }) => ({ id, name })), limit: 10 } });
+  });
+  await page.goto('/account'); await settingsSection(page, 'account');
+  const toggle = page.getByRole('switch', { name: 'Admin testing', exact: true });
+  await expect(toggle).toBeChecked();
+  await expect(page.locator('#admin-testing-help')).toContainText('all your waveforms');
+  await page.getByRole('button', { name: 'New waveform', exact: true }).click();
+  await page.getByLabel('Waveform name', { exact: true }).fill('Third guide');
+  await settingsSection(page, 'instructions');
+  await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('Be helpful.');
+  await settingsSection(page, 'account'); await expect(toggle).toBeChecked();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
+  await expect(page.locator('.account-status')).toContainText('Saved.');
+  expect(savedBodies[0]).not.toHaveProperty('adminTesting');
+  await toggle.uncheck(); await page.getByRole('button', { name: 'Save draft', exact: true }).click();
+  await expect(page.locator('.account-status')).toContainText('Saved.'); expect(testing).toBe(false);
+  await page.getByLabel('Waveform · 3 / 10').selectOption(waveforms[0].id);
+  await settingsSection(page, 'account'); await expect(toggle).not.toBeChecked();
+  await toggle.check(); await page.getByRole('button', { name: 'Save draft', exact: true }).click();
+  await expect(page.locator('.account-status')).toContainText('Saved.'); expect(testing).toBe(true);
+  testing = false; // Another tab changes the account setting while this editor remains open.
+  await settingsSection(page, 'appearance');
+  await page.getByLabel('Waveform name', { exact: true }).fill('Renamed guide');
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
+  await expect(page.locator('.account-status')).toContainText('Saved.');
+  expect(savedBodies.at(-1)).not.toHaveProperty('adminTesting'); expect(testing).toBe(false);
+  await settingsSection(page, 'account'); await expect(toggle).not.toBeChecked();
+});
+
 test('one local test account saves one waveform and recovers it after signing out', async ({ page }) => {
   const name = 'Tom’s private assistant';
   const prompt = 'You are Tom’s assistant. Speak warmly and keep answers concise.';
@@ -147,7 +193,7 @@ test('switching accounts in another tab clears the old private view and settings
 
 test('a failed save keeps the edited prompt available for retry', async ({ page }) => {
   await saveWaveform(page, 'A', 'Retry assistant', 'A saved starting prompt.');
-  await page.route('**/api/waveform', route => route.request().method() === 'PUT'
+  await page.route('**/api/waveform{,?*}', route => route.request().method() === 'PUT'
     ? route.fulfill({ status: 503, json: { error: 'Your waveform could not be saved. Please try again.' } }) : route.continue());
   await settingsSection(page, 'instructions');
   await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('These are my unsaved changes.');
@@ -251,7 +297,7 @@ test('admin-only testing switch saves on and off across reloads while regular ac
     const account = await response.json();
     return route.fulfill({ json: { ...account, user: { ...account.user, ...(admin ? { role: 'admin' } : {}) } } });
   });
-  await page.route('**/api/waveform', async route => {
+  await page.route('**/api/waveform{,?*}', async route => {
     if (route.request().method() === 'PUT') waveform = { ...waveform, ...route.request().postDataJSON() };
     await route.fulfill({ json: { waveform } });
   });

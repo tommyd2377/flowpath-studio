@@ -1,5 +1,9 @@
 # FlowPath Studio
 
+Local Visual Display candidate: creators can apply a small picture/caption/text collection, primarily controlled by voice, using the existing registered delegation and display host. See [Visual Display](docs/visual-display.md) for limits, lifecycle and mocked verification. Real spoken acceptance and deployment are separate.
+
+Local, unreleased: every admitted account can create and manage up to **10 waveforms**. Use the Workspace selector and **New waveform**; save or discard edits before switching. Each waveform keeps its own voice, appearance, instructions, plugins, private Knowledge selection and draft/publication state. Account allowances and founder authority remain account-wide. Existing addresses keep working without a migration. See [multiple waveforms](docs/multiple-waveforms.md).
+
 Deployed October 29: the tested voice lifecycle, creation-review explanations, carousel, shared Streamdown displays and [private hosted Knowledge](docs/hosted-knowledge.md) are on GitHub main and live at https://flowpath.studio. Knowledge includes the approved $5/month estimated storage guard, 18+ upload confirmation and confirmed known-resource deletion. Build, source/mocked browser and non-paid HTTPS checks passed; real hosted document processing and voice remain separate live acceptance. Customer payments stay disabled. See [the release receipt](docs/firebase-launch.md#october-29-plugin-and-private-knowledge-release).
 
 Deployed October 27: homepage top-left links stack **Benjamin Franklin** above **News** (the separate `https://flowpathapp.com` app), with no extra heading. Both accept only the exact lowercase demo code `nyc-1776`. Franklin's `/w/c538ac44-883b-4d96-8785-4ddf8a151efb` has an approved public demonstration snapshot; visitors need the code to start voice. The introduction and Franklin share three minutes total per UTC day per browser, also checked against a regular signed-in account's daily allowance. The verified founder's own waveform stays unlimited. Other waveforms and Knowledge documents stay private. Payments remain off; hosted Knowledge was subsequently activated in the October 29 release. See [the release notes](docs/hosted-beta.md#curated-franklin-and-exact-code-release).
@@ -28,7 +32,7 @@ The account flow now uses the same exact lowercase demo code for new membership,
 
 ## Local preview
 
-The full localhost app also runs [creation review](docs/creation-safety.md) for names, instructions, portraits and Knowledge. Disclosed historical characters can be for conversation or fun; no teaching role is required. Real people must have been dead for at least five years. GPT-6 Luna checks exact versions; uncertain cases wait for the founder. This local activation includes existing content and has its own 50¢ cumulative review budget per waveform. It does not restore local voice-testing quotas or activate hosted enforcement.
+The full localhost app also runs [creation review](docs/creation-safety.md) for names, instructions, portraits and Knowledge. Disclosed historical characters can be for conversation or fun; no teaching role is required. Real people must have been dead for at least five years. GPT-6 Luna checks exact versions; uncertain cases wait for the founder. This local activation includes existing content and has its own 50¢ cumulative review budget per account. It does not restore local voice-testing quotas or activate hosted enforcement.
 
 Use Node.js 24:
 

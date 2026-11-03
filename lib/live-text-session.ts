@@ -1,13 +1,15 @@
+import { createVisualDisplaySession } from './visual-display-session';
+import type { VisualDisplayAction, VisualDisplayConfiguration, VisualDisplayState } from './visual-display';
 import { createPluginSession, pluginObject as object } from './plugin-session';
 import { validKnowledgeResult, type KnowledgePassage, type PluginContext } from './plugin-contract';
 
 export type LiveTextDisplay = 'text' | 'knowledge';
 export type LiveTextState = { text: string; writing: boolean; visible: boolean; canUndo: boolean; message: string; sources?: KnowledgePassage[]; pending?: boolean;
-  display?: LiveTextDisplay; hasKnowledge?: boolean };
+  display?: LiveTextDisplay; hasKnowledge?: boolean; visual?: VisualDisplayState };
 type Snapshot = { text: string; sources: KnowledgePassage[] };
 type DisplayBuffer = Snapshot & { undo: Snapshot[]; message: string };
 type Workspace = { display: LiveTextDisplay; visible: boolean; hasKnowledge: boolean; buffers: Record<LiveTextDisplay, DisplayBuffer> };
-type Options = { workspace?: Workspace; onChange: (state: LiveTextState) => void; send: (event: Record<string, unknown>) => void; textEnabled?: boolean; searchKnowledge?: (query: string, signal: AbortSignal) => Promise<unknown> };
+type Options = { visualDisplay?: VisualDisplayConfiguration | null; workspace?: Workspace; onChange: (state: LiveTextState) => void; send: (event: Record<string, unknown>) => void; textEnabled?: boolean; searchKnowledge?: (query: string, signal: AbortSignal) => Promise<unknown> };
 type TextAction = 'start_dictation' | 'stop_dictation' | 'show' | 'hide' | 'replace' | 'append' | 'clear' | 'undo' | 'read';
 
 const MAX_TEXT = 4_000, MAX_EVENTS = 8_000;
@@ -17,6 +19,8 @@ const commands: Record<string, TextAction> = {
   'show the text box': 'show', 'show text box': 'show',
   'hide the text box': 'hide', 'hide text box': 'hide',
   'close the text box': 'hide', 'close text box': 'hide',
+  'hide display': 'hide', 'hide the display': 'hide',
+  'close display': 'hide', 'close the display': 'hide',
 };
 const actions: TextAction[] = ['start_dictation', 'stop_dictation', 'show', 'hide', 'replace', 'append', 'clear', 'undo', 'read'];
 const identifier = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(value);
@@ -24,7 +28,7 @@ const validText = (value: unknown): value is string => typeof value === 'string'
   && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value);
 
 /** Page-local display buffers; each voice connection gets fresh tool/async authority. */
-export function createLiveTextSession({ onChange, send, textEnabled = true, searchKnowledge, workspace }: Options) {
+export function createLiveTextSession({ onChange, send, textEnabled = true, searchKnowledge, workspace, visualDisplay }: Options) {
   let text = '', writing = false, visible = false, message = '', finished = false, generation = 0;
   let transcriptBuffer = '', lastTranscriptEnd = -1, dictationCheckpoint = false, bufferBoundary = true;
   let controlBarrier = -1, textRevision = 0;
@@ -42,7 +46,8 @@ export function createLiveTextSession({ onChange, send, textEnabled = true, sear
   }
   const events = new Set<string>();
   const readRevisions = new Map<string, number>();
-  const emit = () => onChange({ text, writing, visible, canUndo: undo.length > 0, message, sources, pending: !!pendingSearch, display, hasKnowledge });
+  const emit = () => onChange({ text, writing, visible, canUndo: undo.length > 0, message, sources, pending: !!pendingSearch, display, hasKnowledge, ...(visualDisplay ? { visual: visual.state() } : {}) });
+  let visual = createVisualDisplaySession(visualDisplay, () => {});
   function activate(next: LiveTextDisplay) {
     if (next === display) return;
     buffers[display] = { text, sources, undo, message };
@@ -84,6 +89,7 @@ export function createLiveTextSession({ onChange, send, textEnabled = true, sear
     }
     message = '';
     if (action === 'read') return;
+    if (['show','start_dictation','replace','append'].includes(action)) visual.dismiss();
     pendingSearch = null;
     if (action === 'show') { visible = true; return; }
     if (action === 'hide') { visible = false; writing = false; dictationCheckpoint = false; return; }
@@ -106,28 +112,63 @@ export function createLiveTextSession({ onChange, send, textEnabled = true, sear
     }
   }
 
+  const galleryCommands = new Map<string, Pick<VisualDisplayAction, 'action' | 'imageId'>>();
+  if (visualDisplay?.images.length) {
+    galleryCommands.set('show pictures', { action: 'show', imageId: '' });
+    galleryCommands.set('next picture', { action: 'next', imageId: '' });
+    galleryCommands.set('previous picture', { action: 'previous', imageId: '' });
+    const titles = visualDisplay.images.map(image => ({
+      phrase: 'show picture ' + image.title.toLowerCase().trim().replace(/\s+/g, ' '), id: image.id,
+    }));
+    for (const { phrase, id } of titles) {
+      // Leave overlapping titles to delegation, which can ask for clarification.
+      if (titles.filter(item => item.phrase.startsWith(phrase)).length === 1) {
+        galleryCommands.set(phrase, { action: 'select', imageId: id });
+      }
+    }
+  }
+  const galleryPattern = [...galleryCommands.keys()].sort((a, b) => b.length - a.length)
+    .map(phrase => phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ /g, '\\s+')).join('|');
+  const commandPrefixes = [...Object.keys(commands), ...galleryCommands.keys()];
+  const maxCommandLength = Math.max(24, ...commandPrefixes.map(command => command.length));
+
   // Exact dictation/display phrases are reserved controls, including within dictation.
   // Keep a possible command prefix until its next fragment, so "stop writ" is never displayed.
   // Literal quotations containing these phrases need delegated replace/append instead.
   function consumeTranscript(delta: string) {
     transcriptBuffer += delta;
-    const pattern = /\b(?:(?:start|stop)\s+(?:writing|dictation)|(?:show|hide|close)\s+(?:the\s+)?text\s+box)\b/ig;
+    const basePattern = /\b(?:(?:start|stop)\s+(?:writing|dictation)|(?:show|hide|close)\s+(?:the\s+)?text\s+box|(?:hide|close)\s+(?:the\s+)?display)\b/ig;
+    const pattern = galleryPattern && !writing
+      ? new RegExp(basePattern.source + `|^\\s*(?:${galleryPattern})(?=$|[.!?,])`, 'ig') : basePattern;
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(transcriptBuffer))) {
       if (!match.index && !bufferBoundary) continue;
       appendDictation(transcriptBuffer.slice(0, match.index));
-      control(commands[match[0].toLowerCase().replace(/\s+/g, ' ')], '', true);
+      const phrase = match[0].trim().toLowerCase().replace(/\s+/g, ' ');
+      const galleryAction = galleryCommands.get(phrase);
+      if (galleryAction) {
+        // Consume the command before applying it, since showing a photo resets the buffer.
+        const remainder = transcriptBuffer.slice(match.index + match[0].length);
+        transcriptBuffer = '';
+        applyVisual({ ...galleryAction, text: '' }, undefined, true);
+        transcriptBuffer = remainder;
+        bufferBoundary = true;
+        pattern.lastIndex = 0;
+        continue;
+      }
+      if (phrase.endsWith('display')) visual.dismiss();
+      if (textEnabled || phrase.endsWith('display')) control(commands[phrase], '', true);
       transcriptBuffer = transcriptBuffer.slice(match.index + match[0].length).replace(/^[\s,.:;!?]+/, '');
       bufferBoundary = true;
       pattern.lastIndex = 0;
     }
     let held = 0;
     const lower = transcriptBuffer.toLowerCase();
-    for (let length = 1; length <= Math.min(lower.length, 24); length++) {
+    for (let length = 1; length <= Math.min(lower.length, maxCommandLength); length++) {
       const start = lower.length - length;
       if (start ? /[a-z0-9_]/i.test(lower[start - 1]) : !bufferBoundary) continue;
       const suffix = lower.slice(start).replace(/\s+/g, ' ');
-      if (Object.keys(commands).some(command => command.startsWith(suffix))) held = length;
+      if (commandPrefixes.some(command => command.startsWith(suffix) && (command in commands || !writing && !lower.slice(0, start).trim()))) held = length;
     }
     const ready = transcriptBuffer.slice(0, transcriptBuffer.length - held);
     appendDictation(ready);
@@ -136,10 +177,24 @@ export function createLiveTextSession({ onChange, send, textEnabled = true, sear
     emit();
   }
 
+  function applyVisual(input: unknown, context?: PluginContext, local = false) {
+    const result = visual.execute(input, context);
+    if (result.status === 'applied') {
+      if (local || (input as VisualDisplayAction).action === 'hide') { generation++; controlBarrier = lastTranscriptEnd; }
+      if (visual.state().visible) {
+        appendDictation(transcriptBuffer); transcriptBuffer = ''; bufferBoundary = true;
+        writing = false; dictationCheckpoint = false; visible = false; pendingSearch = null; textRevision++;
+      }
+      emit();
+    }
+    return result;
+  }
   const plugins = createPluginSession({ send, generation: () => generation, barrier: () => controlBarrier,
     onLimit: () => { writing = false; message = 'Plugin updates reached this conversation’s limit.'; emit(); },
     executors: {
-      ...(textEnabled ? { update_text_box(input: unknown, context: PluginContext) {
+      update_visual_display: (input: unknown, context: PluginContext) => visualDisplay?.images.length ? applyVisual(input, context) : { status: 'unavailable' },
+      update_text_box(input: unknown, context: PluginContext) {
+        if (!textEnabled) return { status: 'unavailable' };
         const args = object(input), delegationId = context.delegationId;
         let status = 'invalid_action';
         if (args && Object.keys(args).length === 2 && Object.keys(args).every(key => ['action', 'text'].includes(key))
@@ -158,7 +213,7 @@ export function createLiveTextSession({ onChange, send, textEnabled = true, sear
           }
         }
         return { status, text, writing, visible };
-      } } : {}),
+      },
       ...(searchKnowledge ? { async search_waveform_knowledge(input: unknown, context: PluginContext) {
         const args = object(input);
         if (!args || Object.keys(args).length !== 2 || typeof args.query !== 'string' || !args.query.trim()
@@ -167,7 +222,7 @@ export function createLiveTextSession({ onChange, send, textEnabled = true, sear
         if (args.display && textEnabled) {
           appendDictation(transcriptBuffer); transcriptBuffer = ''; bufferBoundary = true;
           writing = false; dictationCheckpoint = false;
-          activate('knowledge'); hasKnowledge = true;
+          visual.dismiss(); activate('knowledge'); hasKnowledge = true;
           pendingSearch = ticket; visible = true; message = ''; emit();
         }
         const expectedRevision = textRevision;
@@ -195,6 +250,19 @@ export function createLiveTextSession({ onChange, send, textEnabled = true, sear
 
   emit();
   return {
+    updateCapabilities(text: boolean, configuration?: VisualDisplayConfiguration | null) {
+      if (finished) return;
+      if (textEnabled !== text || JSON.stringify(visualDisplay) !== JSON.stringify(configuration)) {
+        generation++; controlBarrier = lastTranscriptEnd; pendingSearch = null;
+      }
+      textEnabled = text;
+      if (JSON.stringify(visualDisplay) !== JSON.stringify(configuration)) {
+        visual.finish();
+        visualDisplay = configuration;
+        visual = createVisualDisplaySession(configuration, () => {});
+      }
+      emit();
+    },
     // Copy only display content/Undo, never pending work, tool IDs or microphone history.
     workspace(): Workspace {
       const held = { ...buffers, [display]: { text, sources, undo, message: '' } };
@@ -216,24 +284,25 @@ export function createLiveTextSession({ onChange, send, textEnabled = true, sear
           events.add(event.event_id);
         }
         if (event.type === 'response.event' || event.type === 'session.delegation.created') { plugins.event(event); return; }
-        if (!textEnabled) return;
         if (event.type !== 'session.input_transcript.delta' || !validText(event.delta)
           || typeof event.start_ms !== 'number' || typeof event.end_ms !== 'number'
           || !Number.isFinite(event.start_ms) || !Number.isFinite(event.end_ms)
           || event.start_ms < 0 || event.end_ms < event.start_ms || event.start_ms < lastTranscriptEnd) return;
         lastTranscriptEnd = event.end_ms;
-        consumeTranscript(event.delta);
+        if (textEnabled || visualDisplay?.images.length) consumeTranscript(event.delta);
       } catch {
         writing = false;
         message = 'Text updates paused. Your existing text is still available.';
         emit();
       }
     },
+    visualAction(action: VisualDisplayAction) { return applyVisual(action, undefined, true); },
     action(action: 'stop' | 'clear' | 'undo' | 'hide' | 'show') {
       if (!['stop', 'clear', 'undo', 'hide', 'show'].includes(action)) return;
       if (action === 'stop' || action === 'hide') appendDictation(transcriptBuffer);
       transcriptBuffer = '';
       bufferBoundary = true;
+      if (action === 'hide') visual.dismiss();
       control(action === 'stop' ? 'stop_dictation' : action, '', true);
       emit();
     },
@@ -243,7 +312,7 @@ export function createLiveTextSession({ onChange, send, textEnabled = true, sear
       appendDictation(transcriptBuffer); transcriptBuffer = ''; bufferBoundary = true;
       generation++; controlBarrier = lastTranscriptEnd; pendingSearch = null;
       writing = false; dictationCheckpoint = false;
-      activate(next); visible = true; emit();
+      visual.dismiss(); activate(next); visible = true; emit();
     },
     finish() {
       if (finished) return;
@@ -252,7 +321,7 @@ export function createLiveTextSession({ onChange, send, textEnabled = true, sear
       pendingSearch = null;
       writing = false;
       transcriptBuffer = '';
-      plugins.finish(); readRevisions.clear(); events.clear();
+      visual.finish(); plugins.finish(); readRevisions.clear(); events.clear();
       emit();
     },
   };

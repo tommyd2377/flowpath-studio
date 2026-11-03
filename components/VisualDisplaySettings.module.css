@@ -1,0 +1,11 @@
+.gallery { display: flex; gap: 10px; overflow-x: auto; padding: 4px 0 10px; }
+.thumbnail { flex: 0 0 112px; min-width: 0; border: 1px solid var(--border, #5f594e); border-radius: 10px; background: transparent; color: inherit; padding: 6px; font: inherit; cursor: pointer; }
+.thumbnail[aria-pressed='true'] { border-color: var(--accent, #64b8df); box-shadow: 0 0 0 1px var(--accent, #64b8df); }
+.editor .thumbnail img { display: block; width: 100%; height: 70px; max-height: none; margin: 0; object-fit: cover; border-radius: 5px; }
+.thumbnail span { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; padding: 6px 2px 2px; }
+.upload { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 6px 0 16px; }
+.upload input[hidden] { display: none; }
+.upload p { margin: 0; }
+.add { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
+.add svg { width: 16px; height: 16px; }
+.thumbnail:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }

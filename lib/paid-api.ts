@@ -1,4 +1,4 @@
-import type { createAccountServer } from './account-server';
+import { requestWaveformId, type createAccountServer } from './account-server';
 import { DEFAULT_PACK, DEFAULT_PAYMENT_SETTINGS, paymentSettings, returnDestination, validWaveformId, type MinutePack } from './paid-model';
 import { issuePaidVisitor, paidJson, paidResponse as json, paidVisitor } from './paid-http';
 import { sameWaveformVersion, type PaidActor, type PaidStore } from './paid-store';
@@ -8,7 +8,7 @@ import { VoiceAdmissionError } from './production-voice-store';
 import { projectTextPanelConfiguration } from './text-panel';
 import { serverAnalytics } from './analytics-runtime';
 
-type Options = { store: PaidStore; accounts: Pick<ReturnType<typeof createAccountServer>, 'resolveIdentity' | 'resolveVoiceWaveform'> & Partial<Pick<ReturnType<typeof createAccountServer>, 'resolveAdmin'>>;
+type Options = { projectPlugins?: (uid: string, id: string, waveform: import('./account-model').Waveform) => Promise<{ waveform: import('./account-model').Waveform }>; store: PaidStore; accounts: Pick<ReturnType<typeof createAccountServer>, 'resolveIdentity' | 'resolveVoiceWaveform'> & Partial<Pick<ReturnType<typeof createAccountServer>, 'resolveAdmin'>>;
   enabled: boolean; fixtures: boolean; publicOrigin?: string; trustedProxyHost?: string; pack?: MinutePack;
   stripe?: ReturnType<typeof createStripeTest>; voiceReady?: () => boolean; adminVoiceReady?: () => boolean };
 export function createPaidApi(options: Options) {
@@ -56,7 +56,7 @@ export function createPaidApi(options: Options) {
     async publishingGET(request: Request) {
       if (!allowed(request, false)) return forbidden();
       try {
-        const waveform = await accounts.resolveVoiceWaveform(request, undefined, 'cleanup');
+        const waveform = await accounts.resolveVoiceWaveform(request, requestWaveformId(request), 'cleanup');
         if (!waveform) return json({ error: 'Sign in and save your waveform first.' }, 401);
         const p = await store.publication(waveform.waveform.id);
         if (p && p.ownerUid !== waveform.ownerUid) return json({ error: 'Waveform is unavailable.' }, 403);
@@ -72,7 +72,7 @@ export function createPaidApi(options: Options) {
           || body.continueAsAdmin !== undefined && typeof body.continueAsAdmin !== 'boolean') return json({ error: 'Invalid publishing request.' }, 400);
         const identity = await accounts.resolveIdentity(request);
         const a = await actor(request);
-        const waveform = await accounts.resolveVoiceWaveform(request, undefined, body.published ? 'admission' : 'cleanup');
+        const waveform = await accounts.resolveVoiceWaveform(request, requestWaveformId(request), body.published ? 'admission' : 'cleanup');
         if (!a.uid || !waveform || waveform.ownerUid !== a.uid) return json({ error: 'Sign in and save your waveform first.' }, 401);
         const adminTesting = identity?.owner.role === 'admin' && identity.owner.uid === waveform.ownerUid
           && waveform.waveform.adminTesting === true && await identity.isCurrent() === true;
@@ -124,14 +124,16 @@ export function createPaidApi(options: Options) {
         const adminTesting = admin ? admin.uid === identity?.owner.uid && admin.testing === true && await admin.isCurrent()
           : !!saved && saved.ownerUid === identity?.owner.uid && saved.waveform.adminTesting === true && await identity!.isCurrent() === true;
         // Strict allowlist: no saved instructions, voice config, owner UID, budget or ledger.
-        const display = preview ? p.draft ?? p.waveform : p.waveform;
+        const source = preview ? p.draft ?? p.waveform : p.waveform;
+        const display = options.projectPlugins ? (await options.projectPlugins(p.ownerUid, id, source)).waveform : source;
         const { name, accentColor, profilePhoto } = display;
         let quote = null, reason = '';
         try { quote = await store.quote(await linkedActor(await registeredVisitor(request), identity), id, identity?.owner.uid === p.ownerUid ? 'self' : 'creator', preview); }
         catch (error) { reason = error instanceof VoiceAdmissionError ? error.message : 'Usage is temporarily unavailable.'; }
         if ((!p.published || preview) && (!identity || !await identity.isCurrent())) return json({ error: 'Sign in again to continue.' }, 401);
         return json({ waveform: { id, name, accentColor, profilePhoto,
-          ...(display.textPanel ? { textPanel: projectTextPanelConfiguration(display.textPanel) } : {}) }, mode: p.settings.mode,
+          ...(display.textPanel ? { textPanel: projectTextPanelConfiguration(display.textPanel) } : {}),
+          ...(display.visualDisplay ? { visualDisplay: structuredClone(display.visualDisplay) } : {}) }, mode: p.settings.mode,
           adminVoiceReady: !!options.adminVoiceReady?.(),
           adminTesting,
           own, sponsoredSeconds: quote?.payer === 'creator' ? quote.seconds : 0, reason });

@@ -1,19 +1,20 @@
+import { validateVisualDisplay, type VisualDisplayConfiguration } from './visual-display';
 import { WAVEFORM_NAME_LIMIT, WAVEFORM_PROMPT_LIMIT } from './account-model';
 import { validateTextPanelConfiguration, type TextPanelConfiguration } from './text-panel';
 
 export type CreationReviewStatus = 'pending' | 'allowed' | 'blocked' | 'manual-review' | 'stale' | 'unavailable' | 'revoked';
-export type CreationReviewCandidate = { name: string; initialPrompt: string; textPanel?: TextPanelConfiguration | null; profilePhoto?: string | null };
-export type CanonicalCreationReviewCandidate = { name: string; initialPrompt: string; textPanel: TextPanelConfiguration | null; profilePhoto?: string;
+export type CreationReviewCandidate = { name: string; initialPrompt: string; textPanel?: TextPanelConfiguration | null; visualDisplay?: VisualDisplayConfiguration | null; profilePhoto?: string | null };
+export type CanonicalCreationReviewCandidate = { name: string; initialPrompt: string; textPanel: TextPanelConfiguration | null; visualDisplay?: VisualDisplayConfiguration; profilePhoto?: string;
   document?: { id: string; digest: string; filename: string } };
 export type CreationReviewProof = { ownerUid: string; reviewId: string; digest: string; policyVersion: string; policyDigest: string };
 export type CreationReviewQueueRecord = { proof: CreationReviewProof; candidate: CanonicalCreationReviewCandidate;
-  status: CreationReviewStatus; categories: string[]; policyCurrent?: boolean; issue?: 'budget' | 'coverage' | 'provider' | 'abandoned' };
+  status: CreationReviewStatus; categories: string[]; reason?: 'manual-decision'; waveformId?: string; reviewHead?: boolean; itemBlocked?: boolean; published?: boolean; policyCurrent?: boolean; issue?: 'budget' | 'coverage' | 'provider' | 'abandoned' };
 export type CreationReviewClientResult = { ownerKey: string; key: string; status: CreationReviewStatus; categories?: string[] };
 
 export const canDecideCreationReview = (status: CreationReviewStatus): boolean => status === 'manual-review';
-export function creationReviewDecisionPayload(review: CreationReviewQueueRecord, decision: 'allowed' | 'blocked' | 'revoked') {
+export function creationReviewDecisionPayload(review: CreationReviewQueueRecord, decision: 'allowed' | 'blocked' | 'revoked', item?: string) {
   const { ownerUid, reviewId, digest, policyVersion, policyDigest } = review.proof;
-  return { ownerUid, reviewId, digest, policyVersion, policyDigest, decision };
+  return { ownerUid, reviewId, digest, policyVersion, policyDigest, decision, ...(item ? { item } : {}) };
 }
 
 const statuses: CreationReviewStatus[] = ['pending', 'allowed', 'blocked', 'manual-review', 'stale', 'unavailable', 'revoked'];
@@ -31,7 +32,9 @@ export function canonicalCreationReviewCandidate(input: CreationReviewCandidate)
     if (!text.ok) return null;
     if (input.profilePhoto != null && (typeof input.profilePhoto !== 'string' || input.profilePhoto.length > 180_000
       || !/^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/.test(input.profilePhoto))) return null;
-    const candidate = { name, initialPrompt, textPanel: text.value, ...(input.profilePhoto ? { profilePhoto: input.profilePhoto } : {}) };
+    const visual = validateVisualDisplay(input.visualDisplay);
+    if (!visual.ok) return null;
+    const candidate = { name, initialPrompt, textPanel: text.value, ...(visual.value ? { visualDisplay: visual.value } : {}), ...(input.profilePhoto ? { profilePhoto: input.profilePhoto } : {}) };
     return { candidate, key: JSON.stringify(candidate) };
   } catch { return null; }
 }
@@ -90,6 +93,11 @@ export function creationReviewQueueRecords(input: unknown): CreationReviewQueueR
       records.push({ proof: { ownerUid: proof.ownerUid as string, reviewId: proof.reviewId as string, digest: proof.digest as string,
         policyVersion: proof.policyVersion as string, policyDigest: proof.policyDigest as string },
       candidate: normalized.candidate, status: row.status as CreationReviewStatus, categories: [...row.categories],
+      ...(identifier(row.waveformId) ? { waveformId: row.waveformId } : {}),
+      ...(row.published === true ? { published: true } : {}),
+      ...(row.itemBlocked === true ? { itemBlocked: true } : {}),
+      ...(typeof row.reviewHead === 'boolean' ? { reviewHead: row.reviewHead } : {}),
+      ...(row.reason === 'manual-decision' ? { reason: row.reason } : {}),
       ...(typeof row.policyCurrent === 'boolean' ? { policyCurrent: row.policyCurrent } : {}),
       ...(['budget', 'coverage', 'provider', 'abandoned'].includes(String(row.issue)) ? { issue: row.issue as CreationReviewQueueRecord['issue'] } : {}) });
     }

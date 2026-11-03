@@ -65,7 +65,9 @@ export function createTesterVoiceStore(database: VoiceDatabase, now: () => numbe
       owner.kind ? Promise.resolve(null) : tx.get(`ownerWaveforms/${tester.uid}`),
     ]);
     if (!activeAccountSession(session, tester.uid, now()) || member?.state !== 'active') throw new VoiceAdmissionError('Sign in with an invited account to continue.', 403);
-    if (!owner.kind && waveform?.id !== owner.waveformId) throw new VoiceAdmissionError('This waveform belongs to another account.', 403);
+    const selected = !owner.kind && waveform?.id !== owner.waveformId
+      ? await tx.get(`ownerWaveforms/${tester.uid}/waveforms/${owner.waveformId}`) : waveform;
+    if (!owner.kind && selected?.id !== owner.waveformId) throw new VoiceAdmissionError('This waveform belongs to another account.', 403);
     if (!owner.kind) await assertContentAllowed?.(tx, owner);
   }
   function allowance(owner: VoiceOwner) {
@@ -100,7 +102,7 @@ export function createTesterVoiceStore(database: VoiceDatabase, now: () => numbe
       return database.transaction(async tx => {
         if (await tx.get(callPath(id))) throw new VoiceAdmissionError('This conversation identifier has already been used.');
         const a = await admission(tx, owner);
-        const expiresAt = a.path ? now() + a.seconds * 1000 : UNMETERED_LOCAL_DEADLINE;
+        const expiresAt = Math.min(a.path ? now() + a.seconds * 1000 : UNMETERED_LOCAL_DEADLINE, owner.pluginExpiresAt ?? Infinity);
         const call: StoredVoice = { ...owner, id, state: 'creating', createdAt: now(), expiresAt, canceled: false,
           controlExpiresAt: Math.min(expiresAt, now() + TESTER_CONTROL_LEASE_MS),
           ...(a.path ? { allowancePath: a.path, allowanceSeconds: a.seconds, ...(a.visitorPath ? { visitorAllowancePath: a.visitorPath } : {}) } : {}) };
@@ -166,7 +168,7 @@ export function createTesterVoiceStore(database: VoiceDatabase, now: () => numbe
       return database.transaction(async tx => {
         const call = stored(await tx.get(callPath(id)));
         if (!call || !sameActor(call, owner) || call.connectedAt === undefined || call.canceled || call.state !== 'active' || call.cleanup
-          || call.controlExpiresAt! <= now() || call.expiresAt <= now()) throw new VoiceAdmissionError('The voice lease ended. Start again after cleanup.', 409);
+          || call.controlExpiresAt! <= now() || Math.min(call.expiresAt, call.pluginExpiresAt ?? Infinity) <= now()) throw new VoiceAdmissionError('The voice lease ended. Start again after cleanup.', 409);
         await authorize(tx, call);
         const next = Math.min(call.expiresAt, Math.ceil(now() / 15_000) * 15_000 + TESTER_CONTROL_LEASE_MS);
         if (scheduledUntil !== undefined) {

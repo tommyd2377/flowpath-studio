@@ -1,4 +1,4 @@
-import { createAccountServer } from './account-server';
+import { createAccountServer, creationWaveformId } from './account-server';
 import type { AccountMode, FirebasePublicConfig } from './account-model';
 import { configuredFirebaseProjectId, createFirebaseAccountAdapter } from './firebase-accounts';
 import type { createVoiceServer } from './voice-server';
@@ -38,7 +38,7 @@ const state = globalThis as typeof globalThis & {
   flowpathAccountSafetyVersion?: string;
 };
 // Refresh callbacks on the running local server; Firebase sessions/data stay durable.
-const safetyVersion = creationSafetyRuntimeVersion();
+const safetyVersion = `${creationSafetyRuntimeVersion()}:bounded-visual-encoding-v1:account-testing-v1`;
 if (localAppOrigin() && state.flowpathAccountSafetyVersion !== safetyVersion) {
   state.flowpathAccounts = undefined;
   state.flowpathAccountSafetyVersion = safetyVersion;
@@ -52,13 +52,14 @@ export const accountServer = state.flowpathAccounts ??= createAccountServer({
   localUnmeteredTesting: () => !!localAppOrigin(),
   validateWaveform: async (request, waveform) => {
     if (!creationSafetyEnabled()) {
-      if (waveform.textPanel?.version === 1) throw new CreationSafetyError('Creator text display is paused until safety review is available.', 503);
+      if (waveform.textPanel?.version === 1 || waveform.visualDisplay) throw new CreationSafetyError('Creator text display is paused until safety review is available.', 503);
       return;
     }
     const identity = await accountServer.resolveIdentity(request);
     if (!identity) throw new Error('Sign in again');
     const store = creationReviewStore(identity);
-    await applicationDatabase().transaction(async tx => { await store.requireAllowed(tx, creationActor(identity).uid, waveform); });
+    const id = creationWaveformId(request, identity.owner.uid) ?? (await accountServer.resolveVoiceWaveform(request, undefined, 'cleanup'))?.waveform.id;
+    await applicationDatabase().transaction(async tx => { await store.requireAllowed(tx, creationActor(identity).uid, waveform, undefined, id); });
   },
   checkWaveform: async (request, waveform) => {
     if (!creationSafetyEnabled()) return;
@@ -94,10 +95,10 @@ export const accountServer = state.flowpathAccounts ??= createAccountServer({
   trustedProxyHost: () => process.env.FLOWPATH_TRUSTED_PROXY_HOST,
   firebase: configuredFirebase ? createFirebaseAccountAdapter(
     projectId!, process.env.FLOWPATH_FIREBASE_DATABASE_ID ?? '(default)', undefined,
-    async (tx, uid, input) => {
+    async (tx, uid, input, id) => {
       if (creationSafetyEnabled()) await creationReviewStore().requireAllowed(localAppOrigin() ? {
         get: path => tx.get(localAppPath(path)), set: (path, value) => tx.set(localAppPath(path), value),
-      } : tx, uid, input);
+      } : tx, uid, input, undefined, id);
     }, localAppOrigin() ? localAppPath('voiceDemoAccess') : 'voiceDemoAccess',
   ) : undefined,
 });

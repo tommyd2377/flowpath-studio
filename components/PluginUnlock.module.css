@@ -1,0 +1,37 @@
+.unlock {
+  position: fixed;
+  z-index: 5;
+  right: 16px;
+  bottom: 16px;
+  max-width: calc(100vw - 32px);
+  color: var(--text, #eef1f7);
+  background: var(--surface, #101110);
+  border: 1px solid var(--border, #697588);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.unlock summary {
+  cursor: pointer;
+}
+
+.unlock form {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.unlock label {
+  display: grid;
+  gap: 4px;
+}
+
+.unlock input,
+.unlock select {
+  max-width: 100%;
+  font: inherit;
+}
+
+.unlock p {
+  margin: 0;
+}

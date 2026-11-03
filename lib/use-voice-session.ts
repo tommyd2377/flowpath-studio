@@ -6,6 +6,8 @@ import { voiceConnectionReader } from './voice-connection';
 import { PUBLIC_GREETING_INSTRUCTIONS } from './voice-config';
 import { monitorAudio, waitForIce } from './voice-session';
 import { createVoiceDiagnostics, type VoiceDiagnosticFinishReason } from './voice-diagnostics';
+import { createStartupTiming } from './voice-startup-timing';
+import type { VisualDisplayConfiguration, VisualDisplayAction } from './visual-display';
 import { createLiveTextSession, type LiveTextState } from './live-text-session';
 
 type VoiceSession = {
@@ -19,6 +21,7 @@ type VoiceSession = {
   started: boolean;
   finalized: boolean;
   needsAudioResume: boolean;
+  playbackAllowed?: boolean;
   heardOutput?: boolean;
   lastActivity: number;
   expiresAt?: number;
@@ -45,6 +48,7 @@ type VoiceSession = {
   acknowledgeClose?: () => void;
   released?: boolean;
   diagnostic?: ReturnType<typeof createVoiceDiagnostics>;
+  startup?: ReturnType<typeof createStartupTiming>;
   text?: ReturnType<typeof createLiveTextSession>;
 };
 
@@ -82,6 +86,7 @@ function releaseMedia(session: VoiceSession) {
 }
 
 function dispose(session: VoiceSession, leaving = false): Promise<boolean> {
+  session.startup?.finish();
   session.text?.finish();
   if (session.closePromise) {
     if (leaving) {
@@ -127,7 +132,7 @@ function dispose(session: VoiceSession, leaving = false): Promise<boolean> {
 
 const emptyTextState = (): LiveTextState => ({ text: '', writing: false, visible: false, canUndo: false, message: '' });
 
-export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'self', textBoxEnabled = false, draftPreview = false, publishedPreview = false) {
+export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'self', textBoxEnabled = false, draftPreview = false, publishedPreview = false, visualDisplay?: VisualDisplayConfiguration | null, pluginAccess = false) {
   const [phase, setPhase] = useState<VoicePhase>('idle');
   const [active, setActive] = useState(false);
   const [hasConnected, setHasConnected] = useState(false);
@@ -144,6 +149,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
   const [textState, setTextState] = useState<LiveTextState>(emptyTextState);
   const textController = useRef<ReturnType<typeof createLiveTextSession> | null>(null);
   const diagnostic = useRef<ReturnType<typeof createVoiceDiagnostics> | null>(null);
+  const startupTiming = useRef<ReturnType<typeof createStartupTiming> | null>(null);
   const current = useRef<VoiceSession | null>(null);
   const closing = useRef<Promise<boolean> | null>(null);
   const closingSession = useRef<VoiceSession | null>(null);
@@ -201,7 +207,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
     if (mounted.current) { setPhase('error'); setStatus(notice); }
   }, [stop]);
 
-  const start = useCallback(async (recordDiagnostics = false) => {
+  const start = useCallback(async (recordDiagnostics = false, recordStartup = false, fresh?: { text: boolean; visual?: VisualDisplayConfiguration | null }, clickedAt = performance.now()) => {
     if (closing.current) {
       // One explicit click may wait for confirmed cleanup. Paid sessions still
       // return through payer selection/consent rather than reusing a payer.
@@ -224,6 +230,8 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
         // Called directly from the waveform click to recover a browser gesture.
         await Promise.all([existing.context.resume(), existing.audio.play()]);
         if (current.current !== existing) return;
+        existing.playbackAllowed = true;
+        existing.startup?.mark('playback_allowed');
         existing.needsAudioResume = false;
         setNeedsAudioResume(false);
         setStatus(existing.heardOutput ? '' : existing.ready ? 'Getting ready…' : 'Connecting…');
@@ -235,6 +243,8 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
     setReviewRequired(false);
     diagnostic.current?.clear();
     diagnostic.current = recordDiagnostics ? createVoiceDiagnostics({ surface: waveformId ? 'personal' : 'public' }) : null;
+    startupTiming.current = recordStartup ? createStartupTiming(clickedAt) : null;
+    startupTiming.current?.mark('previous_cleanup_ready');
     setHasDiagnostic(Boolean(diagnostic.current));
     setDiagnosticRecording(Boolean(diagnostic.current));
     setDiagnosticVersion(value => value + 1);
@@ -246,17 +256,18 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
       ready: false, started: false, answerApplied: false, finalized: false,
       needsAudioResume: false, lastActivity: Date.now(),
       diagnostic: diagnostic.current ?? undefined,
+      startup: startupTiming.current ?? undefined,
     };
     textController.current?.finish();
     const workspace = textController.current?.workspace();
     textController.current = null;
-    if (textBoxEnabled || waveformId && !paidPayer && !publishedPreview) {
+    if (pluginAccess || textBoxEnabled || visualDisplay?.images.length || waveformId && !paidPayer && !publishedPreview) {
       const controller = createLiveTextSession({
-        workspace,
-        textEnabled: textBoxEnabled,
+        workspace, visualDisplay: fresh ? fresh.visual : visualDisplay,
+        textEnabled: fresh?.text ?? textBoxEnabled,
         ...(!paidPayer && waveformId && !publishedPreview ? { searchKnowledge: async (query: string, signal: AbortSignal) => {
-          const response = await fetch('/api/knowledge/search', { method: 'POST', credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ waveformId, query }),
+          const response = await fetch(`/api/knowledge/search?id=${encodeURIComponent(waveformId)}`, { method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'X-FlowPath-Waveform': waveformId }, body: JSON.stringify({ waveformId, query }),
             signal: AbortSignal.any([signal, session.controller.signal, AbortSignal.timeout(30_000)]) });
           if (!response.ok) throw new Error('Knowledge search was unavailable.');
           return response.json();
@@ -281,6 +292,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
     const becomeReady = () => {
       if (!alive() || session.ready || !session.started || !session.answerApplied || session.browserControl && !session.controlConfirmed) return;
       session.ready = true;
+      session.startup?.mark('conversation_ready');
       session.diagnostic?.lifecycle('connected');
       session.lastActivity = Date.now();
       clearTimeout(session.setupTimer);
@@ -290,13 +302,23 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
     };
 
     try {
-      const readReadiness = () => fetch(session.endpoint, { headers: session.headers, cache: 'no-store', signal: session.controller.signal });
+      const timingHeaders: Record<string, string> = session.startup ? { 'X-FlowPath-Startup-Timing': '1' } : {};
+      // This read does not request permission or hold up startup. A prompt remains part of capture time.
+      if (session.startup && navigator.permissions?.query) {
+        void navigator.permissions.query({ name: 'microphone' as PermissionName }).then(result => {
+          if (alive()) session.startup?.permission(result.state);
+        }).catch(() => {});
+      }
+      session.startup?.mark('readiness_requested');
+      const readReadiness = () => fetch(session.endpoint, { headers: { ...session.headers, ...timingHeaders }, cache: 'no-store', signal: session.controller.signal });
       // Let the first public Set-Cookie settle before another tab checks readiness.
       const readiness = !waveformId && navigator.locks?.request
         ? await navigator.locks.request('flowpath-public-voice-identity', { signal: session.controller.signal }, readReadiness)
         : await readReadiness();
       if (!readiness.ok) throw new Error(await errorMessage(readiness, session));
       const config: unknown = await readiness.json();
+      session.startup?.serverTiming('readiness', readiness.headers.get('server-timing'));
+      session.startup?.mark('readiness_complete');
       if (!alive()) return;
       if (config && typeof config === 'object') {
         session.adminEligible = 'adminEligible' in config && config.adminEligible === true;
@@ -313,14 +335,22 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
       }
       session.setupTimer = setTimeout(() => fail(session, 'The connection took too long. Tap the wave to try again.'), 30_000);
       session.context = new AudioContext();
-      await session.context.resume();
-      if (!alive()) return;
-      const stream = await navigator.mediaDevices.getUserMedia({
+      session.startup?.mark('audio_resume_requested');
+      const resumed = session.context.resume().then(() => { session.startup?.mark('audio_context_running'); });
+      session.startup?.mark('microphone_requested');
+      // Both are local prerequisites. Capture owns late-result cleanup even if
+      // resume rejects or the user cancels before permission/capture resolves.
+      const capture = navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      }).then(stream => {
+        if (!alive()) { stream.getTracks().forEach(track => track.stop()); return stream; }
+        session.microphone = stream;
+        for (const track of stream.getAudioTracks()) track.onended = () => fail(session, 'Microphone access ended. Tap the wave to reconnect.');
+        session.startup?.mark('microphone_acquired');
+        return stream;
       });
-      if (!alive()) { stream.getTracks().forEach(track => track.stop()); return; }
-      session.microphone = stream;
-      for (const track of stream.getAudioTracks()) track.onended = () => fail(session, 'Microphone access ended. Tap the wave to reconnect.');
+      const [, stream] = await Promise.all([resumed, capture]);
+      if (!alive()) return;
       const input = session.context.createAnalyser();
       input.fftSize = 2048;
       session.context.createMediaStreamSource(stream).connect(input);
@@ -332,6 +362,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
       session.audio.setAttribute('playsinline', '');
       peer.ontrack = event => {
         if (!alive() || !session.context || !session.audio) return;
+        session.startup?.mark('remote_track_received');
         const remote = event.streams[0] ?? new MediaStream([event.track]);
         session.audio.srcObject = remote;
         const output = session.context.createAnalyser();
@@ -342,8 +373,14 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
         output.connect(silent).connect(session.context.destination);
         session.output = output;
         setOutputAnalyser(output);
-        void session.audio.play().catch(() => {
+        void session.audio.play().then(() => {
           if (!alive()) return;
+          session.playbackAllowed = true;
+          session.startup?.mark('playback_allowed');
+        }).catch(() => {
+          if (!alive()) return;
+          session.playbackAllowed = false;
+          session.startup?.mark('playback_blocked');
           session.needsAudioResume = true;
           setNeedsAudioResume(true);
           setStatus('Tap the wave to resume audio playback.');
@@ -356,7 +393,10 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
         } else if (peer.connectionState === 'disconnected') {
           clearTimeout(session.disconnectTimer);
           session.disconnectTimer = setTimeout(() => fail(session, 'The connection was lost. Tap the wave to reconnect.'), 5_000);
-        } else if (peer.connectionState === 'connected') clearTimeout(session.disconnectTimer);
+        } else if (peer.connectionState === 'connected') {
+          session.startup?.mark('transport_connected');
+          clearTimeout(session.disconnectTimer);
+        }
       };
       const channel = peer.createDataChannel('oai-events');
       session.channel = channel;
@@ -375,10 +415,14 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
           session.acknowledgeClose?.();
           if (alive()) stop('Conversation ended.', 'session_closed');
         } else if (alive() && event.type === 'session.started') {
+          session.startup?.mark('provider_session_started');
           const firstStart = !session.started;
           session.started = true;
-          if (firstStart && session.browserControl && session.controlConfirmed) channel.send(JSON.stringify({ type: 'session.instructions.append', event_id: 'flowpath_greeting', delegation_id: null,
-            content: waveformId ? 'Greet the visitor now in English using the saved waveform identity and conversational style. Keep it brief, invite them to talk, then pause and listen. Do not claim unavailable capabilities.' : PUBLIC_GREETING_INSTRUCTIONS }));
+          if (firstStart && session.browserControl && session.controlConfirmed) {
+            channel.send(JSON.stringify({ type: 'session.instructions.append', event_id: 'flowpath_greeting', delegation_id: null,
+              content: waveformId ? 'Greet the visitor now in English using the saved waveform identity and conversational style. Keep it brief, invite them to talk, then pause and listen. Do not claim unavailable capabilities.' : PUBLIC_GREETING_INSTRUCTIONS }));
+            session.startup?.mark('greeting_requested');
+          }
           becomeReady();
         } else if (alive() && session.browserControl && event.type === 'session.delegation.created' && 'delegation' in event) {
           const delegation = event.delegation as { target?: unknown; id?: unknown };
@@ -406,37 +450,48 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
       };
       stream.getAudioTracks().forEach(track => peer.addTrack(track, stream));
       let observedInput = false, observedOutput = false;
-      session.stopMonitor = monitorAudio(input, () => session.output, (inputActive, outputActive) => {
-        if (!alive() || !session.ready) return;
-        const audibleOutput = outputActive && !session.needsAudioResume;
+      session.stopMonitor = monitorAudio(input, () => session.output, (inputActive, outputActive, outputSignal) => {
+        if (!alive()) return;
+        if (outputSignal) session.startup?.mark('first_output_signal');
+        const audibleOutput = outputActive && session.playbackAllowed === true && !session.needsAudioResume
+          && session.context?.state === 'running' && session.audio?.muted !== true && session.audio?.paused !== true;
+        if (audibleOutput && outputSignal) session.startup?.mark('first_audible_output');
+        if (!session.ready) return;
         if (inputActive !== observedInput) session.diagnostic?.lifecycle(inputActive ? 'input_started' : 'input_quiet');
         if (audibleOutput !== observedOutput) session.diagnostic?.lifecycle(audibleOutput ? 'playback_started' : 'playback_quiet');
         observedInput = inputActive;
         observedOutput = audibleOutput;
         if (inputActive || outputActive) session.lastActivity = Date.now();
-        if (outputActive && !session.needsAudioResume && !session.heardOutput) {
+        if (audibleOutput && outputSignal && !session.heardOutput) {
           session.heardOutput = true;
           setStatus('');
         }
-        setPhase(outputActive && !session.needsAudioResume ? 'speaking' : 'listening');
+        setPhase(audibleOutput ? 'speaking' : 'listening');
       });
+      session.startup?.mark('offer_requested');
       const offer = await peer.createOffer();
       if (!alive()) return;
       await peer.setLocalDescription(offer);
+      session.startup?.mark('local_description_set');
       await waitForIce(peer, session.controller.signal);
+      session.startup?.mark('ice_complete');
       if (!alive()) return;
       const sdp = peer.localDescription?.sdp;
       if (!sdp) throw new Error('The browser could not prepare an audio connection.');
       session.requested = true;
+      session.startup?.mark('session_requested');
       // A stop cancels the server reservation by ID. Let the POST complete so
       // even a late provider creation can be closed, without losing its answer.
       const response = await fetch(session.endpoint, {
-        method: 'POST', headers: { ...session.headers, 'Content-Type': 'application/json', Accept: 'application/x-ndjson, application/json' },
+        method: 'POST', headers: { ...session.headers, ...timingHeaders, 'Content-Type': 'application/json', Accept: 'application/x-ndjson, application/json' },
         body: JSON.stringify({ sdp, sessionId: session.id, ...(recordDiagnostics ? { diagnostics: true } : {}) }), signal: AbortSignal.timeout(30_000),
       });
+      session.startup?.mark('session_headers');
+      session.startup?.serverTiming('session', response.headers.get('server-timing'));
       if (!response.ok) throw new Error(await errorMessage(response, session));
       let confirmation = response.headers.get('content-type')?.startsWith('application/x-ndjson') ? voiceConnectionReader(response) : undefined;
       const result: unknown = confirmation ? await confirmation.next() : await response.json();
+      session.startup?.mark('session_answer_received');
       if (!alive()) { void confirmation?.cancel(); void deleteSession(session.id, session.endpoint, session.headers); return; }
       if (!result || typeof result !== 'object' || !('sdp' in result) || typeof result.sdp !== 'string'
         || !('sessionId' in result) || result.sessionId !== session.id || !('expiresAt' in result)
@@ -456,6 +511,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
         if ((await confirmation.next()).ready !== true) throw new Error('Voice supervision is unavailable.');
       }
       await peer.setRemoteDescription({ type: 'answer', sdp: result.sdp });
+      session.startup?.mark('remote_description_applied');
       if (confirmation) {
         try {
           const meter = await confirmation.next();
@@ -464,9 +520,13 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
         } finally { void confirmation.cancel(); }
       }
       session.controlConfirmed = true;
-      if (session.browserControl && session.started) channel.send(JSON.stringify({ type: 'session.instructions.append', event_id: 'flowpath_greeting', delegation_id: null,
-        content: waveformId ? 'Greet the visitor now in English using the saved waveform identity and conversational style. Keep it brief, invite them to talk, then pause and listen. Do not claim unavailable capabilities.' : PUBLIC_GREETING_INSTRUCTIONS }));
       if (!alive()) return;
+      session.startup?.mark('supervision_confirmed');
+      if (session.browserControl && session.started) {
+        channel.send(JSON.stringify({ type: 'session.instructions.append', event_id: 'flowpath_greeting', delegation_id: null,
+          content: waveformId ? 'Greet the visitor now in English using the saved waveform identity and conversational style. Keep it brief, invite them to talk, then pause and listen. Do not claim unavailable capabilities.' : PUBLIC_GREETING_INSTRUCTIONS }));
+        session.startup?.mark('greeting_requested');
+      }
       session.answerApplied = true;
       becomeReady();
       const tick = () => {
@@ -498,7 +558,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
       setReviewRequired(session.reviewRequired === true);
       fail(session, notice);
     }
-  }, [fail, stop, waveformId, paidPayer, textBoxEnabled, draftPreview, publishedPreview]);
+  }, [fail, stop, waveformId, paidPayer, textBoxEnabled, draftPreview, publishedPreview, visualDisplay, pluginAccess]);
 
   useEffect(() => {
     mounted.current = true;
@@ -513,6 +573,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
       }
       diagnostic.current?.clear();
       diagnostic.current = null;
+      startupTiming.current = null;
       textController.current?.finish();
       textController.current = null;
       if (mounted.current) {
@@ -538,6 +599,8 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
   }, []);
 
   const getDiagnostic = useCallback(() => diagnostic.current?.snapshot() ?? null, []);
+  const getStartupTiming = useCallback(() => startupTiming.current?.snapshot() ?? null, []);
+  const visualAction = useCallback((action: VisualDisplayAction) => textController.current?.visualAction(action), []);
   const stopWriting = useCallback(() => textController.current?.action('stop'), []);
   const clearText = useCallback(() => textController.current?.action('clear'), []);
   const undoText = useCallback(() => textController.current?.action('undo'), []);
@@ -558,7 +621,16 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
     setDiagnosticVersion(value => value + 1);
   }, []);
 
-  return { phase, active, hasConnected, status, reviewRequired, remainingSeconds, inputAnalyser, outputAnalyser, needsAudioResume, start, stop, settledVersion,
-    textState, stopWriting, clearText, undoText, hideText, showText, showNotes, showKnowledge,
-    hasDiagnostic, diagnosticRecording, diagnosticVersion, getDiagnostic, markDiagnostic, stopDiagnostic, clearDiagnostic };
+  const pluginSessionId = useCallback(() => current.current?.id, []);
+  const updatePluginContent = useCallback((enabled: boolean, visual?: VisualDisplayConfiguration | null) => {
+    textController.current?.updateCapabilities(enabled, visual);
+  }, []);
+  const clearPluginContent = useCallback(() => {
+    textController.current?.finish();
+    textController.current = null;
+    setTextState(emptyTextState());
+  }, []);
+  return { pluginSessionId, updatePluginContent, clearPluginContent, phase, active, hasConnected, status, reviewRequired, remainingSeconds, inputAnalyser, outputAnalyser, needsAudioResume, start, stop, settledVersion,
+    textState, visualAction, stopWriting, clearText, undoText, hideText, showText, showNotes, showKnowledge,
+    hasDiagnostic, diagnosticRecording, diagnosticVersion, getDiagnostic, markDiagnostic, stopDiagnostic, clearDiagnostic, getStartupTiming };
 }

@@ -1,3 +1,4 @@
+import { requirePluginRevision } from './plugin-access';
 import { curatedDemo } from './curated-demo-runtime';
 import { createVoiceServer, type VoiceControllers } from './voice-server';
 import { configuredFirebaseProjectId, getFirebaseAccountServices } from './firebase-accounts';
@@ -54,13 +55,17 @@ export function getProductionVoiceServer(resolveWaveform?: Resolver, resolveAdmi
     return getFirebaseAccountServices(projectId, process.env.FLOWPATH_FIREBASE_DATABASE_ID ?? '(default)').db;
   });
   const assertContentAllowed = async (tx: VoiceTransaction, owner: VoiceOwner) => {
+    await requirePluginRevision(tx, owner.demoSource?.ownerUid ?? owner.ownerUid, owner.waveformId, owner.pluginRevision);
+    if ((owner.pluginExpiresAt ?? Infinity) <= Date.now()) throw new CreationSafetyError('Plugin access expired. Unlock the plugin again.');
     if (owner.demoSource) { await curatedDemo.requireVoice(tx, owner); return; }
     if (owner.publishedRevision !== undefined) {
       await requirePublishedPreview(tx, owner, creationSafetyEnabled() ? creationReviewStore().requireSnapshotAllowed : async () => {}, creationContentDigest);
       return;
     }
     if (!creationSafetyEnabled()) return;
-    const waveform = waveformRecord(await tx.get(`ownerWaveforms/${owner.ownerUid}`));
+    const first = waveformRecord(await tx.get(`ownerWaveforms/${owner.ownerUid}`));
+    const waveform = first?.id === owner.waveformId ? first
+      : waveformRecord(await tx.get(`ownerWaveforms/${owner.ownerUid}/waveforms/${owner.waveformId}`));
     if (!waveform || waveform.id !== owner.waveformId || creationContentDigest(waveform) !== owner.contentDigest) throw new CreationSafetyError('Waveform content changed. Start again after its review.');
     await creationReviewStore().requireAllowed(tx, owner.ownerUid, waveform);
   };
