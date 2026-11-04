@@ -184,7 +184,8 @@ export function projectPluginPrompt(waveform: WaveformPrompt, allowed: readonly 
   return { name: waveform.name, initialPrompt: waveform.initialPrompt, ...(waveform.voice ? { voice: waveform.voice } : {}),
     textPanel: allowed.includes('text') ? waveform.textPanel : null,
     visualDisplay: allowed.includes('visual') ? waveform.visualDisplay : null,
-    knowledge: allowed.includes('knowledge') && waveform.knowledge === true };
+    knowledge: allowed.includes('knowledge') && waveform.knowledge === true,
+    ...(waveform.practicePlugins ? { practicePlugins: waveform.practicePlugins } : {}) };
 }
 
 export async function readPluginPolicy(tx: VoiceTransaction, ownerUid: string, waveformId: string) {

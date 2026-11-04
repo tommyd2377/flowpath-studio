@@ -109,8 +109,8 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 820, height: 700
     await settingsSection(page, 'plugins');
     await expect(page.getByRole('link', { name: 'Manage documents', exact: true })).toHaveAttribute('href', '/account/knowledge?id=00000000-0000-4000-8000-000000000077');
     await expect(page.getByRole('article', { name: 'Knowledge', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Apply plugin', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Plugin applied', exact: true })).toBeDisabled();
+    await page.getByRole('button', { name: 'Install Text Box', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Remove Text Box', exact: true })).toBeEnabled();
     await page.screenshot({ path: `test-results/workspace-plugins-${viewport.width}.png` });
     await page.getByRole('link', { name: 'Manage documents', exact: true }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: `test-results/workspace-knowledge-${viewport.width}.png` });
@@ -132,10 +132,53 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 820, height: 700
     expect(requests.starts()).toBe(0);
     await page.reload();
     await settingsSection(page, 'plugins');
-    await expect(page.getByRole('button', { name: 'Plugin applied', exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Remove Text Box', exact: true })).toBeEnabled();
     await expect(page.getByLabel('What should your voice know about itself?', { exact: true })).toHaveValue('Keep this draft while I explore plugins.');
   });
 }
+
+test('plugin install meter is local, paced and reset by discard', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.clock.install();
+  const requests = await workspace(page);
+  await settingsSection(page, 'plugins');
+  const cards = page.getByRole('region', { name: 'Plugins' }).getByRole('article');
+  await expect(cards).toHaveCount(7);
+  const text = page.getByRole('article', { name: 'Text Box', exact: true });
+  const install = text.getByRole('button', { name: 'Install Text Box' });
+  await install.focus();
+  await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now() + 50)));
+  await page.keyboard.press('Enter');
+  const meter = text.getByRole('progressbar', { name: 'Installing Text Box' });
+  await expect(meter).toHaveAttribute('value', '0');
+  await expect(meter).toHaveCSS('clip-path', 'inset(50%)');
+  await page.clock.runFor(800);
+  const early = Number(await meter.getAttribute('value'));
+  expect(early).toBeGreaterThan(25);
+  expect(early).toBeLessThan(48);
+  await page.clock.runFor(400);
+  expect(Number(await meter.getAttribute('value')) - early).toBeGreaterThan(24);
+  await page.clock.runFor(760);
+  await expect(meter).toHaveCount(1);
+  await page.clock.runFor(80);
+  await expect(meter).toHaveCount(0);
+  await expect(text.getByRole('status')).toContainText('100% Save draft to keep this installation.');
+  await expect(text.getByRole('button', { name: 'Remove Text Box' })).toBeFocused();
+  expect(requests.writes()).toBe(0);
+  expect(requests.starts()).toBe(0);
+
+  const flashcards = page.getByRole('article', { name: 'Flashcards', exact: true });
+  await flashcards.getByRole('button', { name: 'Install Flashcards' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(flashcards.getByRole('progressbar')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Discard changes' }).focus();
+  await page.keyboard.press('Enter');
+  await page.clock.runFor(2100);
+  await expect(flashcards.getByRole('progressbar')).toHaveCount(0);
+  await expect(flashcards.getByRole('button', { name: 'Install Flashcards' })).toBeEnabled();
+  await expect(install).toBeEnabled();
+  expect(requests.writes()).toBe(0);
+});
 
 test('pending background review stays compact and cannot save before completion', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -168,11 +211,11 @@ test('discard restores the saved draft without a write, and hidden invalid field
   await settingsSection(page, 'instructions');
   await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('Unsaved instructions');
   await settingsSection(page, 'plugins');
-  await page.getByRole('button', { name: 'Apply plugin', exact: true }).click();
+  await page.getByRole('button', { name: 'Install Text Box', exact: true }).click();
   await page.getByRole('button', { name: 'Discard changes', exact: true }).click();
   await expect(page.getByLabel('Waveform name', { exact: true })).toHaveValue('Benjamin Franklin');
   await expect(page.getByLabel('What should your voice know about itself?', { exact: true })).toHaveValue('A fictional historical guide.');
-  await expect(page.getByRole('button', { name: 'Apply plugin', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Install Text Box', exact: true })).toBeEnabled();
   expect(requests.writes()).toBe(0);
   await settingsSection(page, 'instructions');
   await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('');
@@ -194,7 +237,7 @@ test('keyboard navigation reaches section controls and only the visible editor',
   await page.keyboard.press('Enter');
   await expect(page.getByLabel('What should your voice know about itself?', { exact: true })).toBeHidden();
   await page.keyboard.press('Tab'); await page.keyboard.press('Tab'); await page.keyboard.press('Tab');
-  await expect(page.getByRole('button', { name: 'Apply plugin', exact: true })).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Install Text Box', exact: true })).toBeFocused();
 });
 
 for (const founder of [false, true]) test(`hosted beta explains ${founder ? 'founder ownership' : 'daily free demo'} without obsolete admin limits`, async ({ page }) => {

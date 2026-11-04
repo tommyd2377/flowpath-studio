@@ -27,8 +27,14 @@ export async function pluginAudienceProjection<T extends Pick<WaveformPrompt, 't
 }
 
 async function ownerAccess(request: Request, id: string, management = false) {
-  const identity = await accountServer.resolveIdentity(request);
-  const resolved = await accountServer.resolveVoiceWaveform(request, id, management ? 'cleanup' : 'voice');
+  const [identityResult, resolvedResult] = await Promise.allSettled([
+    accountServer.resolveIdentity(request),
+    accountServer.resolveVoiceWaveform(request, id, management ? 'cleanup' : 'voice'),
+  ]);
+  if (identityResult.status === 'rejected') throw identityResult.reason;
+  if (resolvedResult.status === 'rejected') throw resolvedResult.reason;
+  const identity = identityResult.value;
+  const resolved = resolvedResult.value;
   if (!identity || !resolved || identity.owner.uid !== resolved.ownerUid) throw new PluginAccessError('This waveform is unavailable.', 404);
   const scope = { ownerUid: resolved.ownerUid, waveformId: id, accountUid: identity.owner.uid, sessionId: identity.accountSessionId ?? accountSessionId(identity.cookie) };
   const database = applicationDatabase();

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { LockKeyhole } from 'lucide-react';
 import { PLUGINS } from '@/lib/plugin-contract';
 import type { PluginAccessView, ProtectedPlugin } from '@/lib/plugin-access';
 
@@ -45,19 +46,26 @@ export default function PluginAccessSettings({ id, applied }: { id: string; appl
       setStatus(error instanceof Error ? error.message : 'Plugin protection could not be saved.');
     } finally { setBusy(false); }
   }
-  return <fieldset disabled={busy}>
-    <legend>Plugin access</legend>
-    {PLUGINS.filter(plugin => applied.includes(plugin.id)).map(plugin => <div key={plugin.id}>
-      <label><input type="checkbox" checked={selected.includes(plugin.id)} onChange={event => {
-        const checked = event.target.checked;
-        setSelected(ids => checked ? [...ids, plugin.id] : ids.filter(id => id !== plugin.id));
-      }} /> Require access code for {plugin.name}</label>
-    </div>)}
-    {selected.some(id => applied.includes(id)) && <label>{saved.codeConfigured ? 'Replace shared access code (optional)' : 'Shared access code'}
+  return <fieldset className="settings-plugin-access" disabled={busy}>
+    <legend><LockKeyhole aria-hidden="true" /> Plugin access</legend>
+    <p className="field-help">Choose which of the listed plugins require a shared code on this waveform. Save these access rules separately from the waveform draft.</p>
+    <div className="settings-plugin-access-options">
+      {PLUGINS.filter(plugin => applied.includes(plugin.id)).map(plugin => <label key={plugin.id}>
+        <input type="checkbox" checked={selected.includes(plugin.id)} onChange={event => {
+          const checked = event.target.checked;
+          setSelected(ids => checked ? [...ids, plugin.id] : ids.filter(id => id !== plugin.id));
+        }} />
+        Require access code for {plugin.name}
+      </label>)}
+    </div>
+    {selected.some(id => applied.includes(id)) && <label className="settings-plugin-access-code">
+      {saved.codeConfigured ? 'Replace shared access code (optional)' : 'Shared access code'}
       <input type="password" autoComplete="new-password" value={code} maxLength={128} onChange={event => setCode(event.target.value)}
         onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void save(); } }} />
     </label>}
-    <button type="button" className="secondary-button" onClick={() => void save()}>Save plugin access</button>
-    <p role="status">{status}</p>
+    <div className="settings-plugin-access-footer">
+      <button type="button" className="secondary-button" onClick={() => void save()}>{busy ? 'Saving…' : 'Save plugin access'}</button>
+      <p className="field-help" role="status">{status}</p>
+    </div>
   </fieldset>;
 }

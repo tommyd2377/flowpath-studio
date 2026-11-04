@@ -16,7 +16,7 @@ const input = (action: string, fields: Partial<PracticeInput> = {}): PracticeInp
 const ask = input('question', { prompt: 'Where was Franklin born?', sourceId: passage.id });
 const grade = input('grade', { score: 2, detail: 'Boston is correct.' });
 
-test('quiz requires a verified source and hides the answer passage until feedback', () => {
+test('quiz validates a supplied source and hides the passage until feedback', () => {
   const quiz = quizPractice.create();
   assert.equal(quiz.apply(ask, { sources: [] }).ok, false);
   assert.equal(quiz.apply(ask, context).ok, true);
@@ -26,6 +26,15 @@ test('quiz requires a verified source and hides the answer passage until feedbac
   assert.equal(quiz.apply(grade, context).ok, true);
   assert.deepEqual(quiz.state().source, passage);
   assert.match(quiz.state().detail, /Boston is correct/);
+});
+
+test('a general-knowledge quiz works without documents and does not attach a passage', () => {
+  const quiz = quizPractice.create();
+  assert.equal(quiz.apply(input('question', { prompt: ask.prompt }), { sources: [] }).ok, true);
+  assert.equal(quiz.state().source, undefined);
+  assert.equal(quiz.apply(grade, context).ok, true);
+  assert.equal(quiz.state().source, undefined);
+  assert.match(quiz.state().progress, /2\/2 points/);
 });
 
 test('a superseding result with a recycled source ID cannot supply evidence for an open question', () => {

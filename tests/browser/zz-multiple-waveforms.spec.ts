@@ -20,7 +20,7 @@ test('ordinary creator selects and edits independent waveforms and reaches the t
   await settingsSection(page, 'instructions');
   await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('Beta independent instructions.');
   await settingsSection(page, 'plugins');
-  await page.getByRole('button', { name: 'Apply plugin', exact: true }).click();
+  await page.getByRole('button', { name: 'Install Text Box', exact: true }).click();
   await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.locator('.account-status')).toContainText('Saved.');
   const beta = new URL(page.url()).searchParams.get('id')!;
@@ -38,7 +38,7 @@ test('ordinary creator selects and edits independent waveforms and reaches the t
   await page.getByRole('button', { name: 'Discard changes', exact: true }).click();
   await expect(selector).toBeEnabled();
   await settingsSection(page, 'plugins');
-  await expect(page.getByRole('button', { name: 'Plugin applied', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Remove Text Box', exact: true })).toBeEnabled();
   await expect(page.getByRole('link', { name: 'Manage documents', exact: true })).toHaveAttribute('href', `/account/knowledge?id=${beta}`);
   await page.getByRole('link', { name: 'Manage documents', exact: true }).click();
   await page.getByLabel('Add a document', { exact: true }).setInputFiles({ name: 'beta-multi.txt', mimeType: 'text/plain', buffer: Buffer.from('Only Beta knows this synthetic passage.') });

@@ -20,7 +20,7 @@ import { practiceDefinition } from '@/lib/practice-catalog';
 import type { PracticeId } from '@/lib/practice-contract';
 import { liveTextPanelEnabled, type TextPanelConfiguration } from '@/lib/text-panel';
 import { clientAnalytics, observeVisit } from '@/lib/analytics-runtime';
-import { BookOpen, Images, Eye, EyeOff, Square, TextCursorInput } from 'lucide-react';
+import { BookOpen, Images, Eye, EyeOff, TextCursorInput } from 'lucide-react';
 import BrandLoader from './BrandLoader';
 import DemoCodeGate from './DemoCodeGate';
 import PluginUnlock, { type PluginPlayback } from './PluginUnlock';
@@ -28,6 +28,7 @@ import PluginUnlock, { type PluginPlayback } from './PluginUnlock';
 export default function VoiceExperience({ waveformId, name, accentColor = WAVEFORM_DEFAULT_COLOR, profilePhoto = null, paidPayer, onSettled, textPanel: initialText = null, visualDisplay: initialVisual = null, pluginAccess, analyticsSurface, nextConversation, draftPreview = false, publishedPreview = false, publicDemo = false, practicePlugins }: {
   waveformId?: string; name?: string; accentColor?: string; profilePhoto?: string | null; paidPayer?: 'creator' | 'self'; onSettled?: () => void; textPanel?: TextPanelConfiguration | null; visualDisplay?: VisualDisplayConfiguration | null; analyticsSurface?: 'private' | 'public'; nextConversation?: () => void; draftPreview?: boolean; publishedPreview?: boolean; publicDemo?: boolean; pluginAccess?: Pick<PluginPlayback, 'locked' | 'expiresAt'>; practicePlugins?: PracticeId[];
 }) {
+  const [pluginProjectionPending, setPluginProjectionPending] = useState(false);
   const [pluginView, setPluginView] = useState<PluginPlayback | undefined>(() => pluginAccess && {
     ...pluginAccess, textPanel: initialText, visualDisplay: initialVisual,
   });
@@ -42,7 +43,7 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
   const [recordNext, setRecordNext] = useState(false);
   const [demoCodeAccepted, setDemoCodeAccepted] = useState(false);
   const [demoCodeRequired, setDemoCodeRequired] = useState(false);
-  const { active, stop, clearPluginContent } = voice;
+  const { active, stop, prepare, cancelPreparation, clearPluginContent } = voice;
   useEffect(() => {
     if (!pluginView?.expiresAt || !waveformId) return;
     const timer = setTimeout(() => {
@@ -58,7 +59,7 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
   const textVisible = textBoxEnabled && voice.textState.visible;
   const visualVisible = !!visualDisplay && voice.textState.visual?.visible === true;
   const practice = voice.textState.practice;
-  const displayVisible = textVisible || visualVisible || !!practice;
+  const displayVisible = !pluginProjectionPending && (textVisible || visualVisible || !!practice);
   const display = practice?.id ?? (visualVisible ? 'visual' : voice.textState.display ?? 'text');
   const [requestedDisplay, setRequestedDisplay] = useState<typeof display | null>(null);
   if (displayVisible && requestedDisplay !== display) setRequestedDisplay(display);
@@ -73,6 +74,12 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
   const waveControl = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const codeLocked = demoCodeRequired && !demoCodeAccepted;
+  useEffect(() => {
+    // Wait for the existing access gate; this never opens media or a paid session.
+    if (demoCodeAccepted && !nextConversation) prepare(startupTimingMode);
+    return cancelPreparation;
+  }, [demoCodeAccepted, nextConversation, prepare, cancelPreparation, startupTimingMode]);
+  const prepareConversation = () => { if (demoCodeAccepted && !nextConversation) prepare(startupTimingMode); };
   const pluginRequest = useRef(false);
   const [checkingPlugins, setCheckingPlugins] = useState(false);
   const [pluginStartError, setPluginStartError] = useState('');
@@ -82,23 +89,37 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
     // eslint-disable-next-line react-hooks/purity
     const clickedAt = performance.now();
     let fresh: PluginPlayback | undefined;
-    if (pluginAccess && waveformId) {
+    let pluginCheckStartedAt: number | undefined;
+    let pluginCheckCompletedAt: number | undefined;
+    if (pluginAccess && waveformId && (paidPayer || publishedPreview)) {
       pluginRequest.current = true;
       setCheckingPlugins(true);
       setPluginStartError('');
       try {
+        // This timestamp is read inside the user-triggered callback.
+        // eslint-disable-next-line react-hooks/purity
+        if (startupTimingMode) pluginCheckStartedAt = performance.now();
         const response = await fetch(`/api/plugin-access?waveformId=${encodeURIComponent(waveformId)}&playback=1${publicDemo ? '&audience=curated' : ''}`, { cache: 'no-store' });
         if (!response.ok) throw new Error();
         fresh = await response.json();
         if (!fresh || !waveControl.current) return;
+        // eslint-disable-next-line react-hooks/purity
+        if (startupTimingMode) pluginCheckCompletedAt = performance.now();
         setPluginView(fresh);
       } catch {
         setPluginStartError('Plugin access could not be checked. Try again.');
         return;
       } finally { pluginRequest.current = false; setCheckingPlugins(false); }
     }
+    if (pluginAccess && !paidPayer && !publishedPreview) {
+      setPluginProjectionPending(true);
+      setPluginView(current => current && { ...current, textPanel: null, visualDisplay: null, expiresAt: undefined });
+    }
     clientAnalytics.record({ eventName: 'voice_start_requested', properties: { surface } });
-    void voice.start(diagnosticsMode && recordNext, startupTimingMode, fresh && { text: liveTextPanelEnabled(fresh.textPanel), visual: fresh.visualDisplay }, clickedAt); setRecordNext(false);
+    const capabilities = fresh && { text: liveTextPanelEnabled(fresh.textPanel), visual: fresh.visualDisplay, pluginCheckStartedAt, pluginCheckCompletedAt };
+    void voice.start(diagnosticsMode && recordNext, startupTimingMode, capabilities, clickedAt, view => {
+      setPluginView(view); setPluginProjectionPending(false);
+    }); setRecordNext(false);
   };
   const hideText = () => {
     const restoreFocus = panel.current?.contains(document.activeElement) || document.activeElement?.classList.contains('display-toggle');
@@ -145,7 +166,7 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
       </div>
     </nav>
     <main className="voice-page" data-voice-phase={voice.phase}>
-    {waveformId && requestedDisplay && <button type="button" className="secondary-button display-toggle" aria-expanded={displayVisible} onClick={displayVisible ? hideText : showDisplay}>
+    {waveformId && requestedDisplay && !pluginProjectionPending && <button type="button" className="secondary-button display-toggle" aria-expanded={displayVisible} onClick={displayVisible ? hideText : showDisplay}>
       {displayVisible ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}{displayVisible ? 'Hide display' : 'Show display'}
     </button>}
       <header className="wordmark" aria-hidden={(connected || docked) && !hasPortrait}>
@@ -160,9 +181,9 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
         <span className="conversation-name">{name ?? 'Your waveform'}</span>
         <span className="conversation-state">{voice.active ? connected ? voice.phase === 'speaking' ? 'Speaking' : 'Listening' : 'Connecting' : 'Conversation ended'}</span>
       </div>}
-      {waveformId && docked && voice.active && <button type="button" className="secondary-button conversation-end" onClick={() => void voice.stop()}><Square aria-hidden="true" />End conversation</button>}
-      <button ref={waveControl} className="wave-control" type={!voice.active && codeLocked ? 'submit' : 'button'} form={!voice.active && codeLocked ? 'voice-demo-code-form' : undefined} aria-label={waveformId && docked && voice.active && !voice.needsAudioResume ? 'Voice waveform' : label} aria-pressed={voice.active}
+      <button ref={waveControl} className="wave-control" type={!voice.active && codeLocked ? 'submit' : 'button'} form={!voice.active && codeLocked ? 'voice-demo-code-form' : undefined} aria-label={label} aria-pressed={voice.active}
         aria-describedby={showStatus && status ? 'voice-status' : !connected && !docked ? 'voice-hint' : undefined}
+        onPointerEnter={prepareConversation} onFocus={prepareConversation}
         onClick={() => {
           if (nextConversation) nextConversation();
           else if (voice.needsAudioResume) void voice.start();

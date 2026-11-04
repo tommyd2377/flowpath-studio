@@ -98,8 +98,7 @@ export function createFirebaseAccountAdapter(projectId: string, databaseId: stri
     async readWaveform(uid, id) {
       const db = services().db;
       return db.runTransaction(async tx => {
-        const legacy = await tx.get(db.collection('ownerWaveforms').doc(uid));
-        const index = await tx.get(db.collection('ownerWaveformLists').doc(uid));
+        const [legacy, index] = await tx.getAll(db.collection('ownerWaveforms').doc(uid), db.collection('ownerWaveformLists').doc(uid));
         const first = legacy.exists ? waveformRecord(legacy.data()) : null;
         if (legacy.exists && !first) throw new Error('Invalid saved waveform');
         const adminTesting = accountTestingPreference(index.data(), first);

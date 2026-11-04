@@ -19,17 +19,18 @@ export function createCuratedDemo(database: VoiceDatabase, options: {
   findOwner(): Promise<string | null>;
   requireAllowed(tx: VoiceTransaction, uid: string, waveform: Waveform): Promise<unknown>;
   now?: () => number;
+  followUp?(ownerUid: string, waveform: Waveform): Promise<void>;
 }) {
   async function check(tx: VoiceTransaction, row: Snapshot) {
     if ((await tx.get(`waveformMembers/${row.ownerUid}`))?.state !== 'active') throw new CreationSafetyError('The demonstration is unavailable.', 403);
     await options.requireAllowed(tx, row.ownerUid, row.waveform);
     return row;
   }
-  async function published() {
+  async function loadPublished(readOnly: boolean) {
     const existing = await database.transaction(async tx => {
       const row = snapshot(await tx.get(path)); return row ? check(tx, row) : null;
     });
-    if (existing) return existing;
+    if (existing || readOnly) return existing;
     // First release captures the currently approved version exactly once. Private
     // saves after this transaction cannot silently update the public snapshot.
     const uid = await options.findOwner();
@@ -43,7 +44,11 @@ export function createCuratedDemo(database: VoiceDatabase, options: {
       tx.set(path, row); return row;
     });
   }
-  return { published,
+  return { async published(readOnly = false) {
+      const row = await loadPublished(readOnly);
+      if (row && !readOnly) await options.followUp?.(row.ownerUid, row.waveform);
+      return row;
+    },
     async requireVoice(tx: VoiceTransaction, owner: VoiceOwner) {
       const row = snapshot(await tx.get(path));
       if (!row || owner.kind !== 'visitor' || owner.waveformId !== FRANKLIN_DEMO_ID || row.ownerUid !== owner.demoSource?.ownerUid

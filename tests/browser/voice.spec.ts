@@ -199,6 +199,8 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 
     await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
     const end = page.getByRole('button', { name: 'End conversation', exact: true });
     await expect(end).toBeVisible();
+    await expect(end).toHaveCount(1);
+    await expect(end).toHaveClass('wave-control');
     await expect(page.getByRole('navigation', { name: 'Plugin displays', exact: true })).toHaveCount(0);
     await emit(page, { type: 'session.input_transcript.delta', delta: 'Start writing. My original notes. Stop writing.', start_ms: 0, end_ms: 100 });
     const region = page.locator('.plugin-carousel__face:not(.plugin-carousel__outgoing) .live-text-panel__content');
@@ -330,7 +332,7 @@ async function syntheticProfilePhoto(page: Page) {
   });
 }
 
-async function mockSession(page: Page, options: { enabled?: boolean; delayPost?: Promise<void>; durationMs?: number; browserControl?: boolean; admin?: boolean; adminOverride?: boolean; adminDeadlineMs?: number } = {}) {
+async function mockSession(page: Page, options: { enabled?: boolean; delayPost?: Promise<void>; durationMs?: number; browserControl?: boolean; admin?: boolean; adminOverride?: boolean; adminDeadlineMs?: number; pluginPlayback?: () => Promise<object> } = {}) {
   const calls: { method: string; sessionId?: string; waveformId?: string; demoId?: string; diagnostics?: boolean; admin?: string; previous?: string }[] = [];
   await page.route('**/api/session*', async route => {
     const method = route.request().method();
@@ -342,7 +344,8 @@ async function mockSession(page: Page, options: { enabled?: boolean; delayPost?:
     else if (method === 'DELETE') await route.fulfill({ status: 204 });
     else {
       await options.delayPost;
-      await route.fulfill({ json: { sessionId: body.sessionId, sdp: 'v=0\r\n', expiresAt: Date.now() + (options.durationMs ?? 900_000), ...(options.browserControl ? { browserControl: true } : {}),
+      const pluginPlayback = await options.pluginPlayback?.();
+      await route.fulfill({ json: { sessionId: body.sessionId, sdp: 'v=0\r\n', ...(pluginPlayback ? { pluginPlayback } : {}), expiresAt: Date.now() + (options.durationMs ?? 900_000), ...(options.browserControl ? { browserControl: true } : {}),
         ...(options.admin ? { adminEligible: true, adminOverride: options.adminOverride === true, adminDeadline: Date.now() + (options.adminDeadlineMs ?? 900_000) } : {}) } });
     }
   });
@@ -464,10 +467,12 @@ test('loading is quiet and the disabled gate never requests a microphone', async
   await fakeMedia(page);
   const calls = await mockSession(page, { enabled: false });
   await page.goto('/');
-  expect(calls).toEqual([]);
+  await expect.poll(() => calls.some(call => call.method === 'GET')).toBe(true);
+  expect(calls.every(call => call.method === 'GET')).toBe(true);
+  expect((await tracker(page)).microphoneCalls).toBe(0);
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByText('Voice is disabled for this local preview.', { exact: true })).toBeVisible();
-  expect(calls.map(call => call.method)).toEqual(['GET']);
+  expect(calls.every(call => call.method === 'GET')).toBe(true);
   expect((await tracker(page)).microphoneCalls).toBe(0);
   await expect(page.locator('main')).toHaveAttribute('data-voice-phase', 'idle');
 });
@@ -507,7 +512,9 @@ test('two public tabs settle their first visitor cookie before another readiness
     await second.getByRole('button', { name: 'Start conversation', exact: true }).click();
     await expect.poll(() => second.evaluate(async () => (await navigator.locks.query()).pending?.some(lock => lock.name === 'flowpath-public-voice-identity'))).toBe(true);
     release();
-    await expect.poll(() => gets).toBe(2);
+    // The first tab's pending negative preparation is followed by its own
+    // ordinary click check; the second tab performs its own check as well.
+    await expect.poll(() => gets).toBe(3);
     await expect(second.getByText('Synthetic paused demo.', { exact: true })).toBeVisible();
     expect(secondUsedCookie).toBe(true);
     expect((await tracker(page)).microphoneCalls).toBe(0);
@@ -1028,11 +1035,20 @@ for (const admin of [true, false]) test(`Text Box survives settlement on the ${a
     wallet: { balance: 100, available: 100 }, pack: { id: 'fixture', seconds: 900, amount: 500, currency: 'usd' } } }));
   await page.route('**/api/published?*', route => route.fulfill({ json: { waveform, mode: 'visitor', sponsoredSeconds: 0,
     own: true, reason: '', adminTesting: admin, adminVoiceReady: admin } }));
-  await page.route('**/api/paid-session*', route => route.fulfill({ json: route.request().method() === 'GET' ? { enabled: true }
-    : route.request().method() === 'DELETE' ? { closed: true }
-      : { sessionId: route.request().postDataJSON().sessionId, sdp: 'v=0\r\n', expiresAt: Date.now() + 900_000 } }));
+  const paidCalls: string[] = [];
+  await page.route('**/api/paid-session*', route => {
+    paidCalls.push(route.request().method());
+    return route.fulfill({ json: route.request().method() === 'GET' ? { enabled: true }
+      : route.request().method() === 'DELETE' ? { closed: true }
+        : { sessionId: route.request().postDataJSON().sessionId, sdp: 'v=0\r\n', expiresAt: Date.now() + 900_000 } });
+  });
   await page.goto(`/w/${id}`);
-  if (!admin) await page.getByRole('button', { name: 'Continue using my own balance', exact: true }).click();
+  if (!admin) {
+    await page.getByRole('button', { name: 'Continue using my own balance', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Start conversation', exact: true })).toBeVisible();
+    await page.waitForTimeout(100);
+    expect(paidCalls).toEqual([]);
+  }
   await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
   await emit(page, { type: 'session.input_transcript.delta', event_id: 'notes', delta: 'Start writing. Notes to copy.', start_ms: 0, end_ms: 100 });
@@ -1068,7 +1084,7 @@ test('normal account plugin flow supports dictation, delegated updates and retai
   await expect(page.getByRole('button', { name: /Use test owner/ })).toHaveCount(0);
   await expect(page.getByLabel('Text below the waveform (optional)', { exact: true })).toHaveCount(0);
   await settingsSection(page, 'plugins');
-  await page.getByRole('button', { name: 'Apply plugin', exact: true }).click();
+  await page.getByRole('button', { name: 'Install Text Box', exact: true }).click();
   await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.locator('.account-status')).toContainText('Saved.');
   expect(waveform.textPanel).toEqual({ type: 'text', version: 2 });
@@ -1120,7 +1136,7 @@ test('normal account plugin flow supports dictation, delegated updates and retai
   await expect(box).toHaveText('Buy eggs and milk. ');
   await page.getByRole('button', { name: 'Hide display', exact: true }).click();
   await expect(box).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Voice waveform', exact: true })).toBeFocused();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeFocused();
   await speech('Start writing. Another line.');
   await page.getByRole('button', { name: 'Stop writing', exact: true }).click();
   await speech('Late speech is ignored.');
@@ -1216,7 +1232,7 @@ test('hosted browser control greets once, keeps voice during heartbeats and wait
   await page.goto('/'); await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
   await emit(page, { type: 'session.started' });
-  expect((await tracker(page)).sentEvents.map(value => JSON.parse(value).type).filter(type => type === 'session.instructions.append')).toHaveLength(1);
+  expect((await tracker(page)).sentEvents.map(value => JSON.parse(value)).filter(event => event.type === 'session.commentary.append' && event.event_id === 'flowpath_greeting')).toHaveLength(1);
   await page.clock.fastForward(11_000); await expect.poll(() => calls.filter(value => value === 'PATCH').length).toBe(1);
   await page.getByRole('button', { name: 'End conversation', exact: true }).click();
   await expect.poll(() => calls.filter(value => value === 'DELETE').length).toBe(1);
@@ -1277,7 +1293,7 @@ test('hosted connection handshake applies SDP only after the observer is ready, 
   });
   await page.goto('/'); await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
   await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
-  await expect.poll(async () => (await tracker(page)).sentEvents.filter(value => JSON.parse(value).type === 'session.instructions.append').length).toBe(1);
+  await expect.poll(async () => (await tracker(page)).sentEvents.map(value => JSON.parse(value)).filter(event => event.type === 'session.commentary.append' && event.event_id === 'flowpath_greeting').length).toBe(1);
   expect(methods.slice(0, 3)).toEqual(['GET', 'POST', 'PATCH']);
   await page.getByRole('button', { name: 'End conversation', exact: true }).click();
 });
@@ -1640,7 +1656,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 
   await expect(controls).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Show display', exact: true })).toHaveAttribute('aria-expanded', 'false');
   expect((await tracker(page)).stoppedTracks).toBe(0);
-  await expect(page.getByRole('button', { name: 'Voice waveform', exact: true })).toBeFocused();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeFocused();
   await page.getByRole('button', { name: 'Show display', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Workshop', exact: true })).toBeVisible();
   await emit(page, { type: 'session.input_transcript.delta', event_id: 'generic_hide_1', delta: 'Hide the dis', start_ms: 101, end_ms: 110 });
@@ -1724,7 +1740,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 
   await page.screenshot({ path: `/private/tmp/flowpath-display-ui-single-${viewport.width}.png` });
   await page.getByRole('button', { name: 'Hide display', exact: true }).click();
   await expect(page.locator('.display-frame, .plugin-carousel')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Voice waveform', exact: true })).toBeFocused();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeFocused();
   await page.getByRole('button', { name: 'Show display', exact: true }).focus(); await page.keyboard.press('Enter');
   await expect(display).toBeVisible();
   await page.getByRole('button', { name: 'End conversation', exact: true }).click();
@@ -1749,7 +1765,7 @@ test('Visual Display creator upload stays in its selected draft and resets when 
     await route.fulfill({ json: { waveform: waveforms[index], waveforms: waveforms.map(({ id, name }) => ({ id, name })) } });
   });
   await page.goto('/account'); await settingsSection(page, 'plugins');
-  await page.getByRole('button', { name: 'Apply Visual Display', exact: true }).click();
+  await page.getByRole('button', { name: 'Install Visual Display', exact: true }).click();
   const upload = Buffer.from(fixtures.images[0].src.split(',')[1], 'base64');
   const chooserPromise = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: 'Choose picture', exact: true }).click();
@@ -1764,7 +1780,7 @@ test('Visual Display creator upload stays in its selected draft and resets when 
   expect(waveforms[0].visualDisplay?.images).toHaveLength(1);
   expect(waveforms[1].visualDisplay).toBeNull();
   await page.getByLabel('Waveform ·', { exact: false }).selectOption(secondId);
-  await settingsSection(page, 'plugins'); await expect(page.getByRole('button', { name: 'Apply Visual Display', exact: true })).toBeVisible();
+  await settingsSection(page, 'plugins'); await expect(page.getByRole('button', { name: 'Install Visual Display', exact: true })).toBeVisible();
   await page.getByLabel('Waveform ·', { exact: false }).selectOption(firstId);
   await settingsSection(page, 'plugins'); await expect(page.getByLabel('Picture title', { exact: true })).toHaveValue('Town map');
   await page.getByLabel('Text shown beside the picture (optional)', { exact: true }).fill('Unpublished draft edit');
@@ -1775,7 +1791,8 @@ test('Visual Display creator upload stays in its selected draft and resets when 
 
 test('plugin access settings protect the playback route and unlock Text Box on the same mocked call', async ({ page }) => {
   await fakeMedia(page);
-  const calls = await mockSession(page);
+  let playbackEndpoint = '';
+  const calls = await mockSession(page, { pluginPlayback: async () => (await page.request.get(playbackEndpoint)).json() });
   await page.goto('/account');
   await page.getByRole('button', { name: 'Use test owner A', exact: true }).click();
   await settingsSection(page, 'appearance');
@@ -1783,8 +1800,8 @@ test('plugin access settings protect the playback route and unlock Text Box on t
   await settingsSection(page, 'instructions');
   await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('Be a helpful museum guide.');
   await settingsSection(page, 'plugins');
-  const apply = page.getByRole('button', { name: 'Apply plugin', exact: true });
-  if (await apply.isVisible()) await apply.click();
+  const install = page.getByRole('button', { name: 'Install Text Box', exact: true });
+  if (await install.isVisible()) await install.click();
   await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.locator('.account-status')).toContainText('Saved.');
   const { waveform } = await (await page.request.get('/api/waveform')).json();
@@ -1795,6 +1812,7 @@ test('plugin access settings protect the playback route and unlock Text Box on t
   await settings.getByRole('button', { name: 'Save plugin access', exact: true }).click();
   await expect(settings.getByRole('status')).toHaveText('Plugin protection saved.');
   const endpoint = `/api/plugin-access?waveformId=${waveform.id}`;
+  playbackEndpoint = `${endpoint}&playback=1`;
   const origin = new URL(page.url()).origin;
   const view = await (await page.request.get(`/api/waveform?id=${waveform.id}`, { headers: { 'X-FlowPath-View': 'playback' } })).json();
   expect(view.waveform.textPanel).toBeNull();
@@ -1875,6 +1893,13 @@ test('all four practice activities share one private call and keep Knowledge ans
     { plugin, action, title: '', prompt: '', detail: '', score: 0, sourceId: '', ...fields });
   await update('quiz', 'question', { prompt: 'What did Franklin test?', sourceId: 'source_1' });
   await expect(page.getByRole('region', { name: 'Quiz / Evaluation content', exact: true })).toHaveCount(0);
+  await update('quiz', 'question', { prompt: 'What is the capital of France?' });
+  const generalQuiz = page.getByRole('region', { name: 'Quiz / Evaluation content', exact: true });
+  await expect(generalQuiz).toContainText('What is the capital of France?');
+  await update('quiz', 'grade', { detail: 'Paris is correct.', score: 2 });
+  await expect(generalQuiz).toContainText('Paris is correct.');
+  await expect(generalQuiz).not.toContainText('Franklin.txt');
+  await update('quiz', 'restart');
   await tool('search_waveform_knowledge', { query: 'What did Franklin test?', display: false });
   await expect.poll(async () => (await tracker(page)).sentEvents.some(event => event.includes('Franklin.txt'))).toBe(true);
   await update('quiz', 'question', { prompt: 'What did Franklin test?', sourceId: 'source_1' });
@@ -1917,7 +1942,7 @@ test('practice plugin settings persist on the selected private waveform', async 
   await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('Be a helpful museum guide.');
   await settingsSection(page, 'plugins');
   const labels = ['Quiz / Evaluation', 'Guided Lessons', 'Flashcards', 'Interview Practice'];
-  for (const name of labels) await page.getByLabel('Apply ' + name, { exact: true }).check();
+  for (const name of labels) await page.getByRole('button', { name: 'Install ' + name, exact: true }).click();
   await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.getByText('Draft saved', { exact: true })).toBeVisible();
   const { waveform } = await (await page.request.get('/api/waveform')).json();
@@ -1927,8 +1952,8 @@ test('practice plugin settings persist on the selected private waveform', async 
   expect(playback.waveform.practicePlugins).toEqual(['quiz', 'lessons', 'flashcards', 'interview']);
   await page.reload();
   await settingsSection(page, 'plugins');
-  for (const name of labels) await expect(page.getByLabel('Apply ' + name, { exact: true })).toBeChecked();
-  await page.getByLabel('Apply Flashcards', { exact: true }).uncheck();
+  for (const name of labels) await expect(page.getByRole('button', { name: 'Remove ' + name, exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Remove Flashcards', exact: true }).click();
   await page.getByRole('button', { name: 'Save draft', exact: true }).click();
   await expect(page.getByText('Draft saved', { exact: true })).toBeVisible();
   const changed = await (await page.request.get(`/api/waveform?id=${waveform.id}`)).json();

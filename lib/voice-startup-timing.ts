@@ -1,5 +1,5 @@
 const marks = [
-  'click', 'previous_cleanup_ready', 'readiness_requested', 'readiness_complete',
+  'click', 'plugin_check_requested', 'plugin_check_complete', 'previous_cleanup_ready', 'readiness_requested', 'readiness_wait_started', 'prepared_readiness_used', 'readiness_complete',
   'audio_resume_requested', 'audio_context_running', 'microphone_requested', 'microphone_acquired',
   'offer_requested', 'local_description_set', 'ice_complete', 'session_requested', 'session_headers',
   'session_answer_received', 'remote_description_applied', 'transport_connected', 'provider_session_started',
@@ -7,34 +7,48 @@ const marks = [
   'playback_allowed', 'playback_blocked', 'first_output_signal', 'first_audible_output', 'stopped',
 ] as const;
 type Mark = typeof marks[number];
-const serverPhases = new Set(['fp_scope', 'fp_admission', 'fp_deadline', 'fp_provider', 'fp_persist', 'fp_supervision']);
+const serverPhases = new Set(['fp_scope', 'fp_admission', 'fp_deadline', 'fp_provider', 'fp_persist', 'fp_supervision', 'fp_prewarmed']);
 type RequestPhase = 'readiness' | 'session';
+type PreparationSource = 'ready' | 'pending' | 'cold';
+type ReadinessPreparation = { source: PreparationSource; durationMs: number; startedBeforeClickMs: number; completedBeforeClickMs: number };
 export type StartupTimingReport = {
   format: 'flowpath-startup-timing'; version: 1;
   permissionBeforeCapture: PermissionState | 'unknown';
   events: { name: Mark; atMs: number }[];
   server: { request: RequestPhase; name: string; durationMs: number }[];
+  readinessPreparation?: ReadinessPreparation;
 };
 
 /** Fixed labels and monotonic durations only. Never receives provider events, text, SDP or IDs. */
 export function createStartupTiming(startedAt = performance.now(), now = () => performance.now()) {
   let recording = true, lastAt = 0;
   let permission: StartupTimingReport['permissionBeforeCapture'] = 'unknown';
+  let readinessPreparation: ReadinessPreparation | undefined;
   const events: StartupTimingReport['events'] = [{ name: 'click', atMs: 0 }];
   const server: StartupTimingReport['server'] = [];
   const seen = new Set<Mark>(['click']);
-  function mark(name: Mark) {
-    if (!recording || !marks.includes(name) || seen.has(name)) return;
-    const elapsed = now() - startedAt;
+  function markAt(name: Mark, timestamp: number) {
+    if (!recording || !marks.includes(name) || seen.has(name) || !Number.isFinite(timestamp) || timestamp > now()) return;
+    const elapsed = timestamp - startedAt;
     if (!Number.isFinite(elapsed)) return;
     lastAt = Math.max(lastAt, 0, elapsed);
     seen.add(name);
     events.push({ name, atMs: Math.round(lastAt * 10) / 10 });
   }
+  const mark = (name: Mark) => markAt(name, now());
   return {
-    mark,
+    mark, markAt,
     permission(state: PermissionState) {
       if (recording && !seen.has('microphone_requested') && ['granted', 'prompt', 'denied'].includes(state)) permission = state;
+    },
+    preparation(source: PreparationSource, preparationStartedAt: number, completedAt: number) {
+      if (!recording || readinessPreparation || !['ready', 'pending', 'cold'].includes(source)
+        || ![startedAt, preparationStartedAt, completedAt].every(Number.isFinite)) return;
+      const durations = [completedAt - preparationStartedAt, startedAt - preparationStartedAt, startedAt - completedAt];
+      if (!durations.every(Number.isFinite)) return;
+      const round = (value: number) => Math.round(Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, value)) * 10) / 10;
+      readinessPreparation = { source, durationMs: round(durations[0]), startedBeforeClickMs: round(durations[1]),
+        completedBeforeClickMs: round(durations[2]) };
     },
     serverTiming(request: RequestPhase, value: string | null) {
       if (!recording || !['readiness', 'session'].includes(request) || !value || value.length > 2048) return;
@@ -48,7 +62,8 @@ export function createStartupTiming(startedAt = performance.now(), now = () => p
     finish() { mark('stopped'); recording = false; },
     snapshot(): StartupTimingReport {
       return { format: 'flowpath-startup-timing', version: 1, permissionBeforeCapture: permission,
-        events: events.map(event => ({ ...event })), server: server.map(event => ({ ...event })) };
+        events: events.map(event => ({ ...event })), server: server.map(event => ({ ...event })),
+        ...(readinessPreparation ? { readinessPreparation: { ...readinessPreparation } } : {}) };
     },
   };
 }

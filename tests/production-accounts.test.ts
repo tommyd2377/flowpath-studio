@@ -24,6 +24,7 @@ function request(path = 'account', method = 'GET', body?: unknown, cookie?: stri
 /** Serialized in-memory transactions: no emulator, project, credentials or network. */
 function fakeDatabase() {
   const rows = new Map<string, Record<string, unknown>>();
+  const readCalls: { kind: 'get' | 'getAll'; paths: string[] }[] = [];
   type Reference = { path: string };
   const snapshot = (ref: Reference) => ({ exists: rows.has(ref.path), data: () => rows.has(ref.path) ? structuredClone(rows.get(ref.path)) : undefined });
   let pending = Promise.resolve();
@@ -34,6 +35,7 @@ function fakeDatabase() {
   } };
   const db: { collection(name: string): Collection; runTransaction<T>(run: (transaction: {
     get(ref: Reference): Promise<ReturnType<typeof snapshot>>;
+    getAll(...refs: Reference[]): Promise<ReturnType<typeof snapshot>[]>;
     update(ref: Reference, value: Record<string, unknown>): void;
     set(ref: Reference, value: Record<string, unknown>): void;
   }) => Promise<T>): Promise<T> } = {
@@ -49,11 +51,13 @@ function fakeDatabase() {
     }) }),
     runTransaction<T>(run: (transaction: {
       get(ref: Reference): Promise<ReturnType<typeof snapshot>>;
+      getAll(...refs: Reference[]): Promise<ReturnType<typeof snapshot>[]>;
       update(ref: Reference, value: Record<string, unknown>): void;
       set(ref: Reference, value: Record<string, unknown>): void;
     }) => Promise<T>) {
       const result = pending.then(() => run({
-        async get(ref) { return snapshot(ref); },
+        async get(ref) { readCalls.push({ kind: 'get', paths: [ref.path] }); return snapshot(ref); },
+        async getAll(...refs) { readCalls.push({ kind: 'getAll', paths: refs.map(ref => ref.path) }); return refs.map(snapshot); },
         update(ref, value) { rows.set(ref.path, { ...rows.get(ref.path), ...value }); },
         set(ref, value) { rows.set(ref.path, structuredClone(value)); },
       }));
@@ -61,7 +65,7 @@ function fakeDatabase() {
       return result;
     },
   };
-  return { rows, db: db as unknown as Firestore };
+  return { rows, readCalls, db: db as unknown as Firestore };
 }
 
 function firebaseFixture() {
@@ -297,7 +301,7 @@ test('managed Firebase project discovery uses only explicit or App Hosting metad
 });
 
 function actualAdapterFixture(member = true) {
-  const { db, rows } = fakeDatabase();
+  const { db, rows, readCalls } = fakeDatabase();
   if (member) rows.set(`${MEMBERS_COLLECTION}/${user.uid}`, { state: 'active', createdAt: Date.now() });
   let claims: Record<string, unknown> = { uid: user.uid, name: user.displayName,
     firebase: { sign_in_provider: 'password' }, email_verified: true, auth_time: Math.floor(Date.now() / 1000) };
@@ -310,7 +314,7 @@ function actualAdapterFixture(member = true) {
     },
   } as unknown as ReturnType<typeof getFirebaseAccountServices>['auth'];
   const firebase = createFirebaseAccountAdapter('synthetic-project', '(default)', () => ({ auth, db }));
-  return { firebase, db, rows, issued: () => issued, setClaims: (next: Record<string, unknown>) => { claims = next; } };
+  return { firebase, db, rows, readCalls, issued: () => issued, setClaims: (next: Record<string, unknown>) => { claims = next; } };
 }
 
 test('Firebase token exchange enforces recent verified sign-in and creates distinct application sessions', async () => {
@@ -419,6 +423,30 @@ test('the exact demo code enrolls through its HttpOnly grant; raw browser claims
   const cookie = pair(admitted);
   assert.equal((await server.resolveOwner(request('account', 'GET', undefined, cookie)))?.uid, user.uid);
   assert.equal((await server.accountPOST(request('account', 'POST', { idToken: 'synthetic.id.token' }, cookie))).status, 200);
+});
+
+test('waveform reads batch the owner documents and fetch current testing preference on every call', async () => {
+  const { firebase, rows, readCalls } = actualAdapterFixture();
+  const first = { id: randomUUID(), ...input, adminTesting: false, updatedAt: new Date().toISOString() };
+  const second = { ...first, id: randomUUID(), name: 'Second' };
+  const legacyPath = `ownerWaveforms/${user.uid}`, indexPath = `ownerWaveformLists/${user.uid}`;
+  const extraPath = `${legacyPath}/waveforms/${second.id}`;
+  rows.set(legacyPath, first);
+  rows.set(indexPath, { ids: [second.id], adminTesting: true });
+  rows.set(extraPath, second);
+
+  assert.equal((await firebase.readWaveform(user.uid, first.id))?.adminTesting, true);
+  assert.deepEqual(readCalls.splice(0), [{ kind: 'getAll', paths: [legacyPath, indexPath] }]);
+  rows.set(indexPath, { ids: [second.id], adminTesting: false });
+  assert.equal((await firebase.readWaveform(user.uid, second.id))?.adminTesting, false);
+  assert.deepEqual(readCalls.splice(0), [
+    { kind: 'getAll', paths: [legacyPath, indexPath] }, { kind: 'get', paths: [extraPath] },
+  ]);
+  assert.equal(await firebase.readWaveform('another-owner', first.id), null);
+  assert.deepEqual(readCalls.splice(0), [{ kind: 'getAll', paths: ['ownerWaveforms/another-owner', 'ownerWaveformLists/another-owner'] },
+    { kind: 'get', paths: [`ownerWaveforms/another-owner/waveforms/${first.id}`] }]);
+  rows.set(legacyPath, { id: first.id });
+  await assert.rejects(firebase.readWaveform(user.uid), /Invalid saved waveform/);
 });
 
 test('Firebase founder preference is account-wide, preserves legacy data and survives concurrent creation', async () => {

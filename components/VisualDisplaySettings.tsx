@@ -8,7 +8,7 @@ import { DisplayImage } from './DisplayContent';
 import styles from './VisualDisplaySettings.module.css';
 
 export default function VisualDisplaySettings({ value, disabled, onChange, onPreparing }: {
-  value: VisualDisplayConfiguration; disabled: boolean; onChange: (value: VisualDisplayConfiguration | null) => void; onPreparing: (preparing: boolean) => void;
+  value: VisualDisplayConfiguration; disabled: boolean; onChange: (value: VisualDisplayConfiguration) => void; onPreparing: (preparing: boolean) => void;
 }) {
   const [preparing, setPreparing] = useState(false), [error, setError] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -33,7 +33,7 @@ export default function VisualDisplaySettings({ value, disabled, onChange, onPre
     finally { if (ticket === revision.current) { setPreparing(false); onPreparing(false); } }
   }
   return <div className={`visual-display-settings ${styles.editor}`}>
-    <p>Show pictures or maps by voice. Add up to {VISUAL_IMAGE_LIMIT} pictures and choose one below to edit.</p>
+    <p>Add up to {VISUAL_IMAGE_LIMIT} pictures and choose one below to edit.</p>
     <p className="field-help">Describe each picture accurately so the voice can discuss it. The voice uses your description and cannot see the picture.</p>
     <div className={styles.gallery} aria-label="Pictures">
       {value.images.map((item, i) => <button className={styles.thumbnail} key={item.id} type="button" aria-pressed={image?.id === item.id} aria-label={`Edit picture ${i + 1}: ${item.title || 'Untitled'}`} disabled={disabled || preparing} onClick={() => setSelectedId(item.id)}>
@@ -62,6 +62,5 @@ export default function VisualDisplaySettings({ value, disabled, onChange, onPre
     </fieldset>}
     {!validateVisualDisplay(value).ok && <p className="field-help" role="status">Give every picture a unique title and a description before saving.</p>}
     {error && <p role="alert" className="account-error">{error}</p>}
-    <button type="button" className="settings-inline-link" disabled={disabled || preparing} onClick={() => onChange(null)}>Remove Visual Display</button>
   </div>;
 }

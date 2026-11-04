@@ -18,15 +18,18 @@ import type { TextPanelConfiguration } from '@/lib/text-panel';
 import { validateVisualDisplay, type VisualDisplayConfiguration } from '@/lib/visual-display';
 import VisualDisplaySettings from './VisualDisplaySettings';
 import PluginAccessSettings from './PluginAccessSettings';
+import PluginSettingsCard from './PluginSettingsCard';
 import { PRACTICE_CATALOG } from '@/lib/practice-catalog';
 import { parsePracticePlugins, type PracticeId } from '@/lib/practice-contract';
 import { PLUGINS } from '@/lib/plugin-contract';
 import BrandLoader from './BrandLoader';
 import DemoCodeGate from './DemoCodeGate';
 import WaveformSettingsPreview from './WaveformSettingsPreview';
-import { AudioLines, BookOpen, Check, ChevronDown, LockKeyhole, MessageSquareText, Plus, Puzzle, Settings2, SlidersHorizontal, TextCursorInput, ArrowUpRight, Mail } from 'lucide-react';
+import { ArrowUpRight, AudioLines, BookOpen, Check, ChevronDown, ClipboardCheck, Images, Layers, LibraryBig, LockKeyhole, Mail, MessageSquareText, Mic, Plus, Puzzle, Settings2, SlidersHorizontal, TextCursorInput } from 'lucide-react';
 
 type Account = { mode: AccountMode; user: AccountUser | null; creationSafetyEnabled?: boolean; safetyAdminFixture?: boolean; localUnmeteredTesting?: boolean; hostedTesterDemo?: boolean };
+
+const practiceIcons = { quiz: ClipboardCheck, lessons: BookOpen, flashcards: Layers, interview: Mic };
 
 function normalizedColor(value: string): string | null {
   const match = /^#?([0-9a-f]{6})$/i.exec(value.trim());
@@ -57,6 +60,7 @@ export default function AccountSettings() {
   const [practicePlugins, setPracticePlugins] = useState<PracticeId[]>([]);
   const [visualDisplay, setVisualDisplay] = useState<VisualDisplayConfiguration | null>(null);
   const [preparingVisual, setPreparingVisual] = useState(false);
+  const [pluginRevision, setPluginRevision] = useState(0);
   const [section, setSection] = useState<'appearance' | 'instructions' | 'plugins' | 'sharing' | 'account'>('appearance');
   const [adminTesting, setAdminTesting] = useState(false);
   const [accountAdminTesting, setAccountAdminTesting] = useState(false);
@@ -279,6 +283,7 @@ export default function AccountSettings() {
     || JSON.stringify(visualDisplay) !== JSON.stringify(waveform?.visualDisplay ?? null) || JSON.stringify(practicePlugins) !== JSON.stringify(waveform?.practicePlugins ?? []) || adminTesting !== accountAdminTesting;
   const savedReviewNeedsAttention = !!waveform && !dirty && !!safety.status && !['pending', 'allowed'].includes(safety.status);
   function discard() {
+    setPluginRevision(revision => revision + 1);
     const restoreSaveFocus = !!document.activeElement?.closest('.settings-savebar');
     photoRevision.current = null; setPreparingPhoto(false);
     setName(waveform?.name ?? ''); setVoice(waveform?.voice ?? DEFAULT_VOICE); setInitialPrompt(waveform?.initialPrompt ?? '');
@@ -368,27 +373,52 @@ export default function AccountSettings() {
               <button type="button" className="settings-inline-link" onClick={() => setSection('plugins')}><BookOpen aria-hidden="true" />Add reference documents with Knowledge</button>
             </section>
             <section className="settings-panel" hidden={section !== 'plugins'} aria-labelledby="plugins-heading">
-              <div className="settings-section-heading"><h2 id="plugins-heading">Plugins <span className="settings-badge">{PLUGINS.length + PRACTICE_CATALOG.length} available</span></h2><p>Choose what your waveform can do.</p></div>
-              <div className="settings-plugin-list">{PLUGINS.map(plugin => <article key={plugin.id} className="settings-plugin" aria-labelledby={'plugin-' + plugin.id + '-heading'}>
-                <span className="settings-plugin-icon">{plugin.id === 'knowledge' ? <BookOpen aria-hidden="true" /> : <TextCursorInput aria-hidden="true" />}</span>
-                <div className="settings-plugin-body"><div className="settings-plugin-heading"><h3 id={'plugin-' + plugin.id + '-heading'}>{plugin.name}</h3><span className="settings-plugin-state">{plugin.id === 'visual' ? visualDisplay ? 'Applied' : 'Not applied' : plugin.id === 'knowledge' ? 'Private library' : textPanel?.version === 2 ? 'Applied' : textPanel ? 'Legacy text saved' : 'Not applied'}</span></div>
-                  {plugin.id === 'visual' ? visualDisplay ? <VisualDisplaySettings key={`${account.user?.uid}:${draftId}`} value={visualDisplay} disabled={busy} onChange={setVisualDisplay} onPreparing={setPreparingVisual} /> : <><p>Show your pictures and accompanying text, primarily by voice.</p><button className="secondary-button" type="button" disabled={busy} onClick={() => setVisualDisplay({ type: 'visual', version: 1, images: [] })}>Apply Visual Display</button></> : plugin.id === 'knowledge' ? <><p>Answers grounded in your documents. Show relevant passages and sources with Text Box.</p>{waveform ? <Link className="secondary-button settings-manage-knowledge" href={`/account/knowledge?id=${waveform.id}`}>Manage documents <ArrowUpRight aria-hidden="true" /></Link> : <p className="field-help">Save your draft to add Knowledge.</p>}<p className="field-help">Your uploaded documents stay private to you.</p></>
-                    : <><p>Dictate notes or ask your waveform to display an answer.</p><div className="settings-plugin-actions"><button type="button" className="secondary-button" disabled={busy || textPanel?.version === 2} onClick={() => { setTextPanel({ type: 'text', version: 2 }); setMessage('Text Box applied. Save your draft to use it in your next conversation.'); setError(''); }}>{textPanel?.version === 2 ? 'Plugin applied' : 'Apply plugin'}</button>{textPanel && <button type="button" className="settings-inline-link" disabled={busy} onClick={() => { setTextPanel(null); setMessage('Text Box removed. Save your draft to keep this change.'); setError(''); }}>Remove Text Box</button>}</div><details className="settings-plugin-help"><summary>How it works</summary><p className="field-help">Say “Start writing,” “Stop writing,” or ask the waveform to put an answer in the box. The panel appears only when requested. Hiding it keeps voice connected. Each conversation starts with its own text.</p>{textPanel?.version === 1 && <p className="field-help">Your existing saved text is preserved. Apply Text Box to replace it with an empty, voice-controlled panel.</p>}</details></>}
-                </div>
-              </article>)}
-                {PRACTICE_CATALOG.map(plugin => <article key={plugin.id} className="settings-plugin" aria-labelledby={'plugin-' + plugin.id + '-heading'}>
-                  <span className="settings-plugin-icon"><BookOpen aria-hidden="true" /></span>
-                  <div className="settings-plugin-body">
-                    <div className="settings-plugin-heading"><h3 id={'plugin-' + plugin.id + '-heading'}>{plugin.name}</h3></div>
-                    <p>{plugin.description}</p>
-                    <label><input type="checkbox" checked={practicePlugins.includes(plugin.id)} disabled={busy}
-                      onChange={event => {
-                        const checked = event.target.checked;
-                        setPracticePlugins(ids => parsePracticePlugins(checked ? [...ids, plugin.id] : ids.filter(id => id !== plugin.id)) ?? ids);
-                      }} /> Apply {plugin.name}</label>
-                    <p className="field-help">Available in your private draft preview after saving.</p>
-                  </div>
-                </article>)}
+              <div className="settings-section-heading">
+                <h2 id="plugins-heading">Plugins <span className="settings-badge">{PLUGINS.length + PRACTICE_CATALOG.length} available</span></h2>
+                <p>Add capabilities to this waveform. Choose <strong>Save draft</strong> to keep plugin changes.</p>
+              </div>
+              <div className="settings-plugin-list" key={`${account.user.uid}:${draftId}:${pluginRevision}`}>
+                <PluginSettingsCard id="text" name={PLUGINS[0].name} icon={TextCursorInput}
+                  description="Dictate notes or ask your waveform to put an answer in a text panel."
+                  action={{
+                    installed: textPanel?.version === 2, saved: waveform?.textPanel?.version === 2,
+                    removed: !textPanel && !!waveform?.textPanel, legacy: textPanel?.version === 1, disabled: busy,
+                    onInstall: () => { setTextPanel({ type: 'text', version: 2 }); setMessage(''); setError(''); },
+                    onRemove: () => { setTextPanel(null); setMessage(''); setError(''); },
+                  }}>
+                  <details className="settings-plugin-help">
+                    <summary>How it works</summary>
+                    <p className="field-help">Say “Start writing,” “Stop writing,” or ask the waveform to put an answer in the box. The panel appears only when requested. Hiding it keeps voice connected. Each conversation starts with its own text.</p>
+                    {textPanel?.version === 1 && <p className="field-help">Installing Text Box replaces your legacy text with an empty, voice-controlled panel when you save.</p>}
+                  </details>
+                </PluginSettingsCard>
+                <PluginSettingsCard id="knowledge" name={PLUGINS[1].name} icon={LibraryBig}
+                  description="Give answers grounded in your private documents. Use Text Box to show relevant passages and sources.">
+                  {waveform ? <Link className="secondary-button settings-plugin-primary" href={`/account/knowledge?id=${waveform.id}`}>Manage documents <ArrowUpRight aria-hidden="true" /></Link>
+                    : <p className="field-help">Save your draft to start adding documents.</p>}
+                </PluginSettingsCard>
+                <PluginSettingsCard id="visual" name={PLUGINS[2].name} icon={Images}
+                  description="Show pictures, maps and accompanying text by voice."
+                  action={{
+                    installed: !!visualDisplay, saved: !!waveform?.visualDisplay,
+                    removed: !visualDisplay && !!waveform?.visualDisplay, disabled: busy, removalDisabled: preparingVisual,
+                    onInstall: () => setVisualDisplay({ type: 'visual', version: 1, images: [] }),
+                    onRemove: () => setVisualDisplay(null),
+                  }}>
+                  {visualDisplay && <VisualDisplaySettings value={visualDisplay} disabled={busy} onChange={setVisualDisplay} onPreparing={setPreparingVisual} />}
+                </PluginSettingsCard>
+                {PRACTICE_CATALOG.map(plugin => {
+                  const installed = practicePlugins.includes(plugin.id);
+                  const saved = waveform?.practicePlugins?.includes(plugin.id) ?? false;
+                  return <PluginSettingsCard key={plugin.id} id={plugin.id} name={plugin.name} icon={practiceIcons[plugin.id]}
+                    description={plugin.description} action={{
+                      installed, saved, removed: !installed && saved, disabled: busy,
+                      onInstall: () => setPracticePlugins(ids => parsePracticePlugins([...ids, plugin.id]) ?? ids),
+                      onRemove: () => setPracticePlugins(ids => ids.filter(id => id !== plugin.id)),
+                    }}>
+                    <p className="field-help">Available in your private draft preview.</p>
+                  </PluginSettingsCard>;
+                })}
               </div>
               {waveform && section === 'plugins' && <PluginAccessSettings key={waveform.id} id={waveform.id}
                 applied={['knowledge', ...(waveform.textPanel ? ['text' as const] : []), ...(waveform.visualDisplay?.images.length ? ['visual' as const] : [])]} />}

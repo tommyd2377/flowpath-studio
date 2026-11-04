@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import WebSocket from 'ws';
 import { createVoiceServer } from '../lib/voice-server';
-import { voiceSessionConfig } from '../lib/voice-config';
+import { WAVEFORM_GREETING_INSTRUCTIONS, voiceSessionConfig } from '../lib/voice-config';
 
 const origin = 'http://127.0.0.1:3220';
 const sdp = 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n';
@@ -126,12 +126,14 @@ test('saved instructions are loaded server-side per conversation and the persona
   assert.equal((await server.POST(privateRequest('POST', waveformId, { sessionId: first, sdp }))).status, 201);
   const firstConfig = JSON.parse(String(calls[0].options.body)).session;
   assert.match(firstConfig.instructions, /synthetic library assistant/);
-  assert.deepEqual(firstConfig.input, []);
+  assert.deepEqual(firstConfig.input, [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: WAVEFORM_GREETING_INSTRUCTIONS }] }]);
   assert.equal(firstConfig.store, false);
   assert.equal(firstConfig.audio.output.voice, 'meridian');
   initialPrompt = 'You are the synthetic garden assistant.';
   assert.equal(sockets[0].sent.length, 0, 'editing settings sends no instructions into an active conversation');
   sockets[0].event({ type: 'session.started' });
+  assert.equal(sockets[0].sent[0].type, 'session.commentary.append');
+  assert.equal(sockets[0].sent[0].content, WAVEFORM_GREETING_INSTRUCTIONS);
   assert.match(String(sockets[0].sent[0].content), /saved waveform identity/);
   assert.equal((await server.DELETE(privateRequest('DELETE', waveformId, { sessionId: first }))).status, 200);
   const second = randomUUID();
@@ -234,6 +236,7 @@ test('create sends one audio-only GPT-Live request with managed reasoning and no
   sockets[0].event({ type: 'session.started' });
   sockets[0].event({ type: 'session.started' });
   assert.equal(sockets[0].sent.filter(event => event.event_id === 'flowpath_greeting').length, 1);
+  assert.equal(sockets[0].sent.find(event => event.event_id === 'flowpath_greeting')?.type, 'session.commentary.append');
   assert.equal((await server.DELETE(request('DELETE', { sessionId }))).status, 200);
   assert.equal(calls.length, 1, 'confirmed sideband close needs no REST fallback');
 });

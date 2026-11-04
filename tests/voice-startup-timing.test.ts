@@ -45,3 +45,40 @@ test('permission snapshot cannot be filled from a late query after capture began
   timing.permission('granted');
   assert.equal(timing.snapshot().permissionBeforeCapture, 'prompt');
 });
+
+test('readiness preparation has separate finite, rounded, click-relative timing and is copied on snapshot', () => {
+  const timing = createStartupTiming(100.25, () => 101);
+  timing.mark('readiness_wait_started');
+  timing.preparation('ready', 25.08, 80.12);
+  timing.mark('prepared_readiness_used');
+  assert.deepEqual(timing.snapshot().readinessPreparation, {
+    source: 'ready', durationMs: 55, startedBeforeClickMs: 75.2, completedBeforeClickMs: 20.1,
+  });
+  const snapshot = timing.snapshot();
+  snapshot.readinessPreparation!.durationMs = 999;
+  timing.preparation('cold', 0, 999);
+  assert.equal(timing.snapshot().readinessPreparation?.durationMs, 55);
+  assert.doesNotMatch(JSON.stringify(timing.snapshot()), /transcript|secret|token|sdp/);
+});
+
+test('preparation durations clamp negative values; invalid or late input is ignored', () => {
+  const timing = createStartupTiming(100, () => 110);
+  timing.preparation('secret' as 'ready', 1, 2);
+  timing.preparation('ready', NaN, 2);
+  timing.preparation('ready', 1, Infinity);
+  assert.equal(timing.snapshot().readinessPreparation, undefined);
+  timing.preparation('pending', 130, 120);
+  assert.deepEqual(timing.snapshot().readinessPreparation, {
+    source: 'pending', durationMs: 0, startedBeforeClickMs: 0, completedBeforeClickMs: 0,
+  });
+  const stopped = createStartupTiming(100, () => 110);
+  stopped.finish();
+  stopped.preparation('cold', 0, 100);
+  assert.equal(stopped.snapshot().readinessPreparation, undefined);
+});
+
+test('preparation numbers remain finite for extreme inputs', () => {
+  const timing = createStartupTiming(0, () => 0);
+  timing.preparation('cold', 0, Number.MAX_VALUE);
+  assert.ok(Number.isFinite(timing.snapshot().readinessPreparation?.durationMs));
+});

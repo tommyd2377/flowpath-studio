@@ -7,16 +7,39 @@ import { PaidMemoryDatabase } from './paid-fixture';
 import type { Waveform } from '../lib/account-model';
 
 function fixture(visualDisplay?: Waveform['visualDisplay']) {
-  const db = new PaidMemoryDatabase(); let revoked = false;
+  const db = new PaidMemoryDatabase(); let revoked = false, lookups = 0, followUps = 0;
   const waveform: Waveform = { id: FRANKLIN_DEMO_ID, name: 'Benjamin Franklin', initialPrompt: 'Private approved instructions', voice: 'marin', accentColor: '#3a66ff', profilePhoto: null, updatedAt: new Date(0).toISOString(), ...(visualDisplay ? { visualDisplay } : {}) };
   db.rows.set('ownerWaveforms/founder', waveform); db.rows.set('waveformMembers/founder', { state: 'active' });
-  const demo = createCuratedDemo(db, { now: () => 1000, findOwner: async () => 'founder', requireAllowed: async (_tx, uid, candidate) => {
+  const demo = createCuratedDemo(db, { now: () => 1000, findOwner: async () => { lookups++; return 'founder'; },
+    followUp: async () => { followUps++; }, requireAllowed: async (_tx, uid, candidate) => {
     assert.equal(uid, 'founder'); if (revoked || creationContentDigest(candidate) !== creationContentDigest(waveform)) throw new CreationSafetyError('Approval missing or revoked');
   } });
   const visitor = publicVoiceOwner(new Request('https://voice.example/api/session', { headers: { cookie: `${PUBLIC_VOICE_COOKIE}=${'a'.repeat(64)}` } }), FRANKLIN_DEMO_ID)!;
   const owner = { ...visitor, contentDigest: creationContentDigest(waveform), demoSource: { ownerUid: 'founder' } };
-  return { db, demo, waveform, owner, revoke: () => { revoked = true; } };
+  return { db, demo, waveform, owner, lookups: () => lookups, followUps: () => followUps, revoke: () => { revoked = true; } };
 }
+test('read-only preparation never bootstraps or enqueues, and rechecks snapshot authority', async () => {
+  const f = fixture();
+  const before = structuredClone(f.db.rows);
+  assert.equal(await f.demo.published(true), null);
+  assert.equal(f.lookups(), 0);
+  assert.equal(f.followUps(), 0);
+  assert.deepEqual(f.db.rows, before);
+  const snapshot = await f.demo.published();
+  assert.ok(snapshot);
+  assert.equal(f.lookups(), 1);
+  assert.equal(f.followUps(), 1);
+  const published = structuredClone(f.db.rows);
+  assert.deepEqual(await f.demo.published(true), snapshot);
+  assert.equal(f.lookups(), 1);
+  assert.equal(f.followUps(), 1);
+  assert.deepEqual(f.db.rows, published);
+  f.revoke();
+  await assert.rejects(f.demo.published(true), /revoked/);
+  f.db.rows.set('waveformMembers/founder', { state: 'revoked' });
+  await assert.rejects(f.demo.published(true), /unavailable/);
+  assert.equal(f.followUps(), 1);
+});
 test('one explicitly approved snapshot stays public when private drafts change; arbitrary waveforms never acquire visitor identity', async () => {
   const f = fixture(); const [a, b] = await Promise.all([f.demo.published(), f.demo.published()]);
   assert.deepEqual(a, b);

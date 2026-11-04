@@ -4,8 +4,12 @@ import { appearanceTheme } from '@/lib/appearance-theme';
 import { WAVEFORM_DEFAULT_COLOR } from '@/lib/account-model';
 import AppStartup from '@/components/AppStartup';
 
+const appName = 'FlowPath Studio';
+
 export const metadata: Metadata = {
-  title: 'FlowPath — The Voice',
+  title: appName,
+  applicationName: appName,
+  other: { 'apple-mobile-web-app-title': appName },
   description: 'A quiet space for a natural voice conversation.',
   icons: { icon: '/brand/flowpath-icon-square.png' },
 };

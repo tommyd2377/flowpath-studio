@@ -13,7 +13,7 @@ import { hostedTesterDemo, hostedTesterRuntime } from './tester-voice-config';
 import { createTesterVoiceStore } from './tester-voice-store';
 import { scheduleTesterVoiceDeadline } from './voice-deadline';
 import { scheduleLocalVoiceDeadline } from './local-voice-deadline';
-import { superviseLocalVoice } from './local-voice-supervisor';
+import { prewarmLocalVoiceSupervisor, superviseLocalVoice } from './local-voice-supervisor';
 import { publicVoiceOwner } from './public-voice-identity';
 import { creationReviewStore, creationSafetyEnabled, creationSafetyRuntimeVersion } from './creation-runtime';
 import { creationContentDigest, CreationSafetyError } from './creation-safety';
@@ -89,7 +89,7 @@ export function getProductionVoiceServer(resolveWaveform?: Resolver, resolveAdmi
     resolveAdmin: request => shared.flowpathProductionAdminResolver?.(request) ?? Promise.resolve(null),
     production: {
       store,
-      ...(local ? { supervise: superviseLocalVoice } : {}),
+      ...(local ? { supervise: superviseLocalVoice, prepareSupervisor: prewarmLocalVoiceSupervisor } : {}),
       ...(testerDemo && 'heartbeat' in store ? { heartbeat: store.heartbeat, preCancel: store.preCancel, beginConnection: store.beginConnection,
         confirmConnection: async (id: string) => {
           const meter = await store.connectionDeadline(id);

@@ -28,7 +28,7 @@ test('background approval is reused on save; available Text Box stays absent bef
   await settingsSection(page, 'instructions');
   await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('Synthetic instructions.');
   await settingsSection(page, 'plugins');
-  await page.getByRole('button', { name: 'Apply plugin', exact: true }).click();
+  await page.getByRole('button', { name: 'Install Text Box', exact: true }).click();
   await expect(page.getByLabel('Text below the waveform (optional)', { exact: true })).toHaveCount(0);
   await expect(page.locator('[data-creation-safety]')).toHaveAttribute('data-creation-safety', 'allowed');
   const before = reviews;

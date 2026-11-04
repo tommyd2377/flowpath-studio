@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { PUBLIC_GREETING_INSTRUCTIONS, PUBLIC_WELCOME_INSTRUCTIONS, VOICE_BACKEND_MODEL, VOICE_BACKEND_MAX_OUTPUT_TOKENS, voiceSessionConfig } from '../lib/voice-config';
+import { PUBLIC_GREETING_INSTRUCTIONS, PUBLIC_WELCOME_INSTRUCTIONS, VOICE_BACKEND_MODEL, VOICE_BACKEND_MAX_OUTPUT_TOKENS, WAVEFORM_GREETING_INSTRUCTIONS, voiceSessionConfig } from '../lib/voice-config';
 
 test('the public voice explains the current product without claiming installed capabilities', () => {
   const { instructions } = voiceSessionConfig();
@@ -27,6 +27,7 @@ test('a personal waveform keeps its saved identity without the public welcome pi
 });
 
 test('the public greeting invites a general conversation and points to both visible links before listening', () => {
+  assert.deepEqual(voiceSessionConfig().input, [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: PUBLIC_GREETING_INSTRUCTIONS }] }]);
   assert.match(PUBLIC_GREETING_INSTRUCTIONS, /talk with an AI voice and make your own personal waveform/);
   assert.match(PUBLIC_GREETING_INSTRUCTIONS, /any general question/);
   assert.match(PUBLIC_GREETING_INSTRUCTIONS, /interrupt you and talk naturally at any time/);
@@ -67,7 +68,8 @@ test('managed delegation defaults to GPT-6 Luna with bounded output and no reaso
   assert.match(config.instructions, /Let me think about that for a moment/);
   assert.match(config.instructions, /express it naturally in the saved persona/);
   assert.match(backend.instructions, /fact need not appear in the saved persona prompt/);
-  assert.equal(config.store, false); assert.deepEqual(config.input, []);
+  assert.equal(config.store, false);
+  assert.deepEqual(config.input, [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: WAVEFORM_GREETING_INSTRUCTIONS }] }]);
 });
 
 test('only an explicitly enabled Text Box grants its local tools and transcript stream', () => {
@@ -107,4 +109,13 @@ test('only an explicitly enabled Text Box grants its local tools and transcript 
       { type: 'response.event', response_event: 'response.incomplete' },
     ]);
   }
+});
+
+
+test('practice uses general knowledge without the private Knowledge tool', () => {
+  const config = voiceSessionConfig({ name: 'Guide', initialPrompt: '', practicePlugins: ['quiz', 'lessons', 'flashcards', 'interview'] });
+  assert.deepEqual(config.delegation.responses.tools.map(tool => tool.name), ['update_practice']);
+  assert.match(config.instructions, /use your general knowledge and conversation context first/);
+  assert.match(config.delegation.responses.instructions, /without a document search and send an empty sourceId/);
+  assert.match(config.delegation.responses.instructions, /ask before switching to general knowledge/);
 });

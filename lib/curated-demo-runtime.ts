@@ -5,7 +5,7 @@ import { createCuratedDemo } from './curated-demo';
 import { FRANKLIN_DEMO_ID } from './public-voice-identity';
 import { CreationSafetyError } from './creation-safety';
 
-const demo = createCuratedDemo(applicationDatabase(), {
+export const curatedDemo = createCuratedDemo(applicationDatabase(), {
   findOwner: async () => {
     const project = configuredFirebaseProjectId();
     if (process.env.FLOWPATH_ACCOUNT_MODE !== 'firebase' || !project) return null;
@@ -17,10 +17,5 @@ const demo = createCuratedDemo(applicationDatabase(), {
     if (!creationSafetyEnabled()) throw new CreationSafetyError('The demonstration needs safety review.', 503);
     return creationReviewStore().requireSnapshotAllowed(tx, uid, waveform);
   },
+  followUp: async (uid, waveform) => { await creationReviewStore().followUp(uid, waveform); },
 });
-
-export const curatedDemo = { ...demo, async published() {
-  const row = await demo.published();
-  if (row) await creationReviewStore().followUp(row.ownerUid, row.waveform);
-  return row;
-} };

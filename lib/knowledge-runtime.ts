@@ -62,6 +62,7 @@ export async function resolveDemoVisitor(request: Request) {
     ? { ...visitor, tester: { uid: identity.owner.uid, accountSessionId: identity.accountSessionId, founder: false } } : visitor;
 }
 export async function withWaveformKnowledge(request: Request, id: string) {
+  const readOnly = request.method === 'GET' && request.headers.get('X-FlowPath-Prepare') === '1';
   if (new URL(request.url).searchParams.get('preview') === 'published') {
     const { getPaidStore, paidEnabled } = await import('./paid-runtime');
     const preview = paidEnabled ? await resolvePublishedPreview(request, id, { resolveAdmin: accountServer.resolveAdmin,
@@ -75,20 +76,40 @@ export async function withWaveformKnowledge(request: Request, id: string) {
     if (id !== FRANKLIN_DEMO_ID) return null;
     const visitor = publicVoiceOwner(request, id);
     if (!visitor) return null;
-    const row = request.method === 'DELETE' ? await curatedDemo.cleanupSnapshot() : await curatedDemo.published();
+    const row = request.method === 'DELETE' ? await curatedDemo.cleanupSnapshot() : await curatedDemo.published(readOnly);
     if (!row) return null;
-    const projected = request.method === 'DELETE' ? { waveform: curatedVisitorVoice(row.waveform), revision: undefined, locked: [], expiresAt: undefined }
+    const projected = readOnly || request.method === 'DELETE' ? { waveform: curatedVisitorVoice(row.waveform), revision: undefined, locked: [], expiresAt: undefined }
       : await curatedPluginPlayback(request, row.ownerUid, id, curatedVisitorVoice(row.waveform));
     return { ownerUid: row.ownerUid, waveform: projected.waveform, pluginEvents: projected.locked.length > 0,
+      ...(request.method === 'POST' && localPluginAccess() ? { pluginPlayback: { locked: projected.locked,
+        ...(projected.expiresAt === undefined ? {} : { expiresAt: projected.expiresAt }),
+        textPanel: projected.waveform.textPanel ?? null, visualDisplay: null } } : {}),
       publicVisitor: { ...await resolveDemoVisitor(request), ...visitor, contentDigest: row.contentDigest, ...(projected.revision === undefined ? {} : { pluginRevision: projected.revision }), ...(projected.expiresAt === undefined ? {} : { pluginExpiresAt: projected.expiresAt }), demoSource: { ownerUid: row.ownerUid } },
-      isCurrent: async () => request.method === 'DELETE' || !!await curatedDemo.published() };
+      isCurrent: async () => request.method === 'DELETE' || !!await curatedDemo.published(readOnly) };
   }
-  const knowledge = request.method !== 'DELETE' && available() && await knowledgeStore.enabled({
+  // Only creation uses the registered Knowledge tool; readiness and cleanup do not.
+  const checkKnowledge = () => request.method === 'POST' && available() ? knowledgeStore.enabled({
     uid: resolved.ownerUid, waveformId: id, isCurrent: resolved.isCurrent,
-  });
+  }) : Promise.resolve(false);
+  let knowledge: boolean;
+  let view: Awaited<ReturnType<typeof ownerPluginPlayback>> | undefined;
+  if (request.method === 'POST' && localPluginAccess()) {
+    // Both paths retain their own fresh authorization and exact-content checks.
+    const [knowledgeResult, viewResult] = await Promise.allSettled([
+      checkKnowledge(), ownerPluginPlayback(request, id, resolved.waveform),
+    ]);
+    if (knowledgeResult.status === 'rejected') throw knowledgeResult.reason;
+    if (viewResult.status === 'rejected') throw viewResult.reason;
+    knowledge = knowledgeResult.value;
+    view = { ...viewResult.value, waveform: { ...viewResult.value.waveform,
+      knowledge: knowledge && viewResult.value.allowed.includes('knowledge') } };
+  } else knowledge = await checkKnowledge();
   const waveform = { ...resolved.waveform, knowledge };
-  if (!localPluginAccess() || request.method === 'DELETE') return { ...resolved, waveform };
-  const view = await ownerPluginPlayback(request, id, waveform);
+  if (readOnly || !localPluginAccess() || request.method === 'DELETE') return { ...resolved, waveform };
+  view ??= await ownerPluginPlayback(request, id, waveform);
   return { ...resolved, waveform: view.waveform, pluginRevision: view.revision, pluginExpiresAt: view.expiresAt,
+    ...(request.method === 'POST' ? { pluginPlayback: { locked: view.locked,
+      ...(view.expiresAt === undefined ? {} : { expiresAt: view.expiresAt }),
+      textPanel: view.waveform.textPanel ?? null, visualDisplay: view.waveform.visualDisplay ?? null } } : {}),
     pluginEvents: view.locked.length > 0, contentDigest: creationContentDigest(waveform) };
 }

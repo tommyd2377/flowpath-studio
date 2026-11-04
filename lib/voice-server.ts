@@ -1,9 +1,10 @@
 import WebSocket from 'ws';
-import { PUBLIC_GREETING_INSTRUCTIONS, VOICE_SESSION_SECONDS, voiceSessionConfig, type WaveformPrompt } from './voice-config';
+import { VOICE_SESSION_SECONDS, voiceGreetingInstructions, voiceSessionConfig, type WaveformPrompt } from './voice-config';
 import { isAllowedRequest } from './request-origin';
 import { isUnmeteredLocalTest, VoiceAdmissionError, type ProductionVoiceStore, type StoredVoice, type VoiceOwner, type VoicePolicy } from './production-voice-store';
 import { CreationSafetyError, creationContentDigest } from './creation-safety';
 import { serverAnalytics } from './analytics-runtime';
+import type { ProtectedPlugin } from './plugin-access';
 
 type Socket = Pick<WebSocket, 'readyState' | 'send' | 'terminate'> & {
   on(event: 'open' | 'close', listener: () => void): unknown;
@@ -11,7 +12,7 @@ type Socket = Pick<WebSocket, 'readyState' | 'send' | 'terminate'> & {
   on(event: 'message', listener: (data: WebSocket.RawData) => void): unknown;
 };
 export type Finalization = { finalized: boolean; seconds?: number };
-export type VoiceControl = { ready: Promise<void>; closed: Promise<Finalization>; close(): Promise<Finalization>; dispose(): void };
+export type VoiceControl = { ready: Promise<void>; closed: Promise<Finalization>; close(): Promise<Finalization>; dispose(): void; prepared?: boolean };
 type Options = {
   enabled?: () => boolean;
   apiKey?: () => string | undefined;
@@ -41,6 +42,8 @@ type Options = {
     scheduleDeadline: (id: string, expiresAt: number) => Promise<void>;
     /** Local unlimited calls keep an independent observer alive across web-server shutdown. */
     supervise?: (id: string, onStarted: () => void) => VoiceControl;
+    /** Local process setup only; never opens a provider connection or reserves usage. */
+    prepareSupervisor?: () => void;
     preCancel?: (owner: VoiceOwner, id: string) => Promise<void>;
     beginConnection?: (owner: VoiceOwner, id: string) => Promise<StoredVoice>;
     confirmConnection?: (id: string) => Promise<{ expiresAt: number }>;
@@ -49,6 +52,7 @@ type Options = {
   resolveWaveform?: (request: Request, id: string) => Promise<{
     ownerUid: string; waveform: WaveformPrompt; accountSessionId?: string; isCurrent: () => boolean | Promise<boolean>;
     pluginEvents?: boolean; pluginRevision?: string; pluginExpiresAt?: number; contentDigest?: string;
+    pluginPlayback?: { locked: ProtectedPlugin[]; expiresAt?: number; textPanel: WaveformPrompt['textPanel'] | null; visualDisplay: WaveformPrompt['visualDisplay'] | null };
     paid?: VoiceOwner['paid']; publishedRevision?: number; publicVisitor?: VoiceOwner;
   } | null>;
   resolvePublicVisitor?: (request: Request) => VoiceOwner | null | Promise<VoiceOwner | null>;
@@ -78,7 +82,7 @@ const json = (body: object, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store' },
 });
 
-type StartupTimingName = 'fp_scope' | 'fp_admission' | 'fp_deadline' | 'fp_provider' | 'fp_persist' | 'fp_supervision';
+type StartupTimingName = 'fp_scope' | 'fp_admission' | 'fp_deadline' | 'fp_provider' | 'fp_persist' | 'fp_supervision' | 'fp_prewarmed';
 async function withStartupTiming(request: Request, run: (measure: <T>(name: StartupTimingName, work: () => Promise<T>) => Promise<T>) => Promise<Response>) {
   const enabled = request.headers.get('X-FlowPath-Startup-Timing') === '1';
   const durations = new Map<StartupTimingName, number>();
@@ -215,10 +219,8 @@ function attachControl(session: Conversation, options: Options, onFatal: () => v
         greeted = true;
         clearTimeout(session.startTimer);
         socket.send(JSON.stringify({
-          type: 'session.instructions.append', event_id: 'flowpath_greeting', delegation_id: null,
-          content: session.waveformId
-            ? 'Greet the visitor now in English using the saved waveform identity and conversational style. Keep it brief, invite them to talk, then pause and listen. Do not claim unavailable capabilities.'
-            : PUBLIC_GREETING_INSTRUCTIONS,
+          type: 'session.commentary.append', event_id: 'flowpath_greeting', delegation_id: null,
+          content: voiceGreetingInstructions(Boolean(session.waveformId)),
         }));
       } else if (event.type === 'session.delegation.created') {
         const delegation = record(event.delegation);
@@ -280,7 +282,7 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
       || params.getAll('preview').length > 1 || preview !== null && (!params.has('waveformId') || !['draft', 'published'].includes(preview));
     const id = params.get('waveformId');
 
-    // These are independent read-only lookups; all identity/content checks and
+    // These are independent scope lookups; all identity/content checks and
     // the later transactional admission still run. Retain each result's error
     // handling order and handle rejected promises even on an early return.
     const adminLookup = Promise.resolve().then(() => options.resolveAdmin?.(request));
@@ -437,6 +439,7 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
               let complete = false;
               try {
                 await control.ready;
+                if ((session.durable?.pluginExpiresAt ?? Infinity) <= now()) throw new Error('Plugin access expired');
                 controller.enqueue(encoder.encode(JSON.stringify(firstFrame) + '\n'));
                 const meter = await started;
                 controller.enqueue(encoder.encode(JSON.stringify(meter) + '\n'));
@@ -577,6 +580,10 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
           return json({ enabled: false, message: error instanceof VoiceAdmissionError ? error.message : 'Voice admission is temporarily unavailable.',
           ...(error instanceof VoiceAdmissionError && error.normalLimit && access.admin && !access.admin.override ? { adminLimit: true } : {}) }); }
         const configured = Boolean(key());
+        const owner = productionOwner(access);
+        if (configured && request.headers.get('X-FlowPath-Prepare') === '1' && owner && isUnmeteredLocalTest(owner, policy)) {
+          options.production.prepareSupervisor?.();
+        }
         return json({ enabled: configured, ...((options.requestScopedDemo ? productionOwner(access)?.tester?.founder : access.admin) ? { adminEligible: true } : {}), ...(!configured ? { message: 'The voice connection is not configured.' } : {}) });
       }
       if (blocked) return json({ enabled: false, message: cleanupMessage });
@@ -608,8 +615,9 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
       let body: Record<string, unknown>;
       try { body = await readBody(request); }
       catch { return json({ error: 'Invalid audio connection request.' }, 400); }
-      if (Object.keys(body).some(name => name !== 'sdp' && name !== 'sessionId' && name !== 'diagnostics')
+      if (Object.keys(body).some(name => name !== 'sdp' && name !== 'sessionId' && name !== 'diagnostics' && name !== 'dcid')
         || (body.diagnostics !== undefined && typeof body.diagnostics !== 'boolean')
+        || (body.dcid !== undefined && (typeof body.dcid !== 'number' || !Number.isInteger(body.dcid) || body.dcid < 0 || body.dcid > 65_534))
         || !validId(body.sessionId) || !audioSdp(body.sdp)) return json({ error: 'Invalid audio connection request.' }, 400);
       // The explicit browser opt-in only widens its event subscription. Nothing is retained here.
       // Snapshot saved instructions once. Edits only affect subsequent conversations.
@@ -671,7 +679,7 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
         const { response, payload } = await measure('fp_provider', async () => {
           const response = await requestProvider('https://api.openai.com/v1/live/sessions', {
             method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session: config, transport: { type: 'webrtc', sdp: body.sdp } }),
+            body: JSON.stringify({ session: config, transport: { type: 'webrtc', sdp: body.sdp, ...(body.dcid === undefined ? {} : { dcid: body.dcid }) } }),
             redirect: 'error', signal: AbortSignal.timeout(15_000),
           });
           const payload: Record<string, unknown> = response.ok ? await readJsonStream(response.body) : await readJsonStream(response.body).catch(() => ({}));
@@ -708,7 +716,7 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
           // The provider primary/data channel owns greeting and local tools. No
           // socket or timer is left running after this request returns.
           if (session.canceled || request.signal.aborted || access.personal && !await access.personal.isCurrent()
-            || !audioSdp(record(payload.transport).sdp)) {
+            || (owner?.pluginExpiresAt ?? Infinity) <= now() || !audioSdp(record(payload.transport).sdp)) {
             await closeCreatedDemo(session);
             release(session);
             return json({ error: 'The conversation was canceled.' }, 409);
@@ -717,6 +725,7 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
           release(session);
           // SDP is not released until the request-owned observer is attached.
           return connectionResponse(session, request, { sdp: record(payload.transport).sdp, sessionId: session.id, expiresAt,
+            ...(access.personal?.pluginPlayback ? { pluginPlayback: access.personal.pluginPlayback } : {}),
             browserControl: true, heartbeatMs: 10_000,
             adminOverride: owner?.tester?.founder === true, adminEligible: owner?.tester?.founder === true }, 201);
         }
@@ -730,7 +739,10 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
           session.control = session.durable?.admin?.unmeteredLocal && options.production?.supervise
             ? options.production.supervise(session.id, () => { clearTimeout(session.startTimer); })
             : attachControl(session, options, () => { void close(session); });
-          await session.control.ready;
+          // This nested duration identifies an already-running helper; it is
+          // included in fp_supervision, not additional startup time.
+          if (session.control.prepared) await measure('fp_prewarmed', () => session.control!.ready);
+          else await session.control.ready;
         });
         void session.control!.closed.then(async result => {
           await session.connected?.catch(() => undefined);
@@ -741,11 +753,12 @@ export function createVoiceServer(options: Options = {}, active: VoiceController
           else void close(session);
         });
         const canceled = session.canceled || request.signal.aborted || access.admin && !await access.isAdminCurrent?.() || access.personal && !await access.personal.isCurrent();
-        if (canceled || !audioSdp(record(payload.transport).sdp)) {
+        if (canceled || (owner?.pluginExpiresAt ?? Infinity) <= now() || !audioSdp(record(payload.transport).sdp)) {
           await close(session);
           return json({ error: canceled ? 'The conversation was canceled.' : 'The voice service returned an invalid connection.' }, canceled ? 409 : 502);
         }
         return json({ sdp: record(payload.transport).sdp, sessionId: session.id, expiresAt,
+          ...(access.personal?.pluginPlayback ? { pluginPlayback: access.personal.pluginPlayback } : {}),
           ...(access.admin ? { adminEligible: true, adminOverride: access.admin.override, adminDeadline: session.durable?.admin?.deadline ?? expiresAt } : {}) }, 201);
       } catch {
         if (session.providerId && options.requestScopedDemo && session.durable) {

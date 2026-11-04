@@ -127,7 +127,7 @@ export default function KnowledgeSettings({ waveformId }: { waveformId?: string 
         {result.passages.map(p => <article key={p.id}><blockquote>{p.quote}</blockquote><p>{p.filename}</p></article>)}
       </section>}
       <p><Link className="secondary-button" href={`/w/${view.waveformId}`}>Preview draft</Link></p>
-      <p className="field-help">Knowledge answers aloud without opening a panel. Apply Text Box in waveform settings to show passages and sources. Changes apply to new conversations; disabling or removing a document also blocks future searches in an existing call.</p>
+      <p className="field-help">Knowledge answers aloud without opening a panel. Install Text Box and save your waveform draft to show passages and sources. Changes apply to new conversations; disabling or removing a document also blocks future searches in an existing call.</p>
     </>}
   </main>;
 }
