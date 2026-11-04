@@ -31,7 +31,12 @@ type Safety = {
 };
 
 /** Provider IDs never leave this server boundary. Uploads are private, immutable versions. */
-export function createKnowledgeStore(database: VoiceDatabase, provider: KnowledgeProvider, now = Date.now, safety?: Safety, storage?: KnowledgeStorageBudget) {
+export function createKnowledgeStore(database: VoiceDatabase, provider: KnowledgeProvider, now = Date.now, safety?: Safety, storage?: KnowledgeStorageBudget, reviewPaused = false) {
+  function heldForReview(index: Index, doc: StoredDocument) {
+    return reviewPaused && !!index.storeId && !!doc.fileId
+      && (doc.status === 'reviewing' || doc.status === 'manual-review' || doc.status === 'blocked' || doc.status === 'review-required');
+  }
+  const usable = (index: Index, doc: StoredDocument) => doc.status === 'ready' || heldForReview(index, doc);
   async function locate(tx: VoiceTransaction, scope: KnowledgeScope) {
     const key = scopedPath(scope);
     const scoped = await tx.get(key) as Index | null;
@@ -83,7 +88,13 @@ export function createKnowledgeStore(database: VoiceDatabase, provider: Knowledg
       try { await database.transaction(tx => safety.assertAllowed(tx, scope, doc)); }
       catch { doc.status = 'review-required'; doc.selected = false; doc.message = 'Safety review is required. Choose Review document safety before using this document.'; }
     }
+    for (const doc of projected.documents) {
+      if (!heldForReview(projected, doc)) continue;
+      doc.status = 'ready';
+      doc.message = 'Ready while creation review is paused.';
+    }
     const result = view(projected, available);
+    if (reviewPaused) result.creationReviewPaused = true;
     if (storage && scope.reviewIdentity?.owner.role === 'admin') result.storage = await database.transaction(tx => storage.view(tx));
     return result;
   }
@@ -93,7 +104,7 @@ export function createKnowledgeStore(database: VoiceDatabase, provider: Knowledg
     },
     async enabled(scope: KnowledgeScope) {
       const index = await read(scope);
-      for (const doc of index.documents.filter(d => d.status === 'ready' && d.selected)) {
+      for (const doc of index.documents.filter(d => usable(index, d) && d.selected)) {
         try { await database.transaction(async tx => { if (safety) await safety.assertAllowed(tx, scope, doc); if (storage) await storage.assertKnown(tx, scope.uid, doc.id); }); return true; } catch { /* Unreviewed files grant no tool. */ }
       }
       return false;
@@ -164,7 +175,7 @@ export function createKnowledgeStore(database: VoiceDatabase, provider: Knowledg
     async refresh(scope: KnowledgeScope, reviewExisting = false) {
       // A refresh only checks existing indexing jobs. It never creates/re-uploads/retries them.
       const index = await read(scope);
-      const due = index.documents.filter(d => (['preparing', 'uploading', 'reviewing', 'manual-review'].includes(d.status) || safety && reviewExisting && d.status === 'ready') && now() - d.checkedAt >= 3_000);
+      const due = index.documents.filter(d => !heldForReview(index, d) && (['preparing', 'uploading', 'reviewing', 'manual-review'].includes(d.status) || safety && reviewExisting && d.status === 'ready') && now() - d.checkedAt >= 3_000);
       for (const doc of due) {
         if (safety && doc.status === 'ready') {
           try { await database.transaction(tx => safety.assertAllowed(tx, scope, doc)); continue; } catch { /* New policy needs a review. */ }
@@ -229,7 +240,7 @@ export function createKnowledgeStore(database: VoiceDatabase, provider: Knowledg
     async select(scope: KnowledgeScope, id: string, selected: boolean) {
       await change(scope, async (row, tx) => {
         const doc = row.documents.find(d => d.id === id);
-        if (!doc || doc.status !== 'ready') throw new KnowledgeError('Only ready documents can be used.', 409);
+        if (!doc || !usable(row, doc)) throw new KnowledgeError('Only ready documents can be used.', 409);
         if (safety && selected) await safety.assertAllowed(tx, scope, doc);
         if (storage && selected) await storage.assertKnown(tx, scope.uid, doc.id);
         if (doc.selected !== selected) { doc.selected = selected; row.revision++; }
@@ -262,7 +273,7 @@ export function createKnowledgeStore(database: VoiceDatabase, provider: Knowledg
       return safeView(scope, await read(scope));
     },
     async search(scope: KnowledgeScope, query: string, signal?: AbortSignal): Promise<KnowledgeResult> {
-      const index = await read(scope), selected = index.documents.filter(d => d.status === 'ready' && d.selected);
+      const index = await read(scope), selected = index.documents.filter(d => usable(index, d) && d.selected);
       const docs = safety || storage ? await database.transaction(async tx => {
         const allowed: StoredDocument[] = [];
         for (const doc of selected) { try { if (safety) await safety.assertAllowed(tx, scope, doc); if (storage) await storage.assertKnown(tx, scope.uid, doc.id); allowed.push(doc); } catch { /* Exclude unreviewed legacy versions. */ } }

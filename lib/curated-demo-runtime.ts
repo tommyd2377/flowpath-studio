@@ -1,6 +1,6 @@
 import { applicationDatabase } from './application-database';
 import { configuredFirebaseProjectId, getFirebaseAccountServices } from './firebase-accounts';
-import { creationReviewStore, creationSafetyEnabled } from './creation-runtime';
+import { creationReviewStore, creationSafetyEnabled, creationSafetyPaused } from './creation-runtime';
 import { createCuratedDemo } from './curated-demo';
 import { FRANKLIN_DEMO_ID } from './public-voice-identity';
 import { CreationSafetyError } from './creation-safety';
@@ -13,7 +13,9 @@ export const curatedDemo = createCuratedDemo(applicationDatabase(), {
       .db.collection('ownerWaveforms').where('id', '==', FRANKLIN_DEMO_ID).limit(2).get();
     return result.size === 1 ? result.docs[0].id : null;
   },
+  existingOnly: creationSafetyPaused,
   requireAllowed: async (tx, uid, waveform) => {
+    if (creationSafetyPaused()) return;
     if (!creationSafetyEnabled()) throw new CreationSafetyError('The demonstration needs safety review.', 503);
     return creationReviewStore().requireSnapshotAllowed(tx, uid, waveform);
   },

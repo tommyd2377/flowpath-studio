@@ -8,7 +8,7 @@ import { createKnowledgeStore, knowledgeReviewCandidate } from './knowledge-stor
 import { openAIKnowledgeProvider, type KnowledgeProvider } from './knowledge-provider';
 import { createKnowledgeServer } from './knowledge-server';
 import { localAppOrigin } from './local-app-runtime';
-import { creationActor, creationReviewStore, creationSafetyEnabled } from './creation-runtime';
+import { creationActor, creationReviewStore, creationSafetyEnabled, creationSafetyPaused } from './creation-runtime';
 import { CreationSafetyError } from './creation-safety';
 import { curatedDemo } from './curated-demo-runtime';
 import { FRANKLIN_DEMO_ID, publicVoiceOwner } from './public-voice-identity';
@@ -40,7 +40,7 @@ export const knowledgeStore = createKnowledgeStore(applicationDatabase(), fixtur
     return (result.needsReview ? await store.runReview(result.record) : result.record).status;
   },
   assertAllowed: (tx, scope, doc) => creationReviewStore().requireAllowed(tx, scope.uid, knowledgeReviewCandidate(doc)).then(() => undefined),
-} : undefined, hosted ? createKnowledgeStorageBudget() : undefined);
+} : undefined, hosted ? createKnowledgeStorageBudget() : undefined, creationSafetyPaused());
 export const knowledgeServer = createKnowledgeServer({ store: knowledgeStore, available, requireAdultConsent: hosted, authorizeSearch: withKnowledgeAccess,
   publicOrigin: localAppOrigin() ? undefined : process.env.FLOWPATH_PUBLIC_ORIGIN,
   trustedProxyHost: process.env.FLOWPATH_TRUSTED_PROXY_HOST,

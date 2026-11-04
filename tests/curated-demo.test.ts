@@ -77,3 +77,21 @@ test('curated snapshot containing Visual never exposes its images/catalogue/tool
   await f.db.transaction(tx => f.demo.requireVoice(tx, f.owner));
   f.revoke(); await assert.rejects(f.demo.published(), /revoked/);
 });
+
+
+test('during the pause, curated publication serves only the stored snapshot and skips follow-up', async () => {
+  const f = fixture();
+  const paused = createCuratedDemo(f.db, {
+    existingOnly: () => true,
+    findOwner: async () => assert.fail('A private draft must not be captured'),
+    followUp: async () => assert.fail('No review work should be started'),
+    requireAllowed: async () => {},
+  });
+  assert.equal(await paused.published(), null);
+  const published = await f.demo.published();
+  f.db.rows.set('ownerWaveforms/founder', { ...f.waveform, initialPrompt: 'Unreviewed private edit' });
+  assert.deepEqual(await paused.published(), published);
+  await f.db.transaction(tx => paused.requireVoice(tx, f.owner));
+  f.db.rows.set('waveformMembers/founder', { state: 'revoked' });
+  await assert.rejects(paused.published(), /unavailable/);
+});

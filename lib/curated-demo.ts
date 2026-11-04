@@ -19,6 +19,7 @@ export function createCuratedDemo(database: VoiceDatabase, options: {
   findOwner(): Promise<string | null>;
   requireAllowed(tx: VoiceTransaction, uid: string, waveform: Waveform): Promise<unknown>;
   now?: () => number;
+  existingOnly?: () => boolean;
   followUp?(ownerUid: string, waveform: Waveform): Promise<void>;
 }) {
   async function check(tx: VoiceTransaction, row: Snapshot) {
@@ -45,8 +46,9 @@ export function createCuratedDemo(database: VoiceDatabase, options: {
     });
   }
   return { async published(readOnly = false) {
-      const row = await loadPublished(readOnly);
-      if (row && !readOnly) await options.followUp?.(row.ownerUid, row.waveform);
+      const existingOnly = readOnly || options.existingOnly?.() === true;
+      const row = await loadPublished(existingOnly);
+      if (row && !existingOnly) await options.followUp?.(row.ownerUid, row.waveform);
       return row;
     },
     async requireVoice(tx: VoiceTransaction, owner: VoiceOwner) {

@@ -115,7 +115,8 @@ export default function KnowledgeSettings({ waveformId }: { waveformId?: string 
         </article>)}
       </div>
       {(preparing || view.documents.some(d => d.status === 'review-required' || d.status === 'manual-review')) && <button type="button" className="secondary-button" disabled={busy} aria-busy={busyAction === 'refresh'} onClick={() => void mutation(() => fetch(endpoint('/api/knowledge/refresh'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reviewExisting: true }) }).then(read<KnowledgeView>), 'Document status refreshed.', 'refresh')}>{busyAction === 'refresh' && <BrandLoader variant="inline" />}{view.documents.some(d => d.status === 'review-required') ? 'Review document safety' : 'Refresh preparation status'}</button>}
-      <p className="field-help">Documents must pass safety review before use. DOCX files require founder review because embedded images are not covered by the automatic check; a PDF can include those pages in automatic review.</p>
+      {view.creationReviewPaused ? <p className="field-help">Creation review is paused. Indexed documents can be selected for private use.</p>
+        : <p className="field-help">Documents must pass safety review before use. DOCX files require founder review because embedded images are not covered by the automatic check; a PDF can include those pages in automatic review.</p>}
       {view.documents.some(d => d.status === 'ready' && d.selected) && <form className="knowledge-preview" onSubmit={event => void preview(event)}>
         <h2>Try a question</h2><label htmlFor="knowledge-question">What would you like to find?</label>
         <input id="knowledge-question" value={query} onChange={e => setQuery(e.target.value)} maxLength={1000} required disabled={busy} />

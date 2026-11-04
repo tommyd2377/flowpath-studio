@@ -5,7 +5,7 @@ import type { createVoiceServer } from './voice-server';
 import { configuredPublicOrigin } from './request-origin';
 import { localAppOrigin, localAppPath } from './local-app-runtime';
 import { cancelProductionOwnerVoice } from './production-voice-runtime';
-import { creationActor, creationReviewStore, creationSafetyEnabled, creationSafetyFixtures, creationSafetyRuntimeVersion } from './creation-runtime';
+import { creationActor, creationReviewStore, creationSafetyEnabled, creationSafetyFixtures, creationSafetyPaused, creationSafetyRuntimeVersion } from './creation-runtime';
 import { applicationDatabase } from './application-database';
 import { demoGrantId } from './demo-access';
 import { demoAccess } from './demo-access-runtime';
@@ -51,6 +51,7 @@ export const accountServer = state.flowpathAccounts ??= createAccountServer({
   safetyAdminFixture: creationSafetyFixtures,
   localUnmeteredTesting: () => !!localAppOrigin(),
   validateWaveform: async (request, waveform) => {
+    if (creationSafetyPaused()) return;
     if (!creationSafetyEnabled()) {
       if (waveform.textPanel?.version === 1 || waveform.visualDisplay) throw new CreationSafetyError('Creator text display is paused until safety review is available.', 503);
       return;

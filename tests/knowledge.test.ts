@@ -46,6 +46,24 @@ for (const status of ['pending', 'manual-review', 'allowed'] as const) {
   });
 }
 
+test('the pause makes indexed documents usable while preserving their review status', async () => {
+  const db = database(), h = setup();
+  const safety = {
+    review: async () => 'blocked' as const,
+    assertAllowed: async () => { throw new CreationSafetyError('Review blocked'); },
+  };
+  const enforcing = createKnowledgeStore(db, h.provider, () => 100_000, safety);
+  await enforcing.upload(h.scope, id, new File(['Synthetic opening hours.'], 'hours.docx'));
+  assert.equal((await enforcing.refresh(h.scope)).documents[0].status, 'blocked');
+  const paused = createKnowledgeStore(db, h.provider, () => 104_000, undefined, undefined, true);
+  assert.equal((await paused.view(h.scope)).documents[0].status, 'ready');
+  await paused.select(h.scope, id, true);
+  assert.equal(await paused.enabled(h.scope), true);
+  assert.equal((await paused.search(h.scope, 'hours')).passages[0].filename, 'hours.docx');
+  assert.equal((await enforcing.view(h.scope)).documents[0].status, 'blocked');
+  assert.equal(await enforcing.enabled(h.scope), false);
+});
+
 test('founder approval makes indexed Knowledge usable without another review or refresh', async () => {
   const db = database(), h = setup();
   const actor = { uid: h.scope.uid, accountSessionId: 'synthetic', waveformId: h.scope.waveformId };

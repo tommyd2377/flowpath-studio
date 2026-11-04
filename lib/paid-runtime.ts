@@ -7,7 +7,7 @@ import { createStripeTest } from './stripe-test';
 import { configuredPublicOrigin } from './request-origin';
 import { localAppOrigin } from './local-app-runtime';
 import { applicationDatabase } from './application-database';
-import { creationReviewStore, creationSafetyEnabled, creationSafetyRuntimeVersion } from './creation-runtime';
+import { creationReviewStore, creationSafetyEnabled, creationSafetyPaused, creationSafetyRuntimeVersion } from './creation-runtime';
 import { CreationSafetyError } from './creation-safety';
 import { productionVoicePolicy } from './production-voice-store';
 import { localStripeSandboxOrigin } from './paid-local-sandbox';
@@ -27,6 +27,7 @@ export function getPaidStore() {
   if (!paidEnabled) throw new Error('Paid test preview is disabled');
   return shared.flowpathPaidStore ??= createPaidStore(applicationDatabase(), Date.now, {
     assertWaveformAllowed: async (tx, uid, waveform, scope) => {
+      if (creationSafetyPaused()) return;
       if (creationSafetyEnabled()) {
         const reviews = creationReviewStore();
         if (scope === 'published') await reviews.requireSnapshotAllowed(tx, uid, waveform);

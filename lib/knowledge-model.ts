@@ -4,7 +4,7 @@ export type KnowledgeDocument = {
   id: string; filename: string; bytes: number; status: 'uploading' | 'preparing' | 'review-required' | 'reviewing' | 'manual-review' | 'blocked' | 'ready' | 'failed' | 'removing';
   selected: boolean; createdAt: number; message: string;
 };
-export type KnowledgeView = { waveformId: string; revision: number; documents: KnowledgeDocument[]; available: boolean; requiresAdultConsent?: boolean;
+export type KnowledgeView = { waveformId: string; revision: number; documents: KnowledgeDocument[]; available: boolean; requiresAdultConsent?: boolean; creationReviewPaused?: boolean;
   storage?: { estimatedMonthlyMicroUsd: number; budgetMicroUsd: number; uploadCapacityAvailable: boolean } };
 export class KnowledgeError extends Error {
   constructor(message: string, readonly status = 400) { super(message); }

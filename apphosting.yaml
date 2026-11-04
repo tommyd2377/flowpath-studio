@@ -47,6 +47,10 @@ env:
   - variable: FLOWPATH_KNOWLEDGE_ENABLED
     value: "1"
     availability: [RUNTIME]
+  # Remove this override or set it to "0" to resume exact-version review.
+  - variable: FLOWPATH_CREATION_SAFETY_PAUSED
+    value: "1"
+    availability: [RUNTIME]
   - variable: FLOWPATH_CREATION_SAFETY_ENABLED
     value: "1"
     availability: [RUNTIME]
