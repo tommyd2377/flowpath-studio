@@ -18,7 +18,7 @@ export async function GET(request: Request) {
     try {
       const view = await ownerPluginPlayback(request, waveform.id, waveform, true);
       return Response.json({ waveform: { id: waveform.id, name: waveform.name, accentColor: waveform.accentColor, profilePhoto: waveform.profilePhoto,
-        textPanel: view.waveform.textPanel, visualDisplay: view.waveform.visualDisplay }, lockedPlugins: view.locked, pluginExpiresAt: view.expiresAt },
+        textPanel: view.waveform.textPanel, visualDisplay: view.waveform.visualDisplay, practicePlugins: waveform.practicePlugins }, lockedPlugins: view.locked, pluginExpiresAt: view.expiresAt },
       { headers: { 'Cache-Control': 'private, no-store' } });
     } catch { return new Response(null, { status: 503 }); }
   }

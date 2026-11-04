@@ -1,10 +1,11 @@
 'use client';
 
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
+import type { PracticeId } from '@/lib/practice-contract';
 import type { LiveTextDisplay } from '@/lib/live-text-session';
 
-type DisplayKind = LiveTextDisplay | 'visual';
-const slot = { text: 0, knowledge: 120, visual: 240 };
+type DisplayKind = LiveTextDisplay | 'visual' | PracticeId;
+const slot: Record<DisplayKind, number> = { text: 0, quiz: 40, lessons: 80, knowledge: 120, flashcards: 180, visual: 240, interview: 300 };
 const shortest = (angle: number) => ((angle + 180) % 360 + 360) % 360 - 180;
 
 /** Presentation only: the voice host and session controller outlive each turn. */

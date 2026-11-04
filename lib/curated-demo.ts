@@ -62,5 +62,5 @@ export function curatedVisitorDisplay(waveform: Waveform) {
 }
 /** Server-only prompt projection; stored snapshot/digest and review authority remain intact. */
 export function curatedVisitorVoice(waveform: Waveform) {
-  return { ...waveform, visualDisplay: null, knowledge: false };
+  return { ...waveform, visualDisplay: null, knowledge: false, practicePlugins: [] };
 }

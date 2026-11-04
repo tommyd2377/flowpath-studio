@@ -7,6 +7,7 @@ import { configuredPublicOrigin, isAllowedRequest } from './request-origin';
 import { AccountSessionInactiveError, accountSessionId, type DurableAccountSessions } from './production-account-session';
 import { BetaAccessRequiredError } from './membership';
 import { validateTextPanelConfiguration } from './text-panel';
+import { parsePracticePlugins } from './practice-contract';
 import { validateVisualDisplay } from './visual-display';
 import { normalizeVisualDisplay } from './visual-display-images';
 import { CreationSafetyError } from './creation-safety';
@@ -92,7 +93,7 @@ export async function readBody(request: Request, maxBytes = 20_000) {
 }
 
 function waveformInput(value: Record<string, unknown>): WaveformInput | null {
-  if (Object.keys(value).some(key => !['name', 'initialPrompt', 'voice', 'accentColor', 'profilePhoto', 'adminTesting', 'textPanel', 'visualDisplay'].includes(key))
+  if (Object.keys(value).some(key => !['name', 'initialPrompt', 'voice', 'accentColor', 'profilePhoto', 'adminTesting', 'textPanel', 'visualDisplay', 'practicePlugins'].includes(key))
     || typeof value.name !== 'string' || typeof value.initialPrompt !== 'string'
     || value.adminTesting !== undefined && typeof value.adminTesting !== 'boolean') return null;
   const voice = value.voice === undefined ? DEFAULT_VOICE : value.voice;
@@ -105,13 +106,15 @@ function waveformInput(value: Record<string, unknown>): WaveformInput | null {
   const initialPrompt = value.initialPrompt.trim();
   const textPanel = validateTextPanelConfiguration(value.textPanel);
   const visualDisplay = validateVisualDisplay(value.visualDisplay);
-  if (!textPanel.ok || !visualDisplay.ok) return null;
+  const practicePlugins = parsePracticePlugins(value.practicePlugins);
+  if (!textPanel.ok || !visualDisplay.ok || !practicePlugins) return null;
   if (!name || name.length > WAVEFORM_NAME_LIMIT || /[\u0000-\u001f\u007f]/.test(name)
     || !initialPrompt || initialPrompt.length > WAVEFORM_PROMPT_LIMIT
     || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(initialPrompt)) return null;
   return { name, initialPrompt, voice, accentColor: accentColor.toLowerCase(), profilePhoto,
     ...(value.textPanel !== undefined ? { textPanel: textPanel.value } : {}),
     ...(value.visualDisplay !== undefined ? { visualDisplay: visualDisplay.value } : {}),
+    ...(value.practicePlugins !== undefined ? { practicePlugins } : {}),
     ...(value.adminTesting !== undefined ? { adminTesting: value.adminTesting as boolean } : {}) };
 }
 
@@ -123,7 +126,7 @@ export function waveformRecord(value: unknown): Waveform | null {
     name: row.name, initialPrompt: row.initialPrompt, voice: row.voice,
     accentColor: row.accentColor, profilePhoto: row.profilePhoto,
     adminTesting: row.adminTesting,
-    textPanel: row.textPanel, visualDisplay: row.visualDisplay,
+    textPanel: row.textPanel, visualDisplay: row.visualDisplay, practicePlugins: row.practicePlugins,
   });
   return input ? { id: row.id, ...input, updatedAt: row.updatedAt } : null;
 }
@@ -189,7 +192,7 @@ export function createLocalWaveformStore(directory: string, now: () => number = 
         if (!create && id && !existing) throw new WaveformStoreError('This waveform is unavailable.', 404);
         if (create && id && rows.some(w => w.id === id)) throw new WaveformStoreError('This waveform already exists.', 409);
         if (!existing && rows.length >= WAVEFORMS_PER_OWNER) throw new WaveformStoreError(`You can save up to ${WAVEFORMS_PER_OWNER} waveforms.`, 409);
-        const waveform: Waveform = { id: existing?.id ?? id ?? randomUUID(), ...input, updatedAt: new Date(now()).toISOString() };
+        const waveform: Waveform = { id: existing?.id ?? id ?? randomUUID(), ...input, ...(input.practicePlugins === undefined && existing?.practicePlugins ? { practicePlugins: existing.practicePlugins } : {}), updatedAt: new Date(now()).toISOString() };
         const next = existing ? rows.map(w => w.id === existing.id ? waveform : w) : [...rows, waveform];
         await mkdir(directory, { recursive: true, mode: 0o700 });
         const target = pathFor(uid), temporary = `${target}.${randomUUID()}.tmp`;

@@ -6,6 +6,7 @@ import { voiceConnectionReader } from './voice-connection';
 import { PUBLIC_GREETING_INSTRUCTIONS } from './voice-config';
 import { monitorAudio, waitForIce } from './voice-session';
 import { createVoiceDiagnostics, type VoiceDiagnosticFinishReason } from './voice-diagnostics';
+import type { PracticeId } from './practice-contract';
 import { createStartupTiming } from './voice-startup-timing';
 import type { VisualDisplayConfiguration, VisualDisplayAction } from './visual-display';
 import { createLiveTextSession, type LiveTextState } from './live-text-session';
@@ -132,7 +133,7 @@ function dispose(session: VoiceSession, leaving = false): Promise<boolean> {
 
 const emptyTextState = (): LiveTextState => ({ text: '', writing: false, visible: false, canUndo: false, message: '' });
 
-export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'self', textBoxEnabled = false, draftPreview = false, publishedPreview = false, visualDisplay?: VisualDisplayConfiguration | null, pluginAccess = false) {
+export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'self', textBoxEnabled = false, draftPreview = false, publishedPreview = false, visualDisplay?: VisualDisplayConfiguration | null, pluginAccess = false, practicePlugins?: readonly PracticeId[]) {
   const [phase, setPhase] = useState<VoicePhase>('idle');
   const [active, setActive] = useState(false);
   const [hasConnected, setHasConnected] = useState(false);
@@ -261,9 +262,9 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
     textController.current?.finish();
     const workspace = textController.current?.workspace();
     textController.current = null;
-    if (pluginAccess || textBoxEnabled || visualDisplay?.images.length || waveformId && !paidPayer && !publishedPreview) {
+    if (practicePlugins?.length || pluginAccess || textBoxEnabled || visualDisplay?.images.length || waveformId && !paidPayer && !publishedPreview) {
       const controller = createLiveTextSession({
-        workspace, visualDisplay: fresh ? fresh.visual : visualDisplay,
+        workspace, practicePlugins, visualDisplay: fresh ? fresh.visual : visualDisplay,
         textEnabled: fresh?.text ?? textBoxEnabled,
         ...(!paidPayer && waveformId && !publishedPreview ? { searchKnowledge: async (query: string, signal: AbortSignal) => {
           const response = await fetch(`/api/knowledge/search?id=${encodeURIComponent(waveformId)}`, { method: 'POST', credentials: 'same-origin',
@@ -558,7 +559,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
       setReviewRequired(session.reviewRequired === true);
       fail(session, notice);
     }
-  }, [fail, stop, waveformId, paidPayer, textBoxEnabled, draftPreview, publishedPreview, visualDisplay, pluginAccess]);
+  }, [fail, stop, waveformId, paidPayer, textBoxEnabled, draftPreview, publishedPreview, visualDisplay, pluginAccess, practicePlugins]);
 
   useEffect(() => {
     mounted.current = true;
@@ -606,6 +607,7 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
   const undoText = useCallback(() => textController.current?.action('undo'), []);
   const hideText = useCallback(() => textController.current?.action('hide'), []);
   const showText = useCallback(() => textController.current?.action('show'), []);
+  const showPractice = useCallback((id: PracticeId) => textController.current?.showPractice(id), []);
   const showNotes = useCallback(() => textController.current?.display('text'), []);
   const showKnowledge = useCallback(() => textController.current?.display('knowledge'), []);
   const markDiagnostic = useCallback(() => diagnostic.current?.mark() ?? false, []);
@@ -631,6 +633,6 @@ export function useVoiceSession(waveformId?: string, paidPayer?: 'creator' | 'se
     setTextState(emptyTextState());
   }, []);
   return { pluginSessionId, updatePluginContent, clearPluginContent, phase, active, hasConnected, status, reviewRequired, remainingSeconds, inputAnalyser, outputAnalyser, needsAudioResume, start, stop, settledVersion,
-    textState, visualAction, stopWriting, clearText, undoText, hideText, showText, showNotes, showKnowledge,
+    textState, visualAction, stopWriting, clearText, undoText, hideText, showText, showNotes, showKnowledge, showPractice,
     hasDiagnostic, diagnosticRecording, diagnosticVersion, getDiagnostic, markDiagnostic, stopDiagnostic, clearDiagnostic, getStartupTiming };
 }

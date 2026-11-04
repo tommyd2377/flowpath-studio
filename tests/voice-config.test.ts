@@ -90,8 +90,8 @@ test('only an explicitly enabled Text Box grants its local tools and transcript 
   assert.match(config.instructions, /Stop writing pauses capture and leaves the panel visible/);
   assert.match(config.instructions, /starts closed/);
   const properties = config.delegation.responses.tools[0].parameters.properties;
-  assert.ok('action' in properties && properties.action.enum.includes('show'));
-  assert.ok('action' in properties && properties.action.enum.includes('hide'));
+  assert.ok('action' in properties && 'enum' in properties.action && properties.action.enum.includes('show'));
+  assert.ok('action' in properties && 'enum' in properties.action && properties.action.enum.includes('hide'));
   assert.match(config.delegation.responses.instructions, /first call action read/);
   assert.equal(config.store, false);
   const diagnosed = voiceSessionConfig({ ...waveform, textPanel: { type: 'text', version: 2 } }, true);

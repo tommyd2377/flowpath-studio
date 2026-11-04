@@ -16,6 +16,7 @@ export type WaveformInput = {
   /** Legacy-compatible transport for the founder's account-wide testing preference. */
   adminTesting?: boolean;
   textPanel?: TextPanelConfiguration | null;
+  practicePlugins?: import('./practice-contract').PracticeId[];
   visualDisplay?: import('./visual-display').VisualDisplayConfiguration | null;
 };
 

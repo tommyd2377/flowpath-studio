@@ -15,6 +15,9 @@ import LiveTextPanel from './LiveTextPanel';
 import type { VisualDisplayConfiguration } from '@/lib/visual-display';
 import VisualDisplay from './VisualDisplay';
 import PluginCarousel from './PluginCarousel';
+import PracticeDisplay from './PracticeDisplay';
+import { practiceDefinition } from '@/lib/practice-catalog';
+import type { PracticeId } from '@/lib/practice-contract';
 import { liveTextPanelEnabled, type TextPanelConfiguration } from '@/lib/text-panel';
 import { clientAnalytics, observeVisit } from '@/lib/analytics-runtime';
 import { BookOpen, Images, Eye, EyeOff, Square, TextCursorInput } from 'lucide-react';
@@ -22,8 +25,8 @@ import BrandLoader from './BrandLoader';
 import DemoCodeGate from './DemoCodeGate';
 import PluginUnlock, { type PluginPlayback } from './PluginUnlock';
 
-export default function VoiceExperience({ waveformId, name, accentColor = WAVEFORM_DEFAULT_COLOR, profilePhoto = null, paidPayer, onSettled, textPanel: initialText = null, visualDisplay: initialVisual = null, pluginAccess, analyticsSurface, nextConversation, draftPreview = false, publishedPreview = false, publicDemo = false }: {
-  waveformId?: string; name?: string; accentColor?: string; profilePhoto?: string | null; paidPayer?: 'creator' | 'self'; onSettled?: () => void; textPanel?: TextPanelConfiguration | null; visualDisplay?: VisualDisplayConfiguration | null; analyticsSurface?: 'private' | 'public'; nextConversation?: () => void; draftPreview?: boolean; publishedPreview?: boolean; publicDemo?: boolean; pluginAccess?: Pick<PluginPlayback, 'locked' | 'expiresAt'>;
+export default function VoiceExperience({ waveformId, name, accentColor = WAVEFORM_DEFAULT_COLOR, profilePhoto = null, paidPayer, onSettled, textPanel: initialText = null, visualDisplay: initialVisual = null, pluginAccess, analyticsSurface, nextConversation, draftPreview = false, publishedPreview = false, publicDemo = false, practicePlugins }: {
+  waveformId?: string; name?: string; accentColor?: string; profilePhoto?: string | null; paidPayer?: 'creator' | 'self'; onSettled?: () => void; textPanel?: TextPanelConfiguration | null; visualDisplay?: VisualDisplayConfiguration | null; analyticsSurface?: 'private' | 'public'; nextConversation?: () => void; draftPreview?: boolean; publishedPreview?: boolean; publicDemo?: boolean; pluginAccess?: Pick<PluginPlayback, 'locked' | 'expiresAt'>; practicePlugins?: PracticeId[];
 }) {
   const [pluginView, setPluginView] = useState<PluginPlayback | undefined>(() => pluginAccess && {
     ...pluginAccess, textPanel: initialText, visualDisplay: initialVisual,
@@ -31,7 +34,7 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
   const textPanel = pluginView ? pluginView.textPanel : initialText;
   const visualDisplay = pluginView ? pluginView.visualDisplay : initialVisual;
   const textBoxEnabled = liveTextPanelEnabled(textPanel);
-  const voice = useVoiceSession(waveformId, paidPayer, textBoxEnabled, draftPreview, publishedPreview, visualDisplay, Boolean(pluginAccess));
+  const voice = useVoiceSession(waveformId, paidPayer, textBoxEnabled, draftPreview, publishedPreview, visualDisplay, Boolean(pluginAccess), practicePlugins);
   const handledSettlement = useRef(0);
   useEffect(() => { if (voice.settledVersion > handledSettlement.current) { handledSettlement.current = voice.settledVersion; onSettled?.(); } }, [voice.settledVersion, onSettled]);
   const diagnosticsMode = useDiagnosticsMode();
@@ -54,12 +57,18 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
   const connected = voice.phase === 'listening' || voice.phase === 'speaking';
   const textVisible = textBoxEnabled && voice.textState.visible;
   const visualVisible = !!visualDisplay && voice.textState.visual?.visible === true;
-  const displayVisible = textVisible || visualVisible;
-  const display = visualVisible ? 'visual' : voice.textState.display ?? 'text';
+  const practice = voice.textState.practice;
+  const displayVisible = textVisible || visualVisible || !!practice;
+  const display = practice?.id ?? (visualVisible ? 'visual' : voice.textState.display ?? 'text');
   const [requestedDisplay, setRequestedDisplay] = useState<typeof display | null>(null);
   if (displayVisible && requestedDisplay !== display) setRequestedDisplay(display);
   const showVisual = () => voice.visualAction({ action: 'show', imageId: '', text: '' });
-  const showDisplay = () => requestedDisplay === 'visual' ? showVisual() : requestedDisplay === 'knowledge' ? voice.showKnowledge() : voice.showNotes();
+  const showDisplay = () => {
+    if (requestedDisplay === 'visual') showVisual();
+    else if (requestedDisplay === 'knowledge') voice.showKnowledge();
+    else if (requestedDisplay === 'text') voice.showNotes();
+    else if (requestedDisplay) voice.showPractice(requestedDisplay);
+  };
   const docked = Boolean(waveformId && (voice.hasConnected || displayVisible));
   const waveControl = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -173,8 +182,10 @@ export default function VoiceExperience({ waveformId, name, accentColor = WAVEFO
           {textBoxEnabled && <button type="button" className="secondary-button" aria-pressed={display === 'text'} onClick={voice.showNotes}><TextCursorInput aria-hidden="true" />Text Box</button>}
           {voice.textState.hasKnowledge && <button type="button" className="secondary-button" aria-pressed={display === 'knowledge'} onClick={voice.showKnowledge}><BookOpen aria-hidden="true" />Knowledge</button>}
           {!!visualDisplay?.images.length && <button type="button" className="secondary-button" aria-pressed={display === 'visual'} onClick={showVisual}><Images aria-hidden="true" />Visual Display</button>}
+          {voice.textState.openedPractice?.map(id => <button key={id} type="button" className="secondary-button"
+            aria-pressed={display === id} onClick={() => voice.showPractice(id)}>{practiceDefinition(id)?.name}</button>)}
         </nav>
-        <PluginCarousel display={display}>{visualVisible && visualDisplay && voice.textState.visual ? <VisualDisplay configuration={visualDisplay} state={voice.textState.visual} onAction={voice.visualAction} /> : <LiveTextPanel key={voice.textState.display ?? 'text'} {...voice.textState} externalHide
+        <PluginCarousel display={display}>{practice ? <PracticeDisplay view={practice} /> : visualVisible && visualDisplay && voice.textState.visual ? <VisualDisplay configuration={visualDisplay} state={voice.textState.visual} onAction={voice.visualAction} /> : <LiveTextPanel key={voice.textState.display ?? 'text'} {...voice.textState} externalHide
           onStop={voice.stopWriting} onClear={voice.clearText} onUndo={voice.undoText} onHide={hideText} />}</PluginCarousel>
         {displayVisible && voice.textState.message && <p role="status">{voice.textState.message}</p>}
       </div> : !textBoxEnabled && textPanel && <div className="voice-text-panel"><TextPanel configuration={textPanel} scopeKey={waveformId ?? 'home'} /></div>}

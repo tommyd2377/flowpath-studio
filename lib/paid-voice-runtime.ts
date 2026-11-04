@@ -59,7 +59,7 @@ export function getPaidVoiceServer() {
       const projected = request.method === 'DELETE' ? { waveform, revision: undefined } : await pluginAudienceProjection(publication.ownerUid, id, waveform);
       const identity = actor.uid ? await accountServer.resolveIdentity(request) : null;
       return { ownerUid: actor.uid ? `account:${actor.uid}` : actor.visitorId, accountSessionId: actor.accountSessionId ?? actor.visitorId,
-        waveform: projected.waveform, pluginRevision: projected.revision, paid: { actor, choice: header, ...(preview ? { preview: true } : {}), expectedContentDigest: creationContentDigest(waveform) }, isCurrent: () => identity?.isCurrent() ?? !actor.uid };
+        waveform: { ...projected.waveform, practicePlugins: [] }, pluginRevision: projected.revision, paid: { actor, choice: header, ...(preview ? { preview: true } : {}), expectedContentDigest: creationContentDigest(waveform) }, isCurrent: () => identity?.isCurrent() ?? !actor.uid };
     },
     production: { store: createPaidVoiceStore(store), policy: () => paidFixtures ? { globalConcurrency: 3, globalDailySeconds: 9_000,
       ownerDailySeconds: 3_600, access: 'signed-in', allowedUids: [] } : productionVoicePolicy(process.env),

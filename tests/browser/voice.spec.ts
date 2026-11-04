@@ -1846,3 +1846,91 @@ test('plugin access settings protect the playback route and unlock Text Box on t
   expect(signedOut.headersArray().some(header => header.name.toLowerCase() === 'set-cookie'
     && /^flowpath_local_plugin_[a-f0-9]{24}=;.*Max-Age=0/.test(header.value))).toBe(true);
 });
+
+test('all four practice activities share one private call and keep Knowledge answers gated', async ({ page }) => {
+  const id = '00000000-0000-4000-8000-000000000089';
+  await fakeMedia(page);
+  const calls = await mockSession(page);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.route('**/api/waveform*', route => route.fulfill({ json: {
+    waveform: { id, name: 'Practice fixture', practicePlugins: ['quiz', 'lessons', 'flashcards', 'interview'] },
+  } }));
+  await page.route('**/api/knowledge/search*', route => route.fulfill({ json: { revision: 1, passages: [
+    { id: 'source_1', documentId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', filename: 'Franklin.txt', quote: 'Franklin tested electrical conductors.' },
+  ] } }));
+  await page.goto(`/w/${id}`);
+  await expect(page.getByRole('navigation', { name: 'Plugin displays' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Start conversation', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  let serial = 0;
+  async function tool(name: string, args: object) {
+    const suffix = ++serial, responseId = `practice_response_${suffix}`;
+    const event = (event: object) => ({ type: 'response.event', delegation_id: `practice_${suffix}`, event });
+    await emit(page, event({ type: 'response.created', response: { id: responseId } }));
+    await emit(page, event({ type: 'response.output_item.done', response_id: responseId,
+      item: { type: 'function_call', name, call_id: `practice_call_${suffix}`, arguments: JSON.stringify(args) } }));
+    await emit(page, event({ type: 'response.completed', response: { id: responseId, status: 'completed' } }));
+  }
+  const update = (plugin: string, action: string, fields: object = {}) => tool('update_practice',
+    { plugin, action, title: '', prompt: '', detail: '', score: 0, sourceId: '', ...fields });
+  await update('quiz', 'question', { prompt: 'What did Franklin test?', sourceId: 'source_1' });
+  await expect(page.getByRole('region', { name: 'Quiz / Evaluation content', exact: true })).toHaveCount(0);
+  await tool('search_waveform_knowledge', { query: 'What did Franklin test?', display: false });
+  await expect.poll(async () => (await tracker(page)).sentEvents.some(event => event.includes('Franklin.txt'))).toBe(true);
+  await update('quiz', 'question', { prompt: 'What did Franklin test?', sourceId: 'source_1' });
+  const quiz = page.getByRole('region', { name: 'Quiz / Evaluation content', exact: true });
+  await expect(quiz).toContainText('What did Franklin test?');
+  await expect(quiz).not.toContainText('Franklin.txt');
+  await update('quiz', 'grade', { detail: 'Electrical conductors is correct.', score: 2 });
+  await expect(quiz).toContainText('Electrical conductors is correct.');
+  await expect(quiz).toContainText('Franklin.txt');
+  await update('lessons', 'start', { title: 'Electrical conductors', detail: 'Conductors let charge move.' });
+  await expect(page.getByRole('region', { name: 'Guided Lessons content', exact: true })).toContainText('Conductors let charge move.');
+  await update('flashcards', 'card', { prompt: 'What carries charge?', detail: 'A conductor' });
+  const cards = page.getByRole('region', { name: 'Flashcards content', exact: true });
+  await expect(cards).toContainText('What carries charge?');
+  await expect(cards).not.toContainText('A conductor');
+  await update('flashcards', 'reveal');
+  await expect(cards).toContainText('A conductor');
+  await update('interview', 'start', { title: 'Museum guide', prompt: 'How would you welcome a new group?' });
+  const interview = page.getByRole('region', { name: 'Interview Practice content', exact: true });
+  await expect(interview).toContainText('How would you welcome a new group?');
+  await update('interview', 'feedback', { detail: 'Good opening. Add a concrete example.' });
+  await expect(interview).toContainText('Add a concrete example.');
+  await page.getByRole('button', { name: 'Flashcards', exact: true }).click();
+  await expect(cards).toContainText('A conductor');
+  await page.getByRole('button', { name: 'Hide display', exact: true }).click();
+  await expect(cards).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'End conversation', exact: true })).toBeVisible();
+  expect(calls.filter(call => call.method === 'POST')).toHaveLength(1);
+  await page.getByRole('button', { name: 'End conversation', exact: true }).click();
+  await expect.poll(async () => (await tracker(page)).stoppedTracks).toBe(1);
+  await expect(page.getByRole('region', { name: /Flashcards|Interview Practice|Quiz \/ Evaluation|Guided Lessons/ })).toHaveCount(0);
+});
+
+test('practice plugin settings persist on the selected private waveform', async ({ page }) => {
+  await page.goto('/account');
+  await page.getByRole('button', { name: 'Use test owner A', exact: true }).click();
+  await settingsSection(page, 'appearance');
+  await page.getByLabel('Waveform name', { exact: true }).fill('Practice settings fixture');
+  await settingsSection(page, 'instructions');
+  await page.getByLabel('What should your voice know about itself?', { exact: true }).fill('Be a helpful museum guide.');
+  await settingsSection(page, 'plugins');
+  const labels = ['Quiz / Evaluation', 'Guided Lessons', 'Flashcards', 'Interview Practice'];
+  for (const name of labels) await page.getByLabel('Apply ' + name, { exact: true }).check();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
+  await expect(page.getByText('Draft saved', { exact: true })).toBeVisible();
+  const { waveform } = await (await page.request.get('/api/waveform')).json();
+  const playback = await (await page.request.get(`/api/waveform?id=${waveform.id}`, {
+    headers: { 'X-FlowPath-View': 'playback' },
+  })).json();
+  expect(playback.waveform.practicePlugins).toEqual(['quiz', 'lessons', 'flashcards', 'interview']);
+  await page.reload();
+  await settingsSection(page, 'plugins');
+  for (const name of labels) await expect(page.getByLabel('Apply ' + name, { exact: true })).toBeChecked();
+  await page.getByLabel('Apply Flashcards', { exact: true }).uncheck();
+  await page.getByRole('button', { name: 'Save draft', exact: true }).click();
+  await expect(page.getByText('Draft saved', { exact: true })).toBeVisible();
+  const changed = await (await page.request.get(`/api/waveform?id=${waveform.id}`)).json();
+  expect(changed.waveform.practicePlugins).toEqual(['quiz', 'lessons', 'interview']);
+});

@@ -137,7 +137,7 @@ export function createFirebaseAccountAdapter(projectId: string, databaseId: stri
         if (!create && id && !existing) throw new WaveformStoreError('This waveform is unavailable.', 404);
         const adding = create || !existing;
         if (adding && ids.length + (first ? 1 : 0) >= WAVEFORMS_PER_OWNER) throw new WaveformStoreError(`You can save up to ${WAVEFORMS_PER_OWNER} waveforms.`, 409);
-        const waveform: Waveform = { id: !adding ? existing!.id : id ?? randomUUID(), ...input, updatedAt: new Date().toISOString() };
+        const waveform: Waveform = { id: !adding ? existing!.id : id ?? randomUUID(), ...input, ...(input.practicePlugins === undefined && existing?.practicePlugins ? { practicePlugins: existing.practicePlugins } : {}), updatedAt: new Date().toISOString() };
         const target = first && waveform.id !== first.id ? reference.collection('waveforms').doc(waveform.id) : reference;
         await validateWaveform?.({ get: async path => { const row = await transaction.get(db.doc(path)); return row.exists ? row.data()! : null; },
           set: (path, value) => { transaction.set(db.doc(path), value); } }, uid, input, id ?? (!adding ? existing?.id : undefined));
